@@ -10,7 +10,6 @@ typedef XlaOp *xla_op;
 typedef Status *status;
 typedef Shape *shape;
 typedef Literal *literal;
-typedef LiteralSlice *literal_slice;
 typedef GlobalData *global_data;
 #else
 typedef struct _xla_builder *xla_builder;
@@ -18,7 +17,6 @@ typedef struct _xla_op *xla_op;
 typedef struct _status *status;
 typedef struct _shape *shape;
 typedef struct _literal *literal;
-typedef struct _literal_slice *literal_slice;
 typedef struct _global_data *global_data;
 #endif
 
@@ -44,11 +42,12 @@ status run(const xla_builder, const xla_op, const global_data*, int, literal *ou
 
 // TODO: expose the xla client.
 status transfer(const global_data, literal *out);
-status transfer_to_server(const literal_slice, global_data *out);
+status transfer_to_server(const literal, global_data *out);
 
+literal create_r0_f32(float);
+literal create_r1_f32(const float*, int);
 float literal_get_first_element_f32(const literal);
 void literal_free(literal);
-void literal_slice_free(literal_slice);
 void global_data_free(global_data);
 
 void status_free(status);

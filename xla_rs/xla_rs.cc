@@ -70,7 +70,7 @@ status transfer(const global_data gd, literal *out) {
   return nullptr;
 }
 
-status transfer_to_server(const literal_slice ls, global_data *out) {
+status transfer_to_server(const literal ls, global_data *out) {
   ASSIGN_OR_RETURN_STATUS(client, ClientLibrary::GetOrCreateLocalClient());
   ASSIGN_OR_RETURN_STATUS(global_data, client->TransferToServer(*ls));
   *out = global_data.release();
@@ -88,15 +88,19 @@ status run(const xla_builder b, const xla_op o, const global_data *gd, int ngd, 
   return nullptr;
 }
 
+literal create_r0_f32(float f) {
+    return new Literal(LiteralUtil::CreateR0<float>(f));
+}
+
+literal create_r1_f32(const float *f, int nel) {
+    return new Literal(LiteralUtil::CreateR1<float>(absl::Span<const float>(f, nel)));
+}
+
 float literal_get_first_element_f32(const literal l) {
   return l->GetFirstElement<float>();
 }
 
 void literal_free(literal l) {
-  delete l;
-}
-
-void literal_slice_free(literal_slice l) {
   delete l;
 }
 

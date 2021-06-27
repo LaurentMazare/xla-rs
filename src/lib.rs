@@ -48,7 +48,6 @@ pub struct XlaOp<'a> {
     marker: PhantomData<&'a XlaBuilder>,
 }
 pub struct Literal(c_lib::literal);
-pub struct LiteralSlice(c_lib::literal_slice);
 pub struct GlobalData(c_lib::global_data);
 
 fn handle_status(status: c_lib::status) -> Result<()> {
@@ -147,14 +146,26 @@ impl Literal {
     pub fn get_first_element_f32(&self) -> f32 {
         unsafe { c_lib::literal_get_first_element_f32(self.0) }
     }
-}
 
-impl LiteralSlice {
     pub fn transfer_to_server(&self) -> Result<GlobalData> {
         let mut result: c_lib::global_data = std::ptr::null_mut();
         let status = unsafe { c_lib::transfer_to_server(self.0, &mut result) };
         handle_status(status)?;
         Ok(GlobalData(result))
+    }
+}
+
+impl From<f32> for Literal {
+    fn from(f: f32) -> Self {
+        let ptr = unsafe { c_lib::create_r0_f32(f) };
+        Literal(ptr)
+    }
+}
+
+impl From<&[f32]> for Literal {
+    fn from(f: &[f32]) -> Self {
+        let ptr = unsafe { c_lib::create_r1_f32(f.as_ptr(), f.len() as i32) };
+        Literal(ptr)
     }
 }
 
@@ -182,12 +193,6 @@ impl Drop for XlaOp<'_> {
 impl Drop for Literal {
     fn drop(&mut self) {
         unsafe { c_lib::literal_free(self.0) }
-    }
-}
-
-impl Drop for LiteralSlice {
-    fn drop(&mut self) {
-        unsafe { c_lib::literal_slice_free(self.0) }
     }
 }
 
