@@ -33,10 +33,18 @@ pub struct Shape {
     dimensions: Vec<i64>,
 }
 
+pub trait ElementType {
+    const PRIMITIVE_TYPE: PrimitiveType;
+}
+
+impl ElementType for f32 {
+    const PRIMITIVE_TYPE: PrimitiveType = PrimitiveType::F32;
+}
+
 impl Shape {
-    pub fn new(element_type: PrimitiveType, dimensions: Vec<i64>) -> Shape {
+    pub fn new<E: ElementType>(dimensions: Vec<i64>) -> Shape {
         Shape {
-            element_type,
+            element_type: E::PRIMITIVE_TYPE,
             dimensions,
         }
     }

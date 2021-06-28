@@ -14,7 +14,7 @@ fn main() -> Result<()> {
     let computation = xla_builder.build(&sum)?;
     let result = computation.run(&[])?;
     println!("Result: {:?}", result.get_first_element_f32());
-    let param = xla_builder.parameter(0, &xla::Shape::new(xla::PrimitiveType::F32, vec![]), "p");
+    let param = xla_builder.parameter(0, &xla::Shape::new::<f32>(vec![]), "p");
     let sum = param.add(&param);
     let computation = xla_builder.build(&sum)?;
     let result = computation.run(&[global_data_f32(12.0)?])?;
