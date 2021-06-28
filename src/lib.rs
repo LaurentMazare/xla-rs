@@ -43,6 +43,7 @@ impl Shape {
 }
 
 pub struct XlaBuilder(c_lib::xla_builder);
+pub struct XlaComputation(c_lib::xla_computation);
 pub struct XlaOp<'a> {
     op: c_lib::xla_op,
     marker: PhantomData<&'a XlaBuilder>,
@@ -64,19 +65,27 @@ fn handle_status(status: c_lib::status) -> Result<()> {
     }
 }
 
+impl XlaComputation {
+    pub fn run(&self, args: &[GlobalData]) -> Result<Literal> {
+        let mut result: c_lib::literal = std::ptr::null_mut();
+        let args: Vec<_> = args.iter().map(|x| x.0).collect();
+        let status = unsafe { c_lib::run(self.0, args.as_ptr(), args.len() as i32, &mut result) };
+        handle_status(status)?;
+        Ok(Literal(result))
+    }
+}
+
 impl XlaBuilder {
     pub fn new(name: &str) -> XlaBuilder {
         let xla_builder = unsafe { c_lib::xla_builder_create(name.as_ptr() as *const i8) };
         XlaBuilder(xla_builder)
     }
 
-    pub fn run(&self, op: &XlaOp, args: &[GlobalData]) -> Result<Literal> {
-        let mut result: c_lib::literal = std::ptr::null_mut();
-        let args: Vec<_> = args.iter().map(|x| x.0).collect();
-        let status =
-            unsafe { c_lib::run(self.0, op.op, args.as_ptr(), args.len() as i32, &mut result) };
+    pub fn build(&self, op: &XlaOp) -> Result<XlaComputation> {
+        let mut result: c_lib::xla_computation = std::ptr::null_mut();
+        let status = unsafe { c_lib::build(self.0, op.op, &mut result) };
         handle_status(status)?;
-        Ok(Literal(result))
+        Ok(XlaComputation(result))
     }
 
     pub fn constant_r0(&self, f: f32) -> XlaOp {
@@ -199,5 +208,11 @@ impl Drop for Literal {
 impl Drop for GlobalData {
     fn drop(&mut self) {
         unsafe { c_lib::global_data_free(self.0) }
+    }
+}
+
+impl Drop for XlaComputation {
+    fn drop(&mut self) {
+        unsafe { c_lib::xla_computation_free(self.0) }
     }
 }

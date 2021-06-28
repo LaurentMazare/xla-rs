@@ -77,12 +77,18 @@ status transfer_to_server(const literal ls, global_data *out) {
   return nullptr;
 }
 
-status run(const xla_builder b, const xla_op o, const global_data *gd, int ngd, literal *output) {
-  ASSIGN_OR_RETURN_STATUS(computation, b->Build());
+status build(const xla_builder b, const xla_op o, xla_computation *output) {
+  ASSIGN_OR_RETURN_STATUS(computation, b->Build(o));
+  *output = new XlaComputation();
+  **output = std::move(computation);
+  return nullptr;
+}
+
+status run(const xla_computation c, const global_data *gd, int ngd, literal *output) {
   ASSIGN_OR_RETURN_STATUS(client, ClientLibrary::GetOrCreateLocalClient());
   ASSIGN_OR_RETURN_STATUS(
     literal,
-    client->ExecuteAndTransfer(computation, absl::Span<const global_data>(gd, ngd)));
+    client->ExecuteAndTransfer(*c, absl::Span<const global_data>(gd, ngd)));
   *output = new Literal();
   **output = std::move(literal);
   return nullptr;
@@ -110,6 +116,10 @@ void status_free(status s) {
 
 void global_data_free(global_data gd) {
   delete gd;
+}
+
+void xla_computation_free(xla_computation c) {
+  delete c;
 }
 
 char *status_error_message(status s) {

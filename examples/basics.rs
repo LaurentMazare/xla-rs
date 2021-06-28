@@ -11,17 +11,15 @@ fn main() -> Result<()> {
     let cst43 = xla::XlaBuilder::constant_r1(&xla_builder, 2, 43.);
     let sum = cst42.add(&cst43);
     println!("Shape: {:?}", xla_builder.get_shape(&sum));
-    let result = xla_builder.run(&sum, &[])?;
+    let computation = xla_builder.build(&sum)?;
+    let result = computation.run(&[])?;
     println!("Result: {:?}", result.get_first_element_f32());
-    let param = xla_builder.parameter(
-        0,
-        &xla::Shape::new(xla::PrimitiveType::F32, vec![2, 3]),
-        "p",
-    );
+    let param = xla_builder.parameter(0, &xla::Shape::new(xla::PrimitiveType::F32, vec![]), "p");
     let sum = param.add(&param);
-    let result = xla_builder.run(&sum, &[global_data_f32(12.0)?])?;
+    let computation = xla_builder.build(&sum)?;
+    let result = computation.run(&[global_data_f32(12.0)?])?;
     println!("Result: {:?}", result.get_first_element_f32());
-    let result = xla_builder.run(&sum, &[global_data_f32(13.0)?])?;
+    let result = computation.run(&[global_data_f32(13.0)?])?;
     println!("Result: {:?}", result.get_first_element_f32());
     Ok(())
 }
