@@ -149,14 +149,67 @@ impl XlaBuilder {
     }
 }
 
-impl XlaOp<'_> {
-    pub fn add(&self, op: &XlaOp) -> XlaOp {
-        let op = unsafe { c_lib::add(self.op, op.op) };
-        XlaOp {
-            op,
-            marker: PhantomData,
+macro_rules! binary_op {
+    ($func_name:ident, $expression:expr) => {
+        pub fn $func_name(&self, op: &XlaOp) -> XlaOp {
+            let op = unsafe { $expression(self.op, op.op) };
+            XlaOp {
+                op,
+                marker: PhantomData,
+            }
         }
-    }
+    };
+}
+
+macro_rules! unary_op {
+    ($func_name:ident, $expression:expr) => {
+        pub fn $func_name(&self) -> XlaOp {
+            let op = unsafe { $expression(self.op) };
+            XlaOp {
+                op,
+                marker: PhantomData,
+            }
+        }
+    };
+}
+
+impl XlaOp<'_> {
+    binary_op!(add, c_lib::op_add);
+    binary_op!(sub, c_lib::op_sub);
+    binary_op!(mul, c_lib::op_mul);
+    binary_op!(div, c_lib::op_div);
+    binary_op!(rem, c_lib::op_rem);
+    binary_op!(max, c_lib::op_max);
+    binary_op!(min, c_lib::op_min);
+    binary_op!(and, c_lib::op_and);
+    binary_op!(or, c_lib::op_or);
+    binary_op!(xor, c_lib::op_xor);
+    binary_op!(atan2, c_lib::op_atan2);
+    binary_op!(pow, c_lib::op_pow);
+    binary_op!(dot, c_lib::op_dot);
+
+    unary_op!(not, c_lib::op_not);
+    unary_op!(abs, c_lib::op_abs);
+    unary_op!(exp, c_lib::op_exp);
+    unary_op!(expm1, c_lib::op_expm1);
+    unary_op!(floor, c_lib::op_floor);
+    unary_op!(ceil, c_lib::op_ceil);
+    unary_op!(round, c_lib::op_round);
+    unary_op!(log, c_lib::op_log);
+    unary_op!(log1p, c_lib::op_log1p);
+    unary_op!(logistic, c_lib::op_logistic);
+    unary_op!(sign, c_lib::op_sign);
+    unary_op!(clz, c_lib::op_clz);
+    unary_op!(cos, c_lib::op_cos);
+    unary_op!(sin, c_lib::op_sin);
+    unary_op!(tanh, c_lib::op_tanh);
+    unary_op!(real, c_lib::op_real);
+    unary_op!(imag, c_lib::op_imag);
+    unary_op!(sqrt, c_lib::op_sqrt);
+    unary_op!(rsqrt, c_lib::op_rsqrt);
+    unary_op!(cbrt, c_lib::op_cbrt);
+    unary_op!(is_finite, c_lib::op_is_finite);
+    unary_op!(neg, c_lib::op_neg);
 }
 
 impl Literal {

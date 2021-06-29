@@ -29,7 +29,44 @@ void xla_builder_free(xla_builder);
 xla_op constant_r0_float(const xla_builder, float);
 xla_op constant_r1_float(const xla_builder, int64_t, float);
 xla_op parameter(const xla_builder, int64_t, int, int, const long long int *, const char *);
-xla_op add(const xla_op, const xla_op);
+
+// Ops
+xla_op op_add(const xla_op, const xla_op);
+xla_op op_sub(const xla_op, const xla_op);
+xla_op op_mul(const xla_op, const xla_op);
+xla_op op_div(const xla_op, const xla_op);
+xla_op op_rem(const xla_op, const xla_op);
+xla_op op_max(const xla_op, const xla_op);
+xla_op op_min(const xla_op, const xla_op);
+xla_op op_and(const xla_op, const xla_op);
+xla_op op_or(const xla_op, const xla_op);
+xla_op op_xor(const xla_op, const xla_op);
+xla_op op_atan2(const xla_op, const xla_op);
+xla_op op_pow(const xla_op, const xla_op);
+xla_op op_dot(const xla_op, const xla_op);
+xla_op op_not(const xla_op);
+xla_op op_abs(const xla_op);
+xla_op op_exp(const xla_op);
+xla_op op_expm1(const xla_op);
+xla_op op_floor(const xla_op);
+xla_op op_ceil(const xla_op);
+xla_op op_round(const xla_op);
+xla_op op_log(const xla_op);
+xla_op op_log1p(const xla_op);
+xla_op op_logistic(const xla_op);
+xla_op op_sign(const xla_op);
+xla_op op_clz(const xla_op);
+xla_op op_cos(const xla_op);
+xla_op op_sin(const xla_op);
+xla_op op_tanh(const xla_op);
+xla_op op_real(const xla_op);
+xla_op op_imag(const xla_op);
+xla_op op_sqrt(const xla_op);
+xla_op op_rsqrt(const xla_op);
+xla_op op_cbrt(const xla_op);
+xla_op op_is_finite(const xla_op);
+xla_op op_neg(const xla_op);
+
 int xla_op_valid(const xla_op);
 void xla_op_free(xla_op);
 

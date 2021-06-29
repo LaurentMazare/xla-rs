@@ -28,8 +28,144 @@ xla_op parameter(const xla_builder b, int64_t id, int pr_type, int dsize, const 
   return new XlaOp(Parameter(b, id, ShapeUtil::MakeShape((PrimitiveType)pr_type, absl::Span<const long long int>(ds, dsize)), std::string(name)));
 }
 
-xla_op add(const xla_op lhs, const xla_op rhs) {
+xla_op op_add(const xla_op lhs, const xla_op rhs) {
   return new XlaOp(Add(*lhs, *rhs));
+}
+
+xla_op op_sub(const xla_op lhs, const xla_op rhs) {
+  return new XlaOp(Sub(*lhs, *rhs));
+}
+
+xla_op op_mul(const xla_op lhs, const xla_op rhs) {
+  return new XlaOp(Mul(*lhs, *rhs));
+}
+
+xla_op op_div(const xla_op lhs, const xla_op rhs) {
+  return new XlaOp(Div(*lhs, *rhs));
+}
+
+xla_op op_rem(const xla_op lhs, const xla_op rhs) {
+  return new XlaOp(Rem(*lhs, *rhs));
+}
+
+xla_op op_max(const xla_op lhs, const xla_op rhs) {
+  return new XlaOp(Max(*lhs, *rhs));
+}
+
+xla_op op_min(const xla_op lhs, const xla_op rhs) {
+  return new XlaOp(Min(*lhs, *rhs));
+}
+
+xla_op op_and(const xla_op lhs, const xla_op rhs) {
+  return new XlaOp(And(*lhs, *rhs));
+}
+
+xla_op op_or(const xla_op lhs, const xla_op rhs) {
+  return new XlaOp(Or(*lhs, *rhs));
+}
+
+xla_op op_xor(const xla_op lhs, const xla_op rhs) {
+  return new XlaOp(Xor(*lhs, *rhs));
+}
+
+xla_op op_atan2(const xla_op lhs, const xla_op rhs) {
+  return new XlaOp(Atan2(*lhs, *rhs));
+}
+
+xla_op op_pow(const xla_op lhs, const xla_op rhs) {
+  return new XlaOp(Pow(*lhs, *rhs));
+}
+
+xla_op op_dot(const xla_op lhs, const xla_op rhs) {
+  return new XlaOp(Dot(*lhs, *rhs));
+}
+
+xla_op op_not(const xla_op arg) {
+  return new XlaOp(Not(*arg));
+}
+
+xla_op op_abs(const xla_op arg) {
+  return new XlaOp(Abs(*arg));
+}
+
+xla_op op_exp(const xla_op arg) {
+  return new XlaOp(Exp(*arg));
+}
+
+xla_op op_expm1(const xla_op arg) {
+  return new XlaOp(Expm1(*arg));
+}
+
+xla_op op_floor(const xla_op arg) {
+  return new XlaOp(Floor(*arg));
+}
+
+xla_op op_ceil(const xla_op arg) {
+  return new XlaOp(Ceil(*arg));
+}
+
+xla_op op_round(const xla_op arg) {
+  return new XlaOp(Round(*arg));
+}
+
+xla_op op_log(const xla_op arg) {
+  return new XlaOp(Log(*arg));
+}
+
+xla_op op_log1p(const xla_op arg) {
+  return new XlaOp(Log1p(*arg));
+}
+
+xla_op op_logistic(const xla_op arg) {
+  return new XlaOp(Logistic(*arg));
+}
+
+xla_op op_sign(const xla_op arg) {
+  return new XlaOp(Sign(*arg));
+}
+
+xla_op op_clz(const xla_op arg) {
+  return new XlaOp(Clz(*arg));
+}
+
+xla_op op_cos(const xla_op arg) {
+  return new XlaOp(Cos(*arg));
+}
+
+xla_op op_sin(const xla_op arg) {
+  return new XlaOp(Sin(*arg));
+}
+
+xla_op op_tanh(const xla_op arg) {
+  return new XlaOp(Tanh(*arg));
+}
+
+xla_op op_real(const xla_op arg) {
+  return new XlaOp(Real(*arg));
+}
+
+xla_op op_imag(const xla_op arg) {
+  return new XlaOp(Imag(*arg));
+}
+
+xla_op op_sqrt(const xla_op arg) {
+  return new XlaOp(Sqrt(*arg));
+}
+
+xla_op op_rsqrt(const xla_op arg) {
+  return new XlaOp(Rsqrt(*arg));
+}
+
+xla_op op_cbrt(const xla_op arg) {
+  return new XlaOp(Cbrt(*arg));
+}
+
+xla_op op_is_finite(const xla_op arg) {
+  return new XlaOp(IsFinite(*arg));
+}
+
+xla_op op_neg(const xla_op arg) {
+  return new XlaOp(Neg(*arg));
 }
 
 int xla_op_valid(const xla_op op) {
