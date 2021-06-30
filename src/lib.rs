@@ -85,7 +85,8 @@ impl XlaComputation {
 
 impl XlaBuilder {
     pub fn new(name: &str) -> XlaBuilder {
-        let xla_builder = unsafe { c_lib::xla_builder_create(name.as_ptr() as *const i8) };
+        let name = std::ffi::CString::new(name).unwrap();
+        let xla_builder = unsafe { c_lib::xla_builder_create(name.as_ptr()) };
         XlaBuilder(xla_builder)
     }
 
