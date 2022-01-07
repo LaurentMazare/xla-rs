@@ -43,10 +43,7 @@ impl ElementType for f32 {
 
 impl Shape {
     pub fn new<E: ElementType>(dimensions: Vec<i64>) -> Shape {
-        Shape {
-            element_type: E::PRIMITIVE_TYPE,
-            dimensions,
-        }
+        Shape { element_type: E::PRIMITIVE_TYPE, dimensions }
     }
 }
 
@@ -64,9 +61,8 @@ fn handle_status(status: c_lib::status) -> Result<()> {
         Ok(())
     } else {
         let error_message_ptr = unsafe { c_lib::status_error_message(status) };
-        let error_message = unsafe { std::ffi::CStr::from_ptr(error_message_ptr) }
-            .to_string_lossy()
-            .into_owned();
+        let error_message =
+            unsafe { std::ffi::CStr::from_ptr(error_message_ptr) }.to_string_lossy().into_owned();
         unsafe { libc::free(error_message_ptr as *mut libc::c_void) };
         unsafe { c_lib::status_free(status) };
         Err(anyhow!(error_message))
@@ -99,10 +95,7 @@ impl XlaBuilder {
 
     pub fn constant_r0(&self, f: f32) -> XlaOp {
         let op = unsafe { c_lib::constant_r0_float(self.0, f) };
-        XlaOp {
-            op,
-            marker: PhantomData,
-        }
+        XlaOp { op, marker: PhantomData }
     }
 
     pub fn parameter(&self, id: i64, shape: &Shape, name: &str) -> XlaOp {
@@ -116,18 +109,12 @@ impl XlaBuilder {
                 name.as_ptr() as *const libc::c_char,
             )
         };
-        XlaOp {
-            op,
-            marker: PhantomData,
-        }
+        XlaOp { op, marker: PhantomData }
     }
 
     pub fn constant_r1(&self, len: i64, f: f32) -> XlaOp {
         let op = unsafe { c_lib::constant_r1_float(self.0, len, f) };
-        XlaOp {
-            op,
-            marker: PhantomData,
-        }
+        XlaOp { op, marker: PhantomData }
     }
 
     pub fn get_shape(&self, op: &XlaOp) -> Result<Shape> {
@@ -135,17 +122,13 @@ impl XlaBuilder {
         let status = unsafe { c_lib::get_shape(self.0, op.op, &mut out) };
         handle_status(status)?;
         let rank = unsafe { c_lib::shape_dimensions_size(out) };
-        let dimensions: Vec<_> = (0..rank)
-            .map(|i| unsafe { c_lib::shape_dimensions(out, i) })
-            .collect();
+        let dimensions: Vec<_> =
+            (0..rank).map(|i| unsafe { c_lib::shape_dimensions(out, i) }).collect();
         let element_type = FromPrimitive::from_i32(unsafe { c_lib::shape_element_type(out) });
         unsafe { c_lib::shape_free(out) };
         match element_type {
             None => Err(anyhow!("unexpected element type")),
-            Some(element_type) => Ok(Shape {
-                element_type,
-                dimensions,
-            }),
+            Some(element_type) => Ok(Shape { element_type, dimensions }),
         }
     }
 }
@@ -154,10 +137,7 @@ macro_rules! binary_op {
     ($func_name:ident, $expression:expr) => {
         pub fn $func_name(&self, op: &XlaOp) -> XlaOp {
             let op = unsafe { $expression(self.op, op.op) };
-            XlaOp {
-                op,
-                marker: PhantomData,
-            }
+            XlaOp { op, marker: PhantomData }
         }
     };
 }
@@ -166,10 +146,7 @@ macro_rules! unary_op {
     ($func_name:ident, $expression:expr) => {
         pub fn $func_name(&self) -> XlaOp {
             let op = unsafe { $expression(self.op) };
-            XlaOp {
-                op,
-                marker: PhantomData,
-            }
+            XlaOp { op, marker: PhantomData }
         }
     };
 }
