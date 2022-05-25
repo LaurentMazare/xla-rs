@@ -1,7 +1,7 @@
 #include<stdint.h>
 #ifdef __cplusplus
-#include "tensorflow/compiler/xla/client/xla_builder.h"
-#include "tensorflow/compiler/xla/client/client_library.h"
+#include <tensorflow/compiler/xla/client/xla_builder.h>
+#include <tensorflow/compiler/xla/client/client_library.h>
 using namespace xla;
 
 extern "C" {
@@ -28,7 +28,7 @@ void xla_builder_free(xla_builder);
 
 xla_op constant_r0_float(const xla_builder, float);
 xla_op constant_r1_float(const xla_builder, int64_t, float);
-xla_op parameter(const xla_builder, int64_t, int, int, const long long int *, const char *);
+xla_op parameter(const xla_builder, int64_t, int, int, const long int *, const char *);
 
 // Ops
 xla_op op_add(const xla_op, const xla_op);

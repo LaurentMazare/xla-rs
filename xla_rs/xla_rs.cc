@@ -1,4 +1,4 @@
-#include "tensorflow/compiler/xla/xla_rs/xla_rs.h"
+#include "xla_rs.h"
 
 #define ASSIGN_OR_RETURN_STATUS(lhs, rexpr) \
   ASSIGN_OR_RETURN_STATUS_IMPL(TF_STATUS_MACROS_CONCAT_NAME(_statusor, __COUNTER__), lhs, rexpr)
@@ -24,8 +24,8 @@ xla_op constant_r1_float(const xla_builder b, int64_t len, float f) {
   return new XlaOp(ConstantR1<float>(b, len, f));
 }
 
-xla_op parameter(const xla_builder b, int64_t id, int pr_type, int dsize, const long long int *ds, const char *name) {
-  return new XlaOp(Parameter(b, id, ShapeUtil::MakeShape((PrimitiveType)pr_type, absl::Span<const long long int>(ds, dsize)), std::string(name)));
+xla_op parameter(const xla_builder b, int64_t id, int pr_type, int dsize, const long int *ds, const char *name) {
+  return new XlaOp(Parameter(b, id, ShapeUtil::MakeShape((PrimitiveType)pr_type, absl::Span<const long int>(ds, dsize)), std::string(name)));
 }
 
 xla_op op_add(const xla_op lhs, const xla_op rhs) {

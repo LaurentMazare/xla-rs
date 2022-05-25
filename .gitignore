@@ -11,3 +11,5 @@ Cargo.lock
 
 *.swp
 *.swo
+
+/xla_extension/
