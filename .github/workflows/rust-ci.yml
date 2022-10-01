@@ -17,6 +17,9 @@ jobs:
           profile: minimal
           toolchain: ${{ matrix.rust }}
           override: true
+      - run: |
+          wget -nv https://github.com/elixir-nx/xla/releases/download/v0.3.0/xla_extension-x86_64-linux-cpu.tar.gz
+          tar -xzvf xla_extension-x86_64-linux-cpu.tar.gz
       - uses: actions-rs/cargo@v1
         with:
           command: check
@@ -36,8 +39,8 @@ jobs:
           toolchain: ${{ matrix.rust }}
           override: true
       - run: |
-          wget https://github.com/elixir-nx/xla/releases/download/v0.3.0/xla_extension-x86_64-linux-cpu.tar.gz
-          tar xzf xla_extension-x86_64-linux-cpu.tar.gz
+          wget -nv https://github.com/elixir-nx/xla/releases/download/v0.3.0/xla_extension-x86_64-linux-cpu.tar.gz
+          tar -xzvf xla_extension-x86_64-linux-cpu.tar.gz
       - uses: actions-rs/cargo@v1
         with:
           command: test
@@ -69,6 +72,9 @@ jobs:
           toolchain: stable
           override: true
       - run: rustup component add clippy
+      - run: |
+          wget -nv https://github.com/elixir-nx/xla/releases/download/v0.3.0/xla_extension-x86_64-linux-cpu.tar.gz
+          tar -xzvf xla_extension-x86_64-linux-cpu.tar.gz
       - uses: actions-rs/cargo@v1
         with:
           command: clippy
