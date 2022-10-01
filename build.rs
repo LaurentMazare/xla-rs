@@ -44,6 +44,9 @@ fn main() {
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
     bindings.write_to_file(out_path.join("c_xla.rs")).expect("Couldn't write bindings!");
 
+    // The --copy-dt-needed-entries -lstdc++ are helpful to get around some
+    // "DSO missing from command line" error
+    // undefined reference to symbol '_ZStlsIcSt11char_traitsIcESaIcEERSt13basic_ostreamIT_T0_ES7_RKNSt7__cxx1112basic_stringIS4_S5_T1_EE@@GLIBCXX_3.4.21'
     println!("cargo:rustc-link-arg=-Wl,--copy-dt-needed-entries");
     println!("cargo:rustc-link-arg=-Wl,-lstdc++");
     println!("cargo:rustc-link-search=native={}", xla_dir.join("lib").display());
