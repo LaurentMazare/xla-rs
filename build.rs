@@ -44,6 +44,8 @@ fn main() {
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
     bindings.write_to_file(out_path.join("c_xla.rs")).expect("Couldn't write bindings!");
 
+    println!("cargo:rustc-link-arg=-Wl,--copy-dt-needed-entries");
+    println!("cargo:rustc-link-arg=-Wl,-lstdc++");
     println!("cargo:rustc-link-search=native={}", xla_dir.join("lib").display());
     println!("cargo:rustc-link-lib=static=xla_rs");
     println!("cargo:rustc-link-arg=-Wl,-rpath={}", xla_dir.join("lib").display());
