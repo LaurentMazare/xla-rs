@@ -242,6 +242,14 @@ float literal_get_first_element_f32(const literal l) {
   return l->GetFirstElement<float>();
 }
 
+int64_t literal_element_count(const literal l) {
+  return l->element_count();
+}
+
+void literal_shape(const literal l, shape *out_shape) {
+  *out_shape = new Shape(l->shape());
+}
+
 void literal_free(literal l) {
   delete l;
 }

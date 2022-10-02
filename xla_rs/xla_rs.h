@@ -87,6 +87,8 @@ status transfer_to_server(const literal, global_data *out);
 literal create_r0_f32(float);
 literal create_r1_f32(const float*, int);
 float literal_get_first_element_f32(const literal);
+int64_t literal_element_count(const literal);
+void literal_shape(const literal, shape*);
 void literal_free(literal);
 void global_data_free(global_data);
 void xla_computation_free(xla_computation);

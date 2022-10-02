@@ -195,6 +195,24 @@ impl Literal {
         unsafe { c_lib::literal_get_first_element_f32(self.0) }
     }
 
+    pub fn element_count(&self) -> usize {
+        unsafe { c_lib::literal_element_count(self.0) as usize }
+    }
+
+    pub fn shape(&self) -> Result<Shape> {
+        let mut out: c_lib::shape = std::ptr::null_mut();
+        unsafe { c_lib::literal_shape(self.0, &mut out) };
+        let rank = unsafe { c_lib::shape_dimensions_size(out) };
+        let dimensions: Vec<_> =
+            (0..rank).map(|i| unsafe { c_lib::shape_dimensions(out, i) }).collect();
+        let element_type = FromPrimitive::from_i32(unsafe { c_lib::shape_element_type(out) });
+        unsafe { c_lib::shape_free(out) };
+        match element_type {
+            None => Err(anyhow!("unexpected element type")),
+            Some(element_type) => Ok(Shape { element_type, dimensions }),
+        }
+    }
+
     pub fn transfer_to_server(&self) -> Result<GlobalData> {
         let mut result: c_lib::global_data = std::ptr::null_mut();
         let status = unsafe { c_lib::transfer_to_server(self.0, &mut result) };
