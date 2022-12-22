@@ -1,5 +1,3 @@
-use xla;
-
 #[test]
 fn assign_ops() {
     let xla_builder = xla::XlaBuilder::new("test");
