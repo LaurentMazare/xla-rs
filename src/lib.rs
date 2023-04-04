@@ -49,6 +49,8 @@ impl Shape {
 
 pub struct XlaBuilder(c_lib::xla_builder);
 pub struct XlaComputation(c_lib::xla_computation);
+pub struct PjRtClient(c_lib::pjrt_client);
+pub struct PjRtLoadedExecutable(c_lib::pjrt_loaded_executable);
 pub struct XlaOp<'a> {
     op: c_lib::xla_op,
     marker: PhantomData<&'a XlaBuilder>,
@@ -69,11 +71,28 @@ fn handle_status(status: c_lib::status) -> Result<()> {
     }
 }
 
-impl XlaComputation {
-    pub fn run(&self, args: &[GlobalData]) -> Result<Literal> {
+impl PjRtClient {
+    pub fn cpu() -> Result<Self> {
+        let mut result: c_lib::pjrt_client = std::ptr::null_mut();
+        let status = unsafe { c_lib::pjrt_client_create(&mut result) };
+        handle_status(status)?;
+        Ok(Self(result))
+    }
+
+    pub fn compile(&self, c: &XlaComputation) -> Result<PjRtLoadedExecutable> {
+        let mut result: c_lib::pjrt_loaded_executable = std::ptr::null_mut();
+        let status = unsafe { c_lib::compile(self.0, c.0, &mut result) };
+        handle_status(status)?;
+        Ok(PjRtLoadedExecutable(result))
+    }
+}
+
+impl PjRtLoadedExecutable {
+    pub fn execute(&self, args: &[GlobalData]) -> Result<Literal> {
         let mut result: c_lib::literal = std::ptr::null_mut();
         let args: Vec<_> = args.iter().map(|x| x.0).collect();
-        let status = unsafe { c_lib::run(self.0, args.as_ptr(), args.len() as i32, &mut result) };
+        let status =
+            unsafe { c_lib::execute(self.0, args.as_ptr(), args.len() as i32, &mut result) };
         handle_status(status)?;
         Ok(Literal(result))
     }
@@ -271,5 +290,17 @@ impl Drop for GlobalData {
 impl Drop for XlaComputation {
     fn drop(&mut self) {
         unsafe { c_lib::xla_computation_free(self.0) }
+    }
+}
+
+impl Drop for PjRtClient {
+    fn drop(&mut self) {
+        unsafe { c_lib::pjrt_client_free(self.0) }
+    }
+}
+
+impl Drop for PjRtLoadedExecutable {
+    fn drop(&mut self) {
+        unsafe { c_lib::pjrt_loaded_executable_free(self.0) }
     }
 }

@@ -1,9 +1,15 @@
 #include<stdint.h>
 #ifdef __cplusplus
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wuninitialized"
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#pragma GCC diagnostic ignored "-Winvalid-offsetof"
+#pragma GCC diagnostic ignored "-Wreturn-type"
 #include <tensorflow/compiler/xla/client/client_library.h>
 #include <tensorflow/compiler/xla/client/xla_builder.h>
 #include <tensorflow/compiler/xla/pjrt/tfrt_cpu_pjrt_client.h>
 #include <tensorflow/compiler/xla/pjrt/pjrt_client.h>
+#pragma GCC diagnostic pop
 using namespace xla;
 
 extern "C" {
