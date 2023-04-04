@@ -20,7 +20,6 @@ typedef XlaOp *xla_op;
 typedef Status *status;
 typedef Shape *shape;
 typedef Literal *literal;
-typedef GlobalData *global_data;
 typedef XlaComputation *xla_computation;
 #else
 typedef struct _pjrt_client *pjrt_client;
@@ -30,7 +29,6 @@ typedef struct _xla_op *xla_op;
 typedef struct _status *status;
 typedef struct _shape *shape;
 typedef struct _literal *literal;
-typedef struct _global_data *global_data;
 typedef struct _xla_computation *xla_computation;
 #endif
 
@@ -95,11 +93,7 @@ status get_shape(const xla_builder, const xla_op, shape*);
 
 status build(const xla_builder, const xla_op, xla_computation*);
 status compile(const pjrt_client, const xla_computation, pjrt_loaded_executable*);
-status execute(const pjrt_loaded_executable, const global_data*, int, literal *output);
-
-// TODO: expose the xla client.
-status transfer(const global_data, literal *out);
-status transfer_to_server(const literal, global_data *out);
+status execute(const pjrt_loaded_executable, const literal*, int, literal *output);
 
 literal create_r0_f32(float);
 literal create_r1_f32(const float*, int);
@@ -107,7 +101,6 @@ float literal_get_first_element_f32(const literal);
 int64_t literal_element_count(const literal);
 void literal_shape(const literal, shape*);
 void literal_free(literal);
-void global_data_free(global_data);
 void xla_computation_free(xla_computation);
 
 void status_free(status);

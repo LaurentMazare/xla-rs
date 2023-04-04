@@ -56,7 +56,6 @@ pub struct XlaOp<'a> {
     marker: PhantomData<&'a XlaBuilder>,
 }
 pub struct Literal(c_lib::literal);
-pub struct GlobalData(c_lib::global_data);
 
 fn handle_status(status: c_lib::status) -> Result<()> {
     if status.is_null() {
@@ -88,7 +87,7 @@ impl PjRtClient {
 }
 
 impl PjRtLoadedExecutable {
-    pub fn execute(&self, args: &[GlobalData]) -> Result<Literal> {
+    pub fn execute(&self, args: &[Literal]) -> Result<Literal> {
         let mut result: c_lib::literal = std::ptr::null_mut();
         let args: Vec<_> = args.iter().map(|x| x.0).collect();
         let status =
@@ -231,13 +230,6 @@ impl Literal {
             Some(element_type) => Ok(Shape { element_type, dimensions }),
         }
     }
-
-    pub fn transfer_to_server(&self) -> Result<GlobalData> {
-        let mut result: c_lib::global_data = std::ptr::null_mut();
-        let status = unsafe { c_lib::transfer_to_server(self.0, &mut result) };
-        handle_status(status)?;
-        Ok(GlobalData(result))
-    }
 }
 
 impl From<f32> for Literal {
@@ -251,15 +243,6 @@ impl From<&[f32]> for Literal {
     fn from(f: &[f32]) -> Self {
         let ptr = unsafe { c_lib::create_r1_f32(f.as_ptr(), f.len() as i32) };
         Literal(ptr)
-    }
-}
-
-impl GlobalData {
-    pub fn transfer(&self) -> Result<Literal> {
-        let mut result: c_lib::literal = std::ptr::null_mut();
-        let status = unsafe { c_lib::transfer(self.0, &mut result) };
-        handle_status(status)?;
-        Ok(Literal(result))
     }
 }
 
@@ -278,12 +261,6 @@ impl Drop for XlaOp<'_> {
 impl Drop for Literal {
     fn drop(&mut self) {
         unsafe { c_lib::literal_free(self.0) }
-    }
-}
-
-impl Drop for GlobalData {
-    fn drop(&mut self) {
-        unsafe { c_lib::global_data_free(self.0) }
     }
 }
 

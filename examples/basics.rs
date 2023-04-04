@@ -1,10 +1,6 @@
 use anyhow::Result;
 extern crate xla;
 
-fn global_data_f32(f: f32) -> Result<xla::GlobalData> {
-    xla::Literal::from(f).transfer_to_server()
-}
-
 fn main() -> Result<()> {
     let client = xla::PjRtClient::cpu()?;
     let xla_builder = xla::XlaBuilder::new("test");
@@ -21,10 +17,10 @@ fn main() -> Result<()> {
     let sum = sum.sqrt();
     let computation = xla_builder.build(&sum)?;
     let result = client.compile(&computation)?;
-    let result = result.execute(&[global_data_f32(12.0)?])?;
+    let result = result.execute(&[xla::Literal::from(12.0)])?;
     println!("Result: {:?}", result.get_first_element_f32());
     let result = client.compile(&computation)?;
-    let result = result.execute(&[global_data_f32(13.0)?])?;
+    let result = result.execute(&[xla::Literal::from(13.0)])?;
     println!("Result: {:?}", result.get_first_element_f32());
     Ok(())
 }
