@@ -228,11 +228,20 @@ status compile(const pjrt_client client, const xla_computation computation, pjrt
 }
 
 status execute(const pjrt_loaded_executable exe, const literal *inputs, int ninputs, literal *output) {
+  auto client = (*exe)->client();
   ExecuteOptions options;
-  std::vector<PjRtBuffer*> input_buffers;
+  std::vector<std::unique_ptr<PjRtBuffer>> input_buffers;
+  std::vector<PjRtBuffer*> input_buffer_ptrs;
+  PjRtDevice* device = client->devices()[0];
+  for (int i = 0; i < ninputs; ++i) {
+    ASSIGN_OR_RETURN_STATUS(buffer, client->BufferFromHostLiteral(*inputs[i], device));
+    PjRtBuffer* buffer_ptr = buffer.get();
+    input_buffers.push_back(std::move(buffer));
+    input_buffer_ptrs.push_back(buffer_ptr);
+  }
   ASSIGN_OR_RETURN_STATUS(
     results,
-    (*exe)->Execute({input_buffers}, options));
+    (*exe)->Execute({input_buffer_ptrs}, options));
   ASSIGN_OR_RETURN_STATUS(literal, results[0][0]->ToLiteralSync());
   *output = new Literal();
   **output = std::move(*literal);
