@@ -6,7 +6,7 @@
 #define ASSIGN_OR_RETURN_STATUS_IMPL(statusor, lhs, rexpr) \
   auto statusor = (rexpr); \
   if (!statusor.ok()) return new Status(statusor.status()); \
-  auto lhs = std::move(statusor.ValueOrDie());
+  auto lhs = std::move(statusor.value());
 
 xla_builder xla_builder_create(const char *name) {
   return new XlaBuilder(name);

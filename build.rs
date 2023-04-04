@@ -14,7 +14,7 @@ fn make_shared_lib<P: AsRef<Path>>(xla_dir: P) {
                 .pic(true)
                 .warnings(false)
                 .include(xla_dir.as_ref().join("include"))
-                .flag("-std=c++14")
+                .flag("-std=c++17")
                 .file("xla_rs/xla_rs.cc")
                 .compile("xla_rs");
         }
@@ -36,6 +36,7 @@ fn main() {
     make_shared_lib(&xla_dir);
 
     println!("cargo:rerun-if-changed=xla_rs/xla_rs.h");
+    println!("cargo:rerun-if-changed=xla_rs/xla_rs.cc");
     let bindings = bindgen::Builder::default()
         .header("xla_rs/xla_rs.h")
         .parse_callbacks(Box::new(bindgen::CargoCallbacks))
