@@ -15,6 +15,8 @@ fn make_shared_lib<P: AsRef<Path>>(xla_dir: P) {
                 .warnings(false)
                 .include(xla_dir.as_ref().join("include"))
                 .flag("-std=c++17")
+                .flag("-Wno-deprecated-declarations")
+                .flag("-DLLVM_ON_UNIX=1")
                 .file("xla_rs/xla_rs.cc")
                 .compile("xla_rs");
         }

@@ -1,10 +1,14 @@
 #include<stdint.h>
 #ifdef __cplusplus
-#include <tensorflow/compiler/xla/client/xla_builder.h>
 #include <tensorflow/compiler/xla/client/client_library.h>
+#include <tensorflow/compiler/xla/client/xla_builder.h>
+#include <tensorflow/compiler/xla/pjrt/tfrt_cpu_pjrt_client.h>
+#include <tensorflow/compiler/xla/pjrt/pjrt_client.h>
 using namespace xla;
 
 extern "C" {
+typedef std::shared_ptr<PjRtClient> *pjrt_client;
+typedef std::shared_ptr<PjRtLoadedExecutable> *pjrt_loaded_executable;
 typedef XlaBuilder *xla_builder;
 typedef XlaOp *xla_op;
 typedef Status *status;
@@ -13,6 +17,8 @@ typedef Literal *literal;
 typedef GlobalData *global_data;
 typedef XlaComputation *xla_computation;
 #else
+typedef struct _pjrt_client *pjrt_client;
+typedef struct _pjrt_loaded_executable *pjrt_loaded_executable;
 typedef struct _xla_builder *xla_builder;
 typedef struct _xla_op *xla_op;
 typedef struct _status *status;
@@ -22,6 +28,10 @@ typedef struct _global_data *global_data;
 typedef struct _xla_computation *xla_computation;
 #endif
 
+status pjrt_client_create(pjrt_client *);
+void pjrt_client_free(pjrt_client);
+
+void pjrt_loaded_executable_free(pjrt_loaded_executable);
 
 xla_builder xla_builder_create(const char *name);
 void xla_builder_free(xla_builder);
@@ -78,7 +88,8 @@ void shape_free(shape);
 status get_shape(const xla_builder, const xla_op, shape*);
 
 status build(const xla_builder, const xla_op, xla_computation*);
-status run(const xla_computation, const global_data*, int, literal *output);
+status compile(const pjrt_client, const xla_computation, pjrt_loaded_executable*);
+status execute(const pjrt_loaded_executable, const global_data*, int, literal *output);
 
 // TODO: expose the xla client.
 status transfer(const global_data, literal *out);
