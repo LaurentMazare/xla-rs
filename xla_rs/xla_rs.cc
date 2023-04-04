@@ -6,7 +6,22 @@
 #define ASSIGN_OR_RETURN_STATUS_IMPL(statusor, lhs, rexpr) \
   auto statusor = (rexpr); \
   if (!statusor.ok()) return new Status(statusor.status()); \
-  auto lhs = std::move(statusor.ValueOrDie());
+  auto lhs = std::move(statusor.value());
+
+status pjrt_client_create(pjrt_client *output) {
+  ASSIGN_OR_RETURN_STATUS(client, xla::GetTfrtCpuClient(false));
+  *output = new std::shared_ptr(std::move(client));
+  return nullptr;
+
+}
+
+void pjrt_client_free(pjrt_client b) {
+  delete b;
+}
+
+void pjrt_loaded_executable_free(pjrt_loaded_executable b) {
+  delete b;
+}
 
 xla_builder xla_builder_create(const char *name) {
   return new XlaBuilder(name);
@@ -198,21 +213,6 @@ status get_shape(const xla_builder b, const xla_op o, shape *out_shape) {
   return nullptr;
 }
 
-status transfer(const global_data gd, literal *out) {
-  ASSIGN_OR_RETURN_STATUS(client, ClientLibrary::GetOrCreateLocalClient());
-  ASSIGN_OR_RETURN_STATUS(literal, client->Transfer(*gd));
-  *out = new Literal();
-  **out = std::move(literal);
-  return nullptr;
-}
-
-status transfer_to_server(const literal ls, global_data *out) {
-  ASSIGN_OR_RETURN_STATUS(client, ClientLibrary::GetOrCreateLocalClient());
-  ASSIGN_OR_RETURN_STATUS(global_data, client->TransferToServer(*ls));
-  *out = global_data.release();
-  return nullptr;
-}
-
 status build(const xla_builder b, const xla_op o, xla_computation *output) {
   ASSIGN_OR_RETURN_STATUS(computation, b->Build(o));
   *output = new XlaComputation();
@@ -220,13 +220,31 @@ status build(const xla_builder b, const xla_op o, xla_computation *output) {
   return nullptr;
 }
 
-status run(const xla_computation c, const global_data *gd, int ngd, literal *output) {
-  ASSIGN_OR_RETURN_STATUS(client, ClientLibrary::GetOrCreateLocalClient());
+status compile(const pjrt_client client, const xla_computation computation, pjrt_loaded_executable* output) {
+  CompileOptions options;
+  ASSIGN_OR_RETURN_STATUS(executable, (*client)->Compile(*computation, options));
+  *output = new std::shared_ptr(std::move(executable));
+  return nullptr;
+}
+
+status execute(const pjrt_loaded_executable exe, const literal *inputs, int ninputs, literal *output) {
+  auto client = (*exe)->client();
+  ExecuteOptions options;
+  std::vector<std::unique_ptr<PjRtBuffer>> input_buffers;
+  std::vector<PjRtBuffer*> input_buffer_ptrs;
+  PjRtDevice* device = client->devices()[0];
+  for (int i = 0; i < ninputs; ++i) {
+    ASSIGN_OR_RETURN_STATUS(buffer, client->BufferFromHostLiteral(*inputs[i], device));
+    PjRtBuffer* buffer_ptr = buffer.get();
+    input_buffers.push_back(std::move(buffer));
+    input_buffer_ptrs.push_back(buffer_ptr);
+  }
   ASSIGN_OR_RETURN_STATUS(
-    literal,
-    client->ExecuteAndTransfer(*c, absl::Span<const global_data>(gd, ngd)));
+    results,
+    (*exe)->Execute({input_buffer_ptrs}, options));
+  ASSIGN_OR_RETURN_STATUS(literal, results[0][0]->ToLiteralSync());
   *output = new Literal();
-  **output = std::move(literal);
+  **output = std::move(*literal);
   return nullptr;
 }
 
@@ -256,10 +274,6 @@ void literal_free(literal l) {
 
 void status_free(status s) {
   delete s;
-}
-
-void global_data_free(global_data gd) {
-  delete gd;
 }
 
 void xla_computation_free(xla_computation c) {
