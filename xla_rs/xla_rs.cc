@@ -15,6 +15,22 @@ status pjrt_client_create(pjrt_client *output) {
 
 }
 
+int pjrt_client_device_count(pjrt_client c) {
+  return (*c)->device_count();
+}
+
+int pjrt_client_addressable_device_count(pjrt_client c) {
+  return (*c)->addressable_device_count();
+}
+
+char* pjrt_client_platform_name(pjrt_client c) {
+  return strdup(std::string((*c)->platform_name()).c_str());
+}
+
+char* pjrt_client_platform_version(pjrt_client c) {
+  return strdup(std::string((*c)->platform_version()).c_str());
+}
+
 void pjrt_client_free(pjrt_client b) {
   delete b;
 }

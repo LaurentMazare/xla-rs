@@ -84,6 +84,32 @@ impl PjRtClient {
         handle_status(status)?;
         Ok(PjRtLoadedExecutable(result))
     }
+
+    pub fn device_count(&self) -> usize {
+        unsafe { c_lib::pjrt_client_device_count(self.0) as usize }
+    }
+
+    pub fn addressable_device_count(&self) -> usize {
+        unsafe { c_lib::pjrt_client_addressable_device_count(self.0) as usize }
+    }
+
+    pub fn platform_name(&self) -> String {
+        unsafe {
+            let ptr = c_lib::pjrt_client_platform_name(self.0);
+            let str = std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned();
+            libc::free(ptr as *mut libc::c_void);
+            str
+        }
+    }
+
+    pub fn platform_version(&self) -> String {
+        unsafe {
+            let ptr = c_lib::pjrt_client_platform_version(self.0);
+            let str = std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned();
+            libc::free(ptr as *mut libc::c_void);
+            str
+        }
+    }
 }
 
 impl PjRtLoadedExecutable {

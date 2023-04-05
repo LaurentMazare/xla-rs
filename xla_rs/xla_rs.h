@@ -34,6 +34,10 @@ typedef struct _xla_computation *xla_computation;
 
 status pjrt_client_create(pjrt_client *);
 void pjrt_client_free(pjrt_client);
+int pjrt_client_device_count(pjrt_client);
+int pjrt_client_addressable_device_count(pjrt_client);
+char* pjrt_client_platform_name(pjrt_client);
+char* pjrt_client_platform_version(pjrt_client);
 
 void pjrt_loaded_executable_free(pjrt_loaded_executable);
 
