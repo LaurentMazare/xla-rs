@@ -10,40 +10,40 @@
 
 status pjrt_client_create(pjrt_client *output) {
   ASSIGN_OR_RETURN_STATUS(client, xla::GetTfrtCpuClient(false));
-  *output = new std::unique_ptr(std::move(client));
+  *output = client.release();
   return nullptr;
 
 }
 
 int pjrt_client_device_count(pjrt_client c) {
-  return (*c)->device_count();
+  return c->device_count();
 }
 
 int pjrt_client_addressable_device_count(pjrt_client c) {
-  return (*c)->addressable_device_count();
+  return c->addressable_device_count();
 }
 
 void pjrt_client_devices(pjrt_client c, pjrt_device* outputs) {
   size_t index = 0;
-  for (auto device : (*c)->devices()) {
+  for (auto device : c->devices()) {
       outputs[index++] = device;
   }
 }
 
 void pjrt_client_addressable_devices(pjrt_client c, pjrt_device* outputs) {
   size_t index = 0;
-  for (auto device : (*c)->addressable_devices()) {
+  for (auto device : c->addressable_devices()) {
       outputs[index++] = device;
   }
 }
 
 char* pjrt_client_platform_name(pjrt_client c) {
   // TODO: Avoid the double allocation when converting string views.
-  return strdup(std::string((*c)->platform_name()).c_str());
+  return strdup(std::string(c->platform_name()).c_str());
 }
 
 char* pjrt_client_platform_version(pjrt_client c) {
-  return strdup(std::string((*c)->platform_version()).c_str());
+  return strdup(std::string(c->platform_version()).c_str());
 }
 
 void pjrt_client_free(pjrt_client b) {
@@ -51,6 +51,10 @@ void pjrt_client_free(pjrt_client b) {
 }
 
 void pjrt_loaded_executable_free(pjrt_loaded_executable b) {
+  delete b;
+}
+
+void pjrt_buffer_free(pjrt_buffer b) {
   delete b;
 }
 
@@ -277,13 +281,13 @@ status build(const xla_builder b, const xla_op o, xla_computation *output) {
 
 status compile(const pjrt_client client, const xla_computation computation, pjrt_loaded_executable* output) {
   CompileOptions options;
-  ASSIGN_OR_RETURN_STATUS(executable, (*client)->Compile(*computation, options));
-  *output = new std::unique_ptr(std::move(executable));
+  ASSIGN_OR_RETURN_STATUS(executable, client->Compile(*computation, options));
+  *output = executable.release();
   return nullptr;
 }
 
 status execute(const pjrt_loaded_executable exe, const literal *inputs, int ninputs, literal *output) {
-  auto client = (*exe)->client();
+  auto client = exe->client();
   ExecuteOptions options;
   std::vector<std::unique_ptr<PjRtBuffer>> input_buffers;
   std::vector<PjRtBuffer*> input_buffer_ptrs;
@@ -296,7 +300,7 @@ status execute(const pjrt_loaded_executable exe, const literal *inputs, int ninp
   }
   ASSIGN_OR_RETURN_STATUS(
     results,
-    (*exe)->Execute({input_buffer_ptrs}, options));
+    exe->Execute({input_buffer_ptrs}, options));
   ASSIGN_OR_RETURN_STATUS(literal, results[0][0]->ToLiteralSync());
   *output = new Literal();
   **output = std::move(*literal);

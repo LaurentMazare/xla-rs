@@ -13,9 +13,10 @@
 using namespace xla;
 
 extern "C" {
-typedef std::unique_ptr<PjRtClient> *pjrt_client;
-typedef std::unique_ptr<PjRtLoadedExecutable> *pjrt_loaded_executable;
+typedef PjRtClient *pjrt_client;
+typedef PjRtLoadedExecutable *pjrt_loaded_executable;
 typedef PjRtDevice *pjrt_device;
+typedef PjRtBuffer *pjrt_buffer;
 typedef XlaBuilder *xla_builder;
 typedef XlaOp *xla_op;
 typedef Status *status;
@@ -26,6 +27,7 @@ typedef XlaComputation *xla_computation;
 typedef struct _pjrt_client *pjrt_client;
 typedef struct _pjrt_loaded_executable *pjrt_loaded_executable;
 typedef struct _pjrt_device *pjrt_device;
+typedef struct _pjrt_buffer *pjrt_buffer;
 typedef struct _xla_builder *xla_builder;
 typedef struct _xla_op *xla_op;
 typedef struct _status *status;
@@ -51,6 +53,8 @@ int pjrt_device_local_hardware_id(pjrt_device);
 char* pjrt_device_kind(pjrt_device);
 char* pjrt_device_debug_string(pjrt_device);
 char* pjrt_device_to_string(pjrt_device);
+
+void pjrt_buffer_free(pjrt_buffer);
 
 xla_builder xla_builder_create(const char *name);
 void xla_builder_free(xla_builder);
