@@ -54,6 +54,9 @@ char* pjrt_device_kind(pjrt_device);
 char* pjrt_device_debug_string(pjrt_device);
 char* pjrt_device_to_string(pjrt_device);
 
+status pjrt_buffer_to_literal_sync(pjrt_buffer, literal *);
+shape pjrt_buffer_on_device_shape(pjrt_buffer);
+status pjrt_buffer_copy_to_device(pjrt_buffer, pjrt_device, pjrt_buffer *);
 void pjrt_buffer_free(pjrt_buffer);
 
 xla_builder xla_builder_create(const char *name);

@@ -56,6 +56,7 @@ impl Shape {
 pub struct XlaBuilder(c_lib::xla_builder);
 pub struct XlaComputation(c_lib::xla_computation);
 pub struct PjRtClient(c_lib::pjrt_client);
+pub struct PjRtBuffer(c_lib::pjrt_buffer);
 pub struct PjRtLoadedExecutable(c_lib::pjrt_loaded_executable);
 pub struct PjRtDevice<'a> {
     device: c_lib::pjrt_device,
@@ -167,6 +168,23 @@ impl<'a> PjRtDevice<'a> {
             let ptr = c_lib::pjrt_device_debug_string(self.device);
             c_ptr_to_string(ptr)
         }
+    }
+}
+
+impl PjRtBuffer {
+    pub fn copy_to_device<'a>(&self, device: PjRtDevice<'a>) -> Result<Self> {
+        let mut result: c_lib::pjrt_buffer = std::ptr::null_mut();
+        let status =
+            unsafe { c_lib::pjrt_buffer_copy_to_device(self.0, device.device, &mut result) };
+        handle_status(status)?;
+        Ok(Self(result))
+    }
+
+    pub fn to_literal_sync(&self) -> Result<Literal> {
+        let mut result: c_lib::literal = std::ptr::null_mut();
+        let status = unsafe { c_lib::pjrt_buffer_to_literal_sync(self.0, &mut result) };
+        handle_status(status)?;
+        Ok(Literal(result))
     }
 }
 
@@ -363,5 +381,11 @@ impl Drop for PjRtClient {
 impl Drop for PjRtLoadedExecutable {
     fn drop(&mut self) {
         unsafe { c_lib::pjrt_loaded_executable_free(self.0) }
+    }
+}
+
+impl Drop for PjRtBuffer {
+    fn drop(&mut self) {
+        unsafe { c_lib::pjrt_buffer_free(self.0) }
     }
 }

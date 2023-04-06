@@ -54,6 +54,23 @@ void pjrt_loaded_executable_free(pjrt_loaded_executable b) {
   delete b;
 }
 
+status pjrt_buffer_to_literal_sync(pjrt_buffer b, literal *output) {
+  ASSIGN_OR_RETURN_STATUS(literal, b->ToLiteralSync());
+  *output = new Literal();
+  **output = std::move(*literal);
+  return nullptr;
+}
+
+shape pjrt_buffer_on_device_shape(pjrt_buffer b) {
+  return new Shape(b->on_device_shape());
+}
+
+status pjrt_buffer_copy_to_device(pjrt_buffer b, pjrt_device device, pjrt_buffer* output) {
+  ASSIGN_OR_RETURN_STATUS(copied_b, b->CopyToDevice(device));
+  *output = copied_b.release();
+  return nullptr;
+}
+
 void pjrt_buffer_free(pjrt_buffer b) {
   delete b;
 }
