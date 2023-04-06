@@ -147,6 +147,7 @@ impl<'a> PjRtDevice<'a> {
         (unsafe { c_lib::pjrt_device_local_hardware_id(self.device) }) as usize
     }
 
+    #[allow(clippy::inherent_to_string)]
     pub fn to_string(&self) -> String {
         unsafe {
             let ptr = c_lib::pjrt_device_to_string(self.device);
