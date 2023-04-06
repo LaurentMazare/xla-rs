@@ -10,7 +10,7 @@
 
 status pjrt_client_create(pjrt_client *output) {
   ASSIGN_OR_RETURN_STATUS(client, xla::GetTfrtCpuClient(false));
-  *output = new std::shared_ptr(std::move(client));
+  *output = new std::unique_ptr(std::move(client));
   return nullptr;
 
 }
@@ -239,7 +239,7 @@ status build(const xla_builder b, const xla_op o, xla_computation *output) {
 status compile(const pjrt_client client, const xla_computation computation, pjrt_loaded_executable* output) {
   CompileOptions options;
   ASSIGN_OR_RETURN_STATUS(executable, (*client)->Compile(*computation, options));
-  *output = new std::shared_ptr(std::move(executable));
+  *output = new std::unique_ptr(std::move(executable));
   return nullptr;
 }
 

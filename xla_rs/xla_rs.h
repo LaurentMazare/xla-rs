@@ -13,8 +13,8 @@
 using namespace xla;
 
 extern "C" {
-typedef std::shared_ptr<PjRtClient> *pjrt_client;
-typedef std::shared_ptr<PjRtLoadedExecutable> *pjrt_loaded_executable;
+typedef std::unique_ptr<PjRtClient> *pjrt_client;
+typedef std::unique_ptr<PjRtLoadedExecutable> *pjrt_loaded_executable;
 typedef XlaBuilder *xla_builder;
 typedef XlaOp *xla_op;
 typedef Status *status;
