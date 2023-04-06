@@ -172,7 +172,7 @@ impl<'a> PjRtDevice<'a> {
 }
 
 impl PjRtBuffer {
-    pub fn copy_to_device<'a>(&self, device: PjRtDevice<'a>) -> Result<Self> {
+    pub fn copy_to_device(&self, device: PjRtDevice<'_>) -> Result<Self> {
         let mut result: c_lib::pjrt_buffer = std::ptr::null_mut();
         let status =
             unsafe { c_lib::pjrt_buffer_copy_to_device(self.0, device.device, &mut result) };
@@ -189,13 +189,34 @@ impl PjRtBuffer {
 }
 
 impl PjRtLoadedExecutable {
-    pub fn execute(&self, args: &[Literal]) -> Result<Literal> {
-        let mut result: c_lib::literal = std::ptr::null_mut();
+    pub fn execute(&self, args: &[Literal]) -> Result<Vec<Vec<PjRtBuffer>>> {
+        let mut outputs = std::ptr::null_mut();
         let args: Vec<_> = args.iter().map(|x| x.0).collect();
         let status =
-            unsafe { c_lib::execute(self.0, args.as_ptr(), args.len() as i32, &mut result) };
+            unsafe { c_lib::execute(self.0, args.as_ptr(), args.len() as i32, &mut outputs) };
         handle_status(status)?;
-        Ok(Literal(result))
+        let outputs = unsafe {
+            let mut vec = vec![];
+            loop {
+                let outputs = *outputs.add(vec.len());
+                if outputs.is_null() {
+                    break;
+                }
+                let mut replica_vec = vec![];
+                loop {
+                    let outputs = *outputs.add(replica_vec.len());
+                    if outputs.is_null() {
+                        break;
+                    }
+                    replica_vec.push(PjRtBuffer(outputs));
+                }
+                libc::free(outputs as *mut libc::c_void);
+                vec.push(replica_vec);
+            }
+            libc::free(outputs as *mut libc::c_void);
+            vec
+        };
+        Ok(outputs)
     }
 }
 

@@ -303,7 +303,7 @@ status compile(const pjrt_client client, const xla_computation computation, pjrt
   return nullptr;
 }
 
-status execute(const pjrt_loaded_executable exe, const literal *inputs, int ninputs, literal *output) {
+status execute(const pjrt_loaded_executable exe, const literal *inputs, int ninputs, pjrt_buffer ***outputs) {
   auto client = exe->client();
   ExecuteOptions options;
   std::vector<std::unique_ptr<PjRtBuffer>> input_buffers;
@@ -319,8 +319,18 @@ status execute(const pjrt_loaded_executable exe, const literal *inputs, int ninp
     results,
     exe->Execute({input_buffer_ptrs}, options));
   ASSIGN_OR_RETURN_STATUS(literal, results[0][0]->ToLiteralSync());
-  *output = new Literal();
-  **output = std::move(*literal);
+  pjrt_buffer** out = (pjrt_buffer**)malloc((results.size() + 1) * sizeof(pjrt_buffer*));
+  for (size_t i = 0; i < results.size(); ++i) {
+    auto &replica_results = results[i];
+    pjrt_buffer* per_replica_outputs = (pjrt_buffer*)malloc((replica_results.size() + 1) * sizeof(pjrt_buffer));
+    for (size_t j = 0; j < replica_results.size(); ++j) {
+      per_replica_outputs[j] = replica_results[j].release();
+    }
+    per_replica_outputs[replica_results.size()] = nullptr;
+    out[i] = per_replica_outputs;
+  }
+  out[results.size()] = nullptr;
+  *outputs = out;
   return nullptr;
 }
 
