@@ -23,7 +23,22 @@ int pjrt_client_addressable_device_count(pjrt_client c) {
   return (*c)->addressable_device_count();
 }
 
+void pjrt_client_devices(pjrt_client c, pjrt_device* outputs) {
+  size_t index = 0;
+  for (auto device : (*c)->devices()) {
+      outputs[index++] = device;
+  }
+}
+
+void pjrt_client_addressable_devices(pjrt_client c, pjrt_device* outputs) {
+  size_t index = 0;
+  for (auto device : (*c)->addressable_devices()) {
+      outputs[index++] = device;
+  }
+}
+
 char* pjrt_client_platform_name(pjrt_client c) {
+  // TODO: Avoid the double allocation when converting string views.
   return strdup(std::string((*c)->platform_name()).c_str());
 }
 
@@ -37,6 +52,30 @@ void pjrt_client_free(pjrt_client b) {
 
 void pjrt_loaded_executable_free(pjrt_loaded_executable b) {
   delete b;
+}
+
+int pjrt_device_id(pjrt_device d) {
+  return d->id();
+}
+
+int pjrt_device_process_index(pjrt_device d) {
+  return d->process_index();
+}
+
+int pjrt_device_local_hardware_id(pjrt_device d) {
+  return d->local_hardware_id();
+}
+
+char* pjrt_device_kind(pjrt_device d) {
+  return strdup(std::string(d->device_kind()).c_str());
+}
+
+char* pjrt_device_debug_string(pjrt_device d) {
+  return strdup(std::string(d->DebugString()).c_str());
+}
+
+char* pjrt_device_to_string(pjrt_device d) {
+  return strdup(std::string(d->ToString()).c_str());
 }
 
 xla_builder xla_builder_create(const char *name) {

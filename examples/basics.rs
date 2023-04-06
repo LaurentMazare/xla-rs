@@ -4,6 +4,15 @@ extern crate xla;
 fn main() -> Result<()> {
     let client = xla::PjRtClient::cpu()?;
     println!("{} {} {}", client.platform_name(), client.platform_version(), client.device_count());
+    for device in client.devices().iter() {
+        println!(
+            "{} {} {} {}",
+            device.id(),
+            device.to_string(),
+            device.debug_string(),
+            device.kind()
+        )
+    }
     let xla_builder = xla::XlaBuilder::new("test");
     let cst42 = xla::XlaBuilder::constant_r0(&xla_builder, 42.);
     let cst43 = xla::XlaBuilder::constant_r1(&xla_builder, 2, 43.);

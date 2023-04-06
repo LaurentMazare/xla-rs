@@ -15,6 +15,7 @@ using namespace xla;
 extern "C" {
 typedef std::unique_ptr<PjRtClient> *pjrt_client;
 typedef std::unique_ptr<PjRtLoadedExecutable> *pjrt_loaded_executable;
+typedef PjRtDevice *pjrt_device;
 typedef XlaBuilder *xla_builder;
 typedef XlaOp *xla_op;
 typedef Status *status;
@@ -24,6 +25,7 @@ typedef XlaComputation *xla_computation;
 #else
 typedef struct _pjrt_client *pjrt_client;
 typedef struct _pjrt_loaded_executable *pjrt_loaded_executable;
+typedef struct _pjrt_device *pjrt_device;
 typedef struct _xla_builder *xla_builder;
 typedef struct _xla_op *xla_op;
 typedef struct _status *status;
@@ -36,10 +38,19 @@ status pjrt_client_create(pjrt_client *);
 void pjrt_client_free(pjrt_client);
 int pjrt_client_device_count(pjrt_client);
 int pjrt_client_addressable_device_count(pjrt_client);
+void pjrt_client_devices(pjrt_client, pjrt_device*);
+void pjrt_client_addressable_devices(pjrt_client, pjrt_device*);
 char* pjrt_client_platform_name(pjrt_client);
 char* pjrt_client_platform_version(pjrt_client);
 
 void pjrt_loaded_executable_free(pjrt_loaded_executable);
+
+int pjrt_device_id(pjrt_device);
+int pjrt_device_process_index(pjrt_device);
+int pjrt_device_local_hardware_id(pjrt_device);
+char* pjrt_device_kind(pjrt_device);
+char* pjrt_device_debug_string(pjrt_device);
+char* pjrt_device_to_string(pjrt_device);
 
 xla_builder xla_builder_create(const char *name);
 void xla_builder_free(xla_builder);

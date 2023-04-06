@@ -4,6 +4,12 @@ use num_traits::FromPrimitive;
 use std::marker::PhantomData;
 mod c_lib;
 
+unsafe fn c_ptr_to_string(ptr: *const std::ffi::c_char) -> String {
+    let str = std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned();
+    libc::free(ptr as *mut libc::c_void);
+    str
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug, FromPrimitive)]
 pub enum PrimitiveType {
     Invalid = 0,
@@ -51,6 +57,11 @@ pub struct XlaBuilder(c_lib::xla_builder);
 pub struct XlaComputation(c_lib::xla_computation);
 pub struct PjRtClient(c_lib::pjrt_client);
 pub struct PjRtLoadedExecutable(c_lib::pjrt_loaded_executable);
+pub struct PjRtDevice<'a> {
+    device: c_lib::pjrt_device,
+    marker: PhantomData<&'a PjRtClient>,
+}
+
 pub struct XlaOp<'a> {
     op: c_lib::xla_op,
     marker: PhantomData<&'a XlaBuilder>,
@@ -61,11 +72,12 @@ fn handle_status(status: c_lib::status) -> Result<()> {
     if status.is_null() {
         Ok(())
     } else {
-        let error_message_ptr = unsafe { c_lib::status_error_message(status) };
-        let error_message =
-            unsafe { std::ffi::CStr::from_ptr(error_message_ptr) }.to_string_lossy().into_owned();
-        unsafe { libc::free(error_message_ptr as *mut libc::c_void) };
-        unsafe { c_lib::status_free(status) };
+        let error_message = unsafe {
+            let error_message_ptr = c_lib::status_error_message(status);
+            let error_message = c_ptr_to_string(error_message_ptr);
+            c_lib::status_free(status);
+            error_message
+        };
         Err(anyhow!(error_message))
     }
 }
@@ -96,18 +108,63 @@ impl PjRtClient {
     pub fn platform_name(&self) -> String {
         unsafe {
             let ptr = c_lib::pjrt_client_platform_name(self.0);
-            let str = std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned();
-            libc::free(ptr as *mut libc::c_void);
-            str
+            c_ptr_to_string(ptr)
         }
     }
 
     pub fn platform_version(&self) -> String {
         unsafe {
             let ptr = c_lib::pjrt_client_platform_version(self.0);
-            let str = std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned();
-            libc::free(ptr as *mut libc::c_void);
-            str
+            c_ptr_to_string(ptr)
+        }
+    }
+
+    pub fn devices(&self) -> Vec<PjRtDevice> {
+        let device_count = self.device_count();
+        let mut device_ptrs = vec![std::ptr::null_mut(); device_count];
+        unsafe { c_lib::pjrt_client_devices(self.0, device_ptrs.as_mut_ptr()) };
+        device_ptrs.into_iter().map(|device| PjRtDevice { device, marker: PhantomData }).collect()
+    }
+
+    pub fn addressable_devices(&self) -> Vec<PjRtDevice> {
+        let device_count = self.addressable_device_count();
+        let mut device_ptrs = vec![std::ptr::null_mut(); device_count];
+        unsafe { c_lib::pjrt_client_addressable_devices(self.0, device_ptrs.as_mut_ptr()) };
+        device_ptrs.into_iter().map(|device| PjRtDevice { device, marker: PhantomData }).collect()
+    }
+}
+
+impl<'a> PjRtDevice<'a> {
+    pub fn id(&self) -> usize {
+        (unsafe { c_lib::pjrt_device_id(self.device) }) as usize
+    }
+
+    pub fn process_index(&self) -> usize {
+        (unsafe { c_lib::pjrt_device_process_index(self.device) }) as usize
+    }
+
+    pub fn local_hardware_id(&self) -> usize {
+        (unsafe { c_lib::pjrt_device_local_hardware_id(self.device) }) as usize
+    }
+
+    pub fn to_string(&self) -> String {
+        unsafe {
+            let ptr = c_lib::pjrt_device_to_string(self.device);
+            c_ptr_to_string(ptr)
+        }
+    }
+
+    pub fn kind(&self) -> String {
+        unsafe {
+            let ptr = c_lib::pjrt_device_kind(self.device);
+            c_ptr_to_string(ptr)
+        }
+    }
+
+    pub fn debug_string(&self) -> String {
+        unsafe {
+            let ptr = c_lib::pjrt_device_debug_string(self.device);
+            c_ptr_to_string(ptr)
         }
     }
 }
