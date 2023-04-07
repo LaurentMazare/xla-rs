@@ -8,6 +8,13 @@
   if (!statusor.ok()) return new Status(statusor.status()); \
   auto lhs = std::move(statusor.value());
 
+#define MAYBE_RETURN_STATUS(rexpr) \
+  MAYBE_RETURN_STATUS_IMPL(TF_STATUS_MACROS_CONCAT_NAME(_status, __COUNTER__), rexpr)
+
+#define MAYBE_RETURN_STATUS_IMPL(statusor, rexpr) \
+  auto statusor = (rexpr); \
+  if (!statusor.ok()) return new Status(statusor);
+
 status pjrt_client_create(pjrt_client *output) {
   ASSIGN_OR_RETURN_STATUS(client, xla::GetTfrtCpuClient(false));
   *output = client.release();
@@ -97,6 +104,11 @@ shape pjrt_buffer_on_device_shape(pjrt_buffer b) {
 status pjrt_buffer_copy_to_device(pjrt_buffer b, pjrt_device device, pjrt_buffer* output) {
   ASSIGN_OR_RETURN_STATUS(copied_b, b->CopyToDevice(device));
   *output = copied_b.release();
+  return nullptr;
+}
+
+status pjrt_buffer_copy_raw_to_host_sync(pjrt_buffer b, void* dst, int64_t offset, int64_t transfer_size) {
+  MAYBE_RETURN_STATUS(b->CopyRawToHost(dst, offset, transfer_size).Await());
   return nullptr;
 }
 
