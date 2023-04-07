@@ -43,9 +43,24 @@ pub trait ElementType {
     const PRIMITIVE_TYPE: PrimitiveType;
 }
 
-impl ElementType for f32 {
-    const PRIMITIVE_TYPE: PrimitiveType = PrimitiveType::F32;
+macro_rules! element_type {
+    ($ty:ty, $v:ident) => {
+        impl ElementType for $ty {
+            const PRIMITIVE_TYPE: PrimitiveType = PrimitiveType::$v;
+        }
+    };
 }
+
+element_type!(u8, U8);
+element_type!(u16, U16);
+element_type!(u32, U32);
+element_type!(u64, U64);
+element_type!(i8, S8);
+element_type!(i16, S16);
+element_type!(i32, S32);
+element_type!(i64, S64);
+element_type!(f32, F32);
+element_type!(f64, F64);
 
 impl Shape {
     pub fn new<E: ElementType>(dimensions: Vec<i64>) -> Shape {
@@ -145,6 +160,47 @@ impl PjRtClient {
         unsafe { c_lib::pjrt_client_addressable_devices(self.0, device_ptrs.as_mut_ptr()) };
         device_ptrs.into_iter().map(|device| PjRtDevice { device, marker: PhantomData }).collect()
     }
+
+    pub fn buffer_from_host_buffer<T: ElementType>(
+        &self,
+        data: &[T],
+        dims: &[usize],
+        device: Option<&PjRtDevice>,
+    ) -> Result<PjRtBuffer> {
+        let mut result: c_lib::pjrt_buffer = std::ptr::null_mut();
+        let element_count: usize = dims.iter().product();
+        if element_count != dims.len() {
+            anyhow::bail!("size mismatch {dims:?} {element_count}")
+        }
+        let device = device.map_or(std::ptr::null_mut(), |d| d.device);
+        let dims: Vec<_> = dims.iter().map(|d| *d as i64).collect();
+        let status = unsafe {
+            c_lib::pjrt_buffer_from_host_buffer(
+                self.0,
+                device,
+                data.as_ptr() as *const libc::c_void,
+                T::PRIMITIVE_TYPE as i32,
+                dims.len() as i32,
+                dims.as_ptr(),
+                &mut result,
+            )
+        };
+        handle_status(status)?;
+        Ok(PjRtBuffer(result))
+    }
+
+    pub fn buffer_from_host_literal(
+        &self,
+        device: Option<&PjRtDevice>,
+        literal: &Literal,
+    ) -> Result<PjRtBuffer> {
+        let mut result: c_lib::pjrt_buffer = std::ptr::null_mut();
+        let device = device.map_or(std::ptr::null_mut(), |d| d.device);
+        let status =
+            unsafe { c_lib::pjrt_buffer_from_host_literal(self.0, device, literal.0, &mut result) };
+        handle_status(status)?;
+        Ok(PjRtBuffer(result))
+    }
 }
 
 impl<'a> PjRtDevice<'a> {
@@ -242,6 +298,15 @@ impl PjRtLoadedExecutable {
         };
         handle_status(status)?;
         Ok(Self::process_execute_outputs(outputs))
+    }
+}
+
+impl XlaComputation {
+    pub fn name(&self) -> String {
+        unsafe {
+            let ptr = c_lib::xla_computation_name(self.0);
+            c_ptr_to_string(ptr)
+        }
     }
 }
 

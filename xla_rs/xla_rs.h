@@ -54,6 +54,8 @@ char* pjrt_device_kind(pjrt_device);
 char* pjrt_device_debug_string(pjrt_device);
 char* pjrt_device_to_string(pjrt_device);
 
+status pjrt_buffer_from_host_literal(const pjrt_client, const pjrt_device, const literal, pjrt_buffer*);
+status pjrt_buffer_from_host_buffer(const pjrt_client, const pjrt_device, const void *, int, int, const int64_t*, pjrt_buffer *);
 status pjrt_buffer_to_literal_sync(pjrt_buffer, literal *);
 shape pjrt_buffer_on_device_shape(pjrt_buffer);
 status pjrt_buffer_copy_to_device(pjrt_buffer, pjrt_device, pjrt_buffer *);
@@ -124,6 +126,7 @@ float literal_get_first_element_f32(const literal);
 int64_t literal_element_count(const literal);
 void literal_shape(const literal, shape*);
 void literal_free(literal);
+char *xla_computation_name(xla_computation);
 void xla_computation_free(xla_computation);
 
 void status_free(status);

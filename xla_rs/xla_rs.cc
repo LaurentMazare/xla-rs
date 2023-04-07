@@ -54,6 +54,35 @@ void pjrt_loaded_executable_free(pjrt_loaded_executable b) {
   delete b;
 }
 
+status pjrt_buffer_from_host_buffer(
+    const pjrt_client client,
+    const pjrt_device device,
+    const void *d,
+    int pr_type,
+    int dsize,
+    const int64_t *ds, 
+    pjrt_buffer *output) {
+  PjRtDevice *device_ = device == nullptr ? client->devices()[0] : device;
+  ASSIGN_OR_RETURN_STATUS(buffer, client->BufferFromHostBuffer(
+        d,
+        (PrimitiveType)pr_type,
+        absl::Span<const int64_t>(ds, dsize),
+        {},
+        PjRtClient::HostBufferSemantics::kImmutableOnlyDuringCall,
+        [] () {},
+        device_
+  ));
+  *output = buffer.release();
+  return nullptr;
+}
+
+status pjrt_buffer_from_host_literal(const pjrt_client client, const pjrt_device device, const literal l, pjrt_buffer *output) {
+  PjRtDevice *d = device == nullptr ? client->devices()[0] : device;
+  ASSIGN_OR_RETURN_STATUS(buffer, client->BufferFromHostLiteral(*l, d));
+  *output = buffer.release();
+  return nullptr;
+}
+
 status pjrt_buffer_to_literal_sync(pjrt_buffer b, literal *output) {
   ASSIGN_OR_RETURN_STATUS(literal, b->ToLiteralSync());
   *output = new Literal();
@@ -385,6 +414,10 @@ void literal_free(literal l) {
 
 void status_free(status s) {
   delete s;
+}
+
+char *xla_computation_name(xla_computation c) {
+  return strdup(std::string(c->name()).c_str());
 }
 
 void xla_computation_free(xla_computation c) {
