@@ -1,8 +1,9 @@
-use anyhow::{anyhow, Result};
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
 use std::marker::PhantomData;
 mod c_lib;
+mod error;
+pub use error::{Error, Result};
 
 unsafe fn c_ptr_to_string(ptr: *const std::ffi::c_char) -> String {
     let str = std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned();
@@ -106,7 +107,7 @@ fn handle_status(status: c_lib::status) -> Result<()> {
             c_lib::status_free(status);
             error_message
         };
-        Err(anyhow!(error_message))
+        Err(Error::XlaError(error_message))
     }
 }
 
@@ -170,7 +171,7 @@ impl PjRtClient {
         let mut result: c_lib::pjrt_buffer = std::ptr::null_mut();
         let element_count: usize = dims.iter().product();
         if element_count != dims.len() {
-            anyhow::bail!("size mismatch {dims:?} {element_count}")
+            Err(Error::WrongElementCount { dims: dims.to_vec(), element_count })?
         }
         let device = device.map_or(std::ptr::null_mut(), |d| d.device);
         let dims: Vec<_> = dims.iter().map(|d| *d as i64).collect();
@@ -355,10 +356,10 @@ impl XlaBuilder {
         let rank = unsafe { c_lib::shape_dimensions_size(out) };
         let dimensions: Vec<_> =
             (0..rank).map(|i| unsafe { c_lib::shape_dimensions(out, i) }).collect();
-        let element_type = FromPrimitive::from_i32(unsafe { c_lib::shape_element_type(out) });
+        let element_type = unsafe { c_lib::shape_element_type(out) };
         unsafe { c_lib::shape_free(out) };
-        match element_type {
-            None => Err(anyhow!("unexpected element type")),
+        match FromPrimitive::from_i32(element_type) {
+            None => Err(Error::UnexpectedElementType(element_type)),
             Some(element_type) => Ok(Shape { element_type, dimensions }),
         }
     }
@@ -436,10 +437,10 @@ impl Literal {
         let rank = unsafe { c_lib::shape_dimensions_size(out) };
         let dimensions: Vec<_> =
             (0..rank).map(|i| unsafe { c_lib::shape_dimensions(out, i) }).collect();
-        let element_type = FromPrimitive::from_i32(unsafe { c_lib::shape_element_type(out) });
+        let element_type = unsafe { c_lib::shape_element_type(out) };
         unsafe { c_lib::shape_free(out) };
-        match element_type {
-            None => Err(anyhow!("unexpected element type")),
+        match FromPrimitive::from_i32(element_type) {
+            None => Err(Error::UnexpectedElementType(element_type)),
             Some(element_type) => Ok(Shape { element_type, dimensions }),
         }
     }
