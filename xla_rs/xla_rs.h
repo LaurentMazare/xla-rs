@@ -115,7 +115,8 @@ status get_shape(const xla_builder, const xla_op, shape*);
 
 status build(const xla_builder, const xla_op, xla_computation*);
 status compile(const pjrt_client, const xla_computation, pjrt_loaded_executable*);
-status execute(const pjrt_loaded_executable, const literal *, int, pjrt_buffer ***);
+status execute(const pjrt_loaded_executable, const pjrt_buffer *, int, pjrt_buffer ***);
+status execute_literal(const pjrt_loaded_executable, const literal *, int, pjrt_buffer ***);
 
 literal create_r0_f32(float);
 literal create_r1_f32(const float*, int);

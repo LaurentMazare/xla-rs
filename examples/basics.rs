@@ -20,17 +20,17 @@ fn main() -> Result<()> {
     println!("Shape: {:?}", xla_builder.get_shape(&sum));
     let computation = xla_builder.build(&sum)?;
     let result = client.compile(&computation)?;
-    let result = result.execute(&[])?[0][0].to_literal_sync()?;
+    let result = result.execute_literal::<xla::Literal>(&[])?[0][0].to_literal_sync()?;
     println!("Result: {:?} {:?}", result.shape(), result.get_first_element_f32());
     let param = xla_builder.parameter(0, &xla::Shape::new::<f32>(vec![]), "p");
     let sum = param.add(&param);
     let sum = sum.sqrt();
     let computation = xla_builder.build(&sum)?;
     let result = client.compile(&computation)?;
-    let result = result.execute(&[xla::Literal::from(12.0)])?[0][0].to_literal_sync()?;
+    let result = result.execute_literal(&[xla::Literal::from(12.0)])?[0][0].to_literal_sync()?;
     println!("Result: {:?} {:?}", result.shape(), result.get_first_element_f32());
     let result = client.compile(&computation)?;
-    let result = result.execute(&[xla::Literal::from(13.0)])?[0][0].to_literal_sync()?;
+    let result = result.execute_literal(&[xla::Literal::from(13.0)])?[0][0].to_literal_sync()?;
     println!("Result: {:?} {:?}", result.shape(), result.get_first_element_f32());
     Ok(())
 }

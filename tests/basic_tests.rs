@@ -7,7 +7,7 @@ fn assign_ops() {
     let sum = cst42.add(&cst43);
     let computation = xla_builder.build(&sum).unwrap();
     let result = client.compile(&computation).unwrap();
-    let result = result.execute(&[]).unwrap();
+    let result = result.execute::<xla::PjRtBuffer>(&[]).unwrap();
     let result = result[0][0].to_literal_sync().unwrap();
     assert_eq!(result.element_count(), 2);
     assert_eq!(result.shape().unwrap(), xla::Shape::new::<f32>(vec![2]));
