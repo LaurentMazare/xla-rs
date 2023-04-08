@@ -463,9 +463,68 @@ impl XlaOp<'_> {
     unary_op!(neg, c_lib::op_neg);
     unary_op!(copy, c_lib::op_copy);
 
-    pub fn reshape(&self, shape: &[usize]) -> Self {
-        let shape: Vec<_> = shape.iter().map(|d| *d as i64).collect();
-        let op = unsafe { c_lib::op_reshape(self.op, shape.len(), shape.as_ptr()) };
+    pub fn reshape(&self, dims: &[usize]) -> Self {
+        let dims: Vec<_> = dims.iter().map(|d| *d as i64).collect();
+        let op = unsafe { c_lib::op_reshape(self.op, dims.len(), dims.as_ptr()) };
+        XlaOp { op, marker: PhantomData }
+    }
+
+    pub fn broadcast(&self, dims: &[usize]) -> Self {
+        let dims: Vec<_> = dims.iter().map(|d| *d as i64).collect();
+        let op = unsafe { c_lib::op_broadcast(self.op, dims.len(), dims.as_ptr()) };
+        XlaOp { op, marker: PhantomData }
+    }
+
+    pub fn collapse(&self, dims: &[usize]) -> Self {
+        let dims: Vec<_> = dims.iter().map(|d| *d as i64).collect();
+        let op = unsafe { c_lib::op_collapse(self.op, dims.len(), dims.as_ptr()) };
+        XlaOp { op, marker: PhantomData }
+    }
+
+    pub fn slice_in_dim(&self, start_index: i64, stop_index: i64, stride: i64, dim: i64) -> Self {
+        let op = unsafe { c_lib::op_slice_in_dim(self.op, start_index, stop_index, stride, dim) };
+        XlaOp { op, marker: PhantomData }
+    }
+
+    pub fn concat_in_dim(&self, args: &[&Self], dim: i64) -> Self {
+        let args: Vec<_> = args.iter().map(|a| a.op).collect();
+        let op = unsafe { c_lib::op_concat_in_dim(self.op, args.as_ptr(), args.len(), dim) };
+        XlaOp { op, marker: PhantomData }
+    }
+
+    pub fn clamp(&self, min: &Self, max: &Self) -> Self {
+        let op = unsafe { c_lib::op_clamp(min.op, self.op, max.op) };
+        XlaOp { op, marker: PhantomData }
+    }
+
+    pub fn select(&self, on_true: &Self, on_false: &Self) -> Self {
+        let op = unsafe { c_lib::op_select(self.op, on_true.op, on_false.op) };
+        XlaOp { op, marker: PhantomData }
+    }
+
+    pub fn rng_uniform(min: &Self, max: &Self, shape: &Shape) -> Self {
+        let op = unsafe {
+            c_lib::op_rng_uniform(
+                min.op,
+                max.op,
+                shape.element_type as i32,
+                shape.dimensions.len() as i32,
+                shape.dimensions.as_ptr(),
+            )
+        };
+        XlaOp { op, marker: PhantomData }
+    }
+
+    pub fn rng_normal(mu: &Self, sigma: &Self, shape: &Shape) -> Self {
+        let op = unsafe {
+            c_lib::op_rng_normal(
+                mu.op,
+                sigma.op,
+                shape.element_type as i32,
+                shape.dimensions.len() as i32,
+                shape.dimensions.as_ptr(),
+            )
+        };
         XlaOp { op, marker: PhantomData }
     }
 }

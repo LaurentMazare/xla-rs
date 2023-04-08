@@ -308,6 +308,50 @@ xla_op op_reshape(const xla_op arg, size_t dsize, const int64_t *ds) {
   return new XlaOp(Reshape(*arg, absl::Span<const int64_t>(ds, dsize)));
 }
 
+xla_op op_broadcast(const xla_op arg, size_t dsize, const int64_t *ds) {
+  return new XlaOp(Broadcast(*arg, absl::Span<const int64_t>(ds, dsize)));
+}
+
+xla_op op_collapse(const xla_op arg, size_t dsize, const int64_t *ds) {
+  return new XlaOp(Collapse(*arg, absl::Span<const int64_t>(ds, dsize)));
+}
+
+xla_op op_clamp(const xla_op arg1, const xla_op arg2, const xla_op arg3) {
+  return new XlaOp(Clamp(*arg1, *arg2, *arg3));
+}
+
+xla_op op_select(const xla_op arg1, const xla_op arg2, const xla_op arg3) {
+  return new XlaOp(Select(*arg1, *arg2, *arg3));
+}
+
+xla_op op_rng_uniform(const xla_op arg1, const xla_op arg2, int pr_type, int dsize, const int64_t *ds) {
+  auto shape = ShapeUtil::MakeShape(
+      (PrimitiveType)pr_type,
+      absl::Span<const long int>(ds, dsize)
+  );
+  return new XlaOp(RngUniform(*arg1, *arg2, shape));
+}
+
+xla_op op_rng_normal(const xla_op arg1, const xla_op arg2, int pr_type, int dsize, const int64_t *ds) {
+  auto shape = ShapeUtil::MakeShape(
+      (PrimitiveType)pr_type,
+      absl::Span<const long int>(ds, dsize)
+  );
+  return new XlaOp(RngNormal(*arg1, *arg2, shape));
+}
+
+xla_op op_slice_in_dim(const xla_op arg, int64_t start, int64_t stop, int64_t stride, int64_t dim) {
+  return new XlaOp(SliceInDim(*arg, start, stop, stride, dim));
+}
+
+xla_op op_concat_in_dim(const xla_op arg, const xla_op *args, size_t nargs, int64_t dim) {
+  std::vector<XlaOp> args_ = { *arg };
+  for (size_t i = 0; i < nargs; ++i) {
+    args_.push_back(*args[i]);
+  }
+  return new XlaOp(ConcatInDim(arg->builder(), absl::Span<const XlaOp>(args_), dim));
+}
+
 int xla_op_valid(const xla_op op) {
   return op->valid();
 }

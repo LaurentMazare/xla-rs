@@ -108,6 +108,14 @@ xla_op op_is_finite(const xla_op);
 xla_op op_neg(const xla_op);
 xla_op op_copy(const xla_op);
 xla_op op_reshape(const xla_op, size_t, const int64_t*);
+xla_op op_broadcast(const xla_op, size_t, const int64_t*);
+xla_op op_collapse(const xla_op, size_t, const int64_t*);
+xla_op op_clamp(const xla_op, const xla_op, const xla_op);
+xla_op op_select(const xla_op, const xla_op, const xla_op);
+xla_op op_rng_uniform(const xla_op, const xla_op, int, int, const int64_t*);
+xla_op op_rng_normal(const xla_op, const xla_op, int, int, const int64_t*);
+xla_op op_slice_in_dim(const xla_op, int64_t, int64_t, int64_t, int64_t);
+xla_op op_concat_in_dim(const xla_op, const xla_op *, size_t, int64_t);
 
 int xla_op_valid(const xla_op);
 void xla_op_free(xla_op);
