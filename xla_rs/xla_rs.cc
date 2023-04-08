@@ -320,6 +320,10 @@ xla_op op_collapse(const xla_op arg, size_t dsize, const int64_t *ds) {
   return new XlaOp(Collapse(*arg, absl::Span<const int64_t>(ds, dsize)));
 }
 
+xla_op op_transpose(const xla_op arg, size_t dsize, const int64_t *ds) {
+  return new XlaOp(Transpose(*arg, absl::Span<const int64_t>(ds, dsize)));
+}
+
 xla_op op_clamp(const xla_op arg1, const xla_op arg2, const xla_op arg3) {
   return new XlaOp(Clamp(*arg1, *arg2, *arg3));
 }

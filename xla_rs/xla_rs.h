@@ -111,6 +111,7 @@ xla_op op_copy(const xla_op);
 xla_op op_reshape(const xla_op, size_t, const int64_t*);
 xla_op op_broadcast(const xla_op, size_t, const int64_t*);
 xla_op op_collapse(const xla_op, size_t, const int64_t*);
+xla_op op_transpose(const xla_op, size_t, const int64_t*);
 xla_op op_clamp(const xla_op, const xla_op, const xla_op);
 xla_op op_select(const xla_op, const xla_op, const xla_op);
 xla_op op_rng_uniform(const xla_op, const xla_op, int, int, const int64_t*);

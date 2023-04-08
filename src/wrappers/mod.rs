@@ -468,21 +468,23 @@ impl XlaOp<'_> {
     unary_op!(neg, c_lib::op_neg);
     unary_op!(copy, c_lib::op_copy);
 
-    pub fn reshape(&self, dims: &[usize]) -> Self {
-        let dims: Vec<_> = dims.iter().map(|d| *d as i64).collect();
+    pub fn reshape(&self, dims: &[i64]) -> Self {
         let op = unsafe { c_lib::op_reshape(self.op, dims.len(), dims.as_ptr()) };
         XlaOp { op, marker: PhantomData }
     }
 
-    pub fn broadcast(&self, dims: &[usize]) -> Self {
-        let dims: Vec<_> = dims.iter().map(|d| *d as i64).collect();
+    pub fn broadcast(&self, dims: &[i64]) -> Self {
         let op = unsafe { c_lib::op_broadcast(self.op, dims.len(), dims.as_ptr()) };
         XlaOp { op, marker: PhantomData }
     }
 
-    pub fn collapse(&self, dims: &[usize]) -> Self {
-        let dims: Vec<_> = dims.iter().map(|d| *d as i64).collect();
+    pub fn collapse(&self, dims: &[i64]) -> Self {
         let op = unsafe { c_lib::op_collapse(self.op, dims.len(), dims.as_ptr()) };
+        XlaOp { op, marker: PhantomData }
+    }
+
+    pub fn transpose(&self, index_perm: &[i64]) -> Self {
+        let op = unsafe { c_lib::op_collapse(self.op, index_perm.len(), index_perm.as_ptr()) };
         XlaOp { op, marker: PhantomData }
     }
 
