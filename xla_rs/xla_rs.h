@@ -106,6 +106,7 @@ xla_op op_rsqrt(const xla_op);
 xla_op op_cbrt(const xla_op);
 xla_op op_is_finite(const xla_op);
 xla_op op_neg(const xla_op);
+xla_op op_reshape(const xla_op, size_t, const int64_t*);
 
 int xla_op_valid(const xla_op);
 void xla_op_free(xla_op);

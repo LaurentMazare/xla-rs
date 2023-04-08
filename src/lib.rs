@@ -462,6 +462,12 @@ impl XlaOp<'_> {
     unary_op!(cbrt, c_lib::op_cbrt);
     unary_op!(is_finite, c_lib::op_is_finite);
     unary_op!(neg, c_lib::op_neg);
+
+    pub fn reshape(&self, shape: &[usize]) -> Self {
+        let shape: Vec<_> = shape.iter().map(|d| *d as i64).collect();
+        let op = unsafe { c_lib::op_reshape(self.op, shape.len(), shape.as_ptr()) };
+        XlaOp { op, marker: PhantomData }
+    }
 }
 
 impl Literal {
