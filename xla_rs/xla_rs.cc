@@ -300,6 +300,10 @@ xla_op op_neg(const xla_op arg) {
   return new XlaOp(Neg(*arg));
 }
 
+xla_op op_copy(const xla_op arg) {
+  return new XlaOp(Copy(*arg));
+}
+
 xla_op op_reshape(const xla_op arg, size_t dsize, const int64_t *ds) {
   return new XlaOp(Reshape(*arg, absl::Span<const int64_t>(ds, dsize)));
 }
