@@ -360,6 +360,10 @@ xla_op op_concat_in_dim(const xla_op arg, const xla_op *args, size_t nargs, int6
   return new XlaOp(ConcatInDim(arg->builder(), absl::Span<const XlaOp>(args_), dim));
 }
 
+xla_op op_convert_element_type(const xla_op arg, int pr_type) {
+  return new XlaOp(ConvertElementType(*arg, (PrimitiveType)pr_type));
+}
+
 int xla_op_valid(const xla_op op) {
   return op->valid();
 }

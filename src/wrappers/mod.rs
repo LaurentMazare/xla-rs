@@ -534,6 +534,11 @@ impl XlaOp<'_> {
         };
         XlaOp { op, marker: PhantomData }
     }
+
+    pub fn convert_element_type(&self, element_type: PrimitiveType) -> Self {
+        let op = unsafe { c_lib::op_convert_element_type(self.op, element_type as i32) };
+        XlaOp { op, marker: PhantomData }
+    }
 }
 
 impl Literal {
