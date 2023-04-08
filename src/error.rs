@@ -19,6 +19,9 @@ pub enum Error {
         "target buffer is too large, offset {offset}, shape {shape:?}, buffer_len: {buffer_len}"
     )]
     TargetBufferIsTooLarge { offset: usize, shape: crate::Shape, buffer_len: usize },
+
+    #[error("binary buffer is too large, element count {element_count}, buffer_len: {buffer_len}")]
+    BinaryBufferIsTooLarge { element_count: usize, buffer_len: usize },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

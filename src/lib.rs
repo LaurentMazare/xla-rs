@@ -40,9 +40,10 @@ pub struct Shape {
     dimensions: Vec<i64>,
 }
 
-pub trait ElementType {
+pub trait ElementType: Copy {
     const PRIMITIVE_TYPE: PrimitiveType;
     const ELEMENT_SIZE_IN_BYTES: usize;
+    const ZERO: Self;
 }
 
 macro_rules! element_type {
@@ -50,6 +51,7 @@ macro_rules! element_type {
         impl ElementType for $ty {
             const PRIMITIVE_TYPE: PrimitiveType = PrimitiveType::$v;
             const ELEMENT_SIZE_IN_BYTES: usize = $sz;
+            const ZERO: Self = 0 as Self;
         }
     };
 }
@@ -477,6 +479,18 @@ impl Literal {
         unsafe { c_lib::literal_element_count(self.0) as usize }
     }
 
+    pub fn element_type(&self) -> Result<PrimitiveType> {
+        let element_type = unsafe { c_lib::literal_element_type(self.0) };
+        match FromPrimitive::from_i32(element_type) {
+            None => Err(Error::UnexpectedElementType(element_type)),
+            Some(element_type) => Ok(element_type),
+        }
+    }
+
+    pub fn size_bytes(&self) -> usize {
+        unsafe { c_lib::literal_size_bytes(self.0) as usize }
+    }
+
     pub fn shape(&self) -> Result<Shape> {
         let mut out: c_lib::shape = std::ptr::null_mut();
         unsafe { c_lib::literal_shape(self.0, &mut out) };
@@ -489,6 +503,33 @@ impl Literal {
             None => Err(Error::UnexpectedElementType(element_type)),
             Some(element_type) => Ok(Shape { element_type, dimensions }),
         }
+    }
+
+    pub fn copy_raw<T: ElementType>(&self, dst: &mut [T]) -> Result<()> {
+        let element_type = self.element_type()?;
+        let element_count = self.element_count();
+        if element_type != T::PRIMITIVE_TYPE {
+            Err(Error::ElementTypeMismatch { on_device: element_type, on_host: T::PRIMITIVE_TYPE })?
+        }
+        if dst.len() > element_count {
+            Err(Error::BinaryBufferIsTooLarge { element_count, buffer_len: dst.len() })?
+        }
+        unsafe {
+            c_lib::literal_copy(
+                self.0,
+                dst.as_mut_ptr() as *mut libc::c_void,
+                element_count * T::ELEMENT_SIZE_IN_BYTES,
+            )
+        };
+        Ok(())
+    }
+
+    pub fn to_vec<T: ElementType>(&self) -> Result<Vec<T>> {
+        let element_count = self.element_count();
+        // Maybe we should use an uninitialized vec instead?
+        let mut data = vec![T::ZERO; element_count];
+        self.copy_raw(&mut data)?;
+        Ok(data)
     }
 }
 

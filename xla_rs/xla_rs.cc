@@ -416,8 +416,20 @@ int64_t literal_element_count(const literal l) {
   return l->element_count();
 }
 
+int64_t literal_size_bytes(const literal l) {
+  return l->size_bytes();
+}
+
 void literal_shape(const literal l, shape *out_shape) {
   *out_shape = new Shape(l->shape());
+}
+
+int literal_element_type(const literal l) {
+  return l->shape().element_type();
+}
+
+void literal_copy(const literal l, void* dst, size_t size_in_bytes) {
+  std::memcpy(dst, l->untyped_data(), size_in_bytes);
 }
 
 void literal_free(literal l) {
