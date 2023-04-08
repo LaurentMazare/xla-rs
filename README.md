@@ -12,3 +12,6 @@ For a linux platform, this can be done via:
 wget https://github.com/elixir-nx/xla/releases/download/v0.4.4/xla_extension-x86_64-linux-gnu-cpu.tar.gz
 tar -xzvf xla_extension-x86_64-linux-gnu-cpu.tar.gz
 ```
+
+If the `xla_extension` directory is not in the main project directory, the path
+can be specified via the `XLA_EXTENSION_DIR` environment variable.

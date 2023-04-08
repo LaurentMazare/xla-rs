@@ -33,8 +33,14 @@ fn make_shared_lib<P: AsRef<Path>>(xla_dir: P) {
     };
 }
 
+fn env_var_rerun(name: &str) -> Option<String> {
+    println!("cargo:rerun-if-env-changed={name}");
+    env::var(name).ok()
+}
+
 fn main() {
-    let xla_dir = env::current_dir().unwrap().join("xla_extension");
+    let xla_dir = env_var_rerun("XLA_EXTENSION_DIR")
+        .map_or_else(|| env::current_dir().unwrap().join("xla_extension"), |v| PathBuf::from(v));
     make_shared_lib(&xla_dir);
 
     println!("cargo:rerun-if-changed=xla_rs/xla_rs.h");
