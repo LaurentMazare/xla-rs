@@ -20,7 +20,7 @@ fn main() -> Result<()> {
     println!("Shape: {:?}", xla_builder.get_shape(&sum));
     let computation = xla_builder.build(&sum)?;
     let result = client.compile(&computation)?;
-    let result = &result.execute_literal::<xla::Literal>(&[])?[0][0].to_literal_sync()?;
+    let result = &result.execute::<xla::PjRtBuffer>(&[])?[0][0].to_literal_sync()?;
     let shape = result.shape()?;
     println!("Result: {:?} {:?} {}", shape, result.to_vec::<f32>(), result.get_first_element_f32());
     let param = xla_builder.parameter(0, &xla::Shape::new::<f32>(vec![]), "p");

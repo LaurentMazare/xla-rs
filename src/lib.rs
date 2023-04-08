@@ -93,18 +93,6 @@ pub struct XlaOp<'a> {
 }
 pub struct Literal(c_lib::literal);
 
-impl AsRef<Literal> for Literal {
-    fn as_ref(&self) -> &Literal {
-        self
-    }
-}
-
-impl AsRef<PjRtBuffer> for PjRtBuffer {
-    fn as_ref(&self) -> &PjRtBuffer {
-        self
-    }
-}
-
 fn handle_status(status: c_lib::status) -> Result<()> {
     if status.is_null() {
         Ok(())
@@ -330,18 +318,24 @@ impl PjRtLoadedExecutable {
         }
     }
 
-    pub fn execute<P: AsRef<PjRtBuffer>>(&self, args: &[P]) -> Result<Vec<Vec<PjRtBuffer>>> {
+    pub fn execute<P: std::borrow::Borrow<PjRtBuffer>>(
+        &self,
+        args: &[P],
+    ) -> Result<Vec<Vec<PjRtBuffer>>> {
         let mut outputs = std::ptr::null_mut();
-        let args: Vec<_> = args.iter().map(|x| x.as_ref().0).collect();
+        let args: Vec<_> = args.iter().map(|x| x.borrow().0).collect();
         let status =
             unsafe { c_lib::execute(self.0, args.as_ptr(), args.len() as i32, &mut outputs) };
         handle_status(status)?;
         Ok(Self::process_execute_outputs(outputs))
     }
 
-    pub fn execute_literal<L: AsRef<Literal>>(&self, args: &[L]) -> Result<Vec<Vec<PjRtBuffer>>> {
+    pub fn execute_literal<L: std::borrow::Borrow<Literal>>(
+        &self,
+        args: &[L],
+    ) -> Result<Vec<Vec<PjRtBuffer>>> {
         let mut outputs = std::ptr::null_mut();
-        let args: Vec<_> = args.iter().map(|x| x.as_ref().0).collect();
+        let args: Vec<_> = args.iter().map(|x| x.borrow().0).collect();
         let status = unsafe {
             c_lib::execute_literal(self.0, args.as_ptr(), args.len() as i32, &mut outputs)
         };
