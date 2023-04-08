@@ -40,7 +40,7 @@ fn env_var_rerun(name: &str) -> Option<String> {
 
 fn main() {
     let xla_dir = env_var_rerun("XLA_EXTENSION_DIR")
-        .map_or_else(|| env::current_dir().unwrap().join("xla_extension"), |v| PathBuf::from(v));
+        .map_or_else(|| env::current_dir().unwrap().join("xla_extension"), PathBuf::from);
     make_shared_lib(&xla_dir);
 
     println!("cargo:rerun-if-changed=xla_rs/xla_rs.h");
