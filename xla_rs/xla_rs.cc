@@ -148,6 +148,10 @@ void xla_builder_free(xla_builder b) {
   delete b;
 }
 
+xla_op constant_literal(const xla_builder b, const literal l) {
+  return new XlaOp(ConstantLiteral(b, *l));
+}
+
 xla_op constant_r0_float(const xla_builder b, float f) {
   return new XlaOp(ConstantR0<float>(b, f));
 }

@@ -66,6 +66,7 @@ void pjrt_buffer_free(pjrt_buffer);
 xla_builder xla_builder_create(const char *name);
 void xla_builder_free(xla_builder);
 
+xla_op constant_literal(const xla_builder, const literal);
 xla_op constant_r0_float(const xla_builder, float);
 xla_op constant_r1_float(const xla_builder, int64_t, float);
 xla_op parameter(const xla_builder, int64_t, int, int, const long int *, const char *);

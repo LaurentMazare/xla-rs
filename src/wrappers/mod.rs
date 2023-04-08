@@ -366,6 +366,11 @@ impl XlaBuilder {
         Ok(XlaComputation(result))
     }
 
+    pub fn constant_literal(&self, literal: Literal) -> XlaOp {
+        let op = unsafe { c_lib::constant_literal(self.0, literal.0) };
+        XlaOp { op, marker: PhantomData }
+    }
+
     pub fn constant_r0(&self, f: f32) -> XlaOp {
         let op = unsafe { c_lib::constant_r0_float(self.0, f) };
         XlaOp { op, marker: PhantomData }
