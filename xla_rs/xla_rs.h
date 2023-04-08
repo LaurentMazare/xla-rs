@@ -1,4 +1,5 @@
 #include<stdint.h>
+#include<stddef.h>
 #ifdef __cplusplus
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wuninitialized"
@@ -57,7 +58,7 @@ char* pjrt_device_to_string(pjrt_device);
 status pjrt_buffer_from_host_literal(const pjrt_client, const pjrt_device, const literal, pjrt_buffer*);
 status pjrt_buffer_from_host_buffer(const pjrt_client, const pjrt_device, const void *, int, int, const int64_t*, pjrt_buffer *);
 status pjrt_buffer_to_literal_sync(pjrt_buffer, literal *);
-status pjrt_buffer_copy_raw_to_host_sync(pjrt_buffer, void*, int64_t, int64_t);
+status pjrt_buffer_copy_raw_to_host_sync(pjrt_buffer, void*, size_t, size_t);
 shape pjrt_buffer_on_device_shape(pjrt_buffer);
 status pjrt_buffer_copy_to_device(pjrt_buffer, pjrt_device, pjrt_buffer *);
 void pjrt_buffer_free(pjrt_buffer);

@@ -42,30 +42,36 @@ pub struct Shape {
 
 pub trait ElementType {
     const PRIMITIVE_TYPE: PrimitiveType;
+    const ELEMENT_SIZE_IN_BYTES: usize;
 }
 
 macro_rules! element_type {
-    ($ty:ty, $v:ident) => {
+    ($ty:ty, $v:ident, $sz:tt) => {
         impl ElementType for $ty {
             const PRIMITIVE_TYPE: PrimitiveType = PrimitiveType::$v;
+            const ELEMENT_SIZE_IN_BYTES: usize = $sz;
         }
     };
 }
 
-element_type!(u8, U8);
-element_type!(u16, U16);
-element_type!(u32, U32);
-element_type!(u64, U64);
-element_type!(i8, S8);
-element_type!(i16, S16);
-element_type!(i32, S32);
-element_type!(i64, S64);
-element_type!(f32, F32);
-element_type!(f64, F64);
+element_type!(u8, U8, 1);
+element_type!(u16, U16, 2);
+element_type!(u32, U32, 4);
+element_type!(u64, U64, 8);
+element_type!(i8, S8, 1);
+element_type!(i16, S16, 2);
+element_type!(i32, S32, 4);
+element_type!(i64, S64, 8);
+element_type!(f32, F32, 4);
+element_type!(f64, F64, 8);
 
 impl Shape {
     pub fn new<E: ElementType>(dimensions: Vec<i64>) -> Shape {
         Shape { element_type: E::PRIMITIVE_TYPE, dimensions }
+    }
+
+    pub fn size(&self) -> usize {
+        self.dimensions.iter().map(|d| *d as usize).product::<usize>()
     }
 }
 
@@ -254,6 +260,45 @@ impl PjRtBuffer {
         let status = unsafe { c_lib::pjrt_buffer_to_literal_sync(self.0, &mut result) };
         handle_status(status)?;
         Ok(Literal(result))
+    }
+
+    pub fn on_device_shape(&self) -> Result<Shape> {
+        let shape = unsafe { c_lib::pjrt_buffer_on_device_shape(self.0) };
+        let rank = unsafe { c_lib::shape_dimensions_size(shape) };
+        let dimensions: Vec<_> =
+            (0..rank).map(|i| unsafe { c_lib::shape_dimensions(shape, i) }).collect();
+        let element_type = unsafe { c_lib::shape_element_type(shape) };
+        unsafe { c_lib::shape_free(shape) };
+        match FromPrimitive::from_i32(element_type) {
+            None => Err(Error::UnexpectedElementType(element_type)),
+            Some(element_type) => Ok(Shape { element_type, dimensions }),
+        }
+    }
+
+    pub fn copy_raw_to_host_sync<T: ElementType>(
+        &self,
+        dst: &mut [T],
+        offset: usize,
+    ) -> Result<()> {
+        let shape = self.on_device_shape()?;
+        if shape.element_type != T::PRIMITIVE_TYPE {
+            Err(Error::ElementTypeMismatch {
+                on_device: shape.element_type,
+                on_host: T::PRIMITIVE_TYPE,
+            })?
+        }
+        if offset + dst.len() > shape.size() {
+            Err(Error::TargetBufferIsTooLarge { offset, shape, buffer_len: dst.len() })?
+        }
+        unsafe {
+            c_lib::pjrt_buffer_copy_raw_to_host_sync(
+                self.0,
+                dst.as_mut_ptr() as *mut libc::c_void,
+                offset,
+                dst.len() * T::ELEMENT_SIZE_IN_BYTES,
+            )
+        };
+        Ok(())
     }
 }
 

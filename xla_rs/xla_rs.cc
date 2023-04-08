@@ -107,7 +107,7 @@ status pjrt_buffer_copy_to_device(pjrt_buffer b, pjrt_device device, pjrt_buffer
   return nullptr;
 }
 
-status pjrt_buffer_copy_raw_to_host_sync(pjrt_buffer b, void* dst, int64_t offset, int64_t transfer_size) {
+status pjrt_buffer_copy_raw_to_host_sync(pjrt_buffer b, void* dst, size_t offset, size_t transfer_size) {
   MAYBE_RETURN_STATUS(b->CopyRawToHost(dst, offset, transfer_size).Await());
   return nullptr;
 }
