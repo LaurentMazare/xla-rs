@@ -290,7 +290,7 @@ impl PjRtBuffer {
         if offset + dst.len() > shape.size() {
             Err(Error::TargetBufferIsTooLarge { offset, shape, buffer_len: dst.len() })?
         }
-        unsafe {
+        let status = unsafe {
             c_lib::pjrt_buffer_copy_raw_to_host_sync(
                 self.0,
                 dst.as_mut_ptr() as *mut libc::c_void,
@@ -298,6 +298,7 @@ impl PjRtBuffer {
                 dst.len() * T::ELEMENT_SIZE_IN_BYTES,
             )
         };
+        handle_status(status)?;
         Ok(())
     }
 }
