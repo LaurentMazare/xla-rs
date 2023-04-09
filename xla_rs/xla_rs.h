@@ -67,8 +67,6 @@ xla_builder xla_builder_create(const char *name);
 void xla_builder_free(xla_builder);
 
 xla_op constant_literal(const xla_builder, const literal);
-xla_op constant_r0_float(const xla_builder, float);
-xla_op constant_r1_float(const xla_builder, int64_t, float);
 xla_op parameter(const xla_builder, int64_t, int, int, const long int *, const char *);
 
 // Ops
@@ -135,8 +133,6 @@ status compile(const pjrt_client, const xla_computation, pjrt_loaded_executable*
 status execute(const pjrt_loaded_executable, const pjrt_buffer *, int, pjrt_buffer ***);
 status execute_literal(const pjrt_loaded_executable, const literal *, int, pjrt_buffer ***);
 
-literal create_r0_f32(float);
-literal create_r1_f32(const float*, int);
 float literal_get_first_element_f32(const literal);
 int64_t literal_element_count(const literal);
 int literal_element_type(const literal);
@@ -149,6 +145,24 @@ void xla_computation_free(xla_computation);
 
 void status_free(status);
 char *status_error_message(status);
+
+#define FOR_EACH_NATIVE_TYPE(_) \
+  _(int32_t, S32) \
+  _(int64_t, S64) \
+  _(uint32_t, U32) \
+  _(uint64_t, U64) \
+  _(float, F32) \
+  _(double, F64)
+
+#define CONST_OP_R01(native_type, primitive_type) \
+  xla_op constant_r0_ ## native_type(const xla_builder, native_type); \
+  xla_op constant_r1c_ ## native_type(const xla_builder, native_type, size_t); \
+  xla_op constant_r1_ ## native_type(const xla_builder, const native_type*, size_t); \
+  literal create_r0_ ## native_type(native_type); \
+  literal create_r1_ ## native_type(const native_type*, size_t);
+
+FOR_EACH_NATIVE_TYPE(CONST_OP_R01)
+#undef CONST_OP_R01
 
 #ifdef __cplusplus
 }

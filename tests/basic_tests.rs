@@ -3,7 +3,7 @@ fn assign_ops() {
     let client = xla::PjRtClient::cpu().unwrap();
     let xla_builder = xla::XlaBuilder::new("test");
     let cst42 = xla::XlaBuilder::constant_r0(&xla_builder, 42.);
-    let cst43 = xla::XlaBuilder::constant_r1(&xla_builder, 2, 43.);
+    let cst43 = xla::XlaBuilder::constant_r1c(&xla_builder, 43., 2);
     let sum = cst42.add(&cst43);
     let computation = xla_builder.build(&sum).unwrap();
     let result = client.compile(&computation).unwrap();

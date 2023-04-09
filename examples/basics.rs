@@ -15,7 +15,7 @@ fn main() -> Result<()> {
     }
     let xla_builder = xla::XlaBuilder::new("test");
     let cst42 = xla::XlaBuilder::constant_r0(&xla_builder, 42.);
-    let cst43 = xla::XlaBuilder::constant_r1(&xla_builder, 2, 43.);
+    let cst43 = xla::XlaBuilder::constant_r1(&xla_builder, &[43., 44.]);
     let sum = cst42.add(&cst43);
     println!("Shape: {:?}", xla_builder.get_shape(&sum));
     let computation = xla_builder.build(&sum)?;

@@ -152,13 +152,25 @@ xla_op constant_literal(const xla_builder b, const literal l) {
   return new XlaOp(ConstantLiteral(b, *l));
 }
 
-xla_op constant_r0_float(const xla_builder b, float f) {
-  return new XlaOp(ConstantR0<float>(b, f));
-}
+#define CONST_OP_R01(native_type, primitive_type) \
+  xla_op constant_r0_ ## native_type(const xla_builder b, native_type f) { \
+    return new XlaOp(ConstantR0<native_type>(b, f)); \
+  } \
+  xla_op constant_r1c_ ## native_type(const xla_builder b, native_type f, size_t len) { \
+    return new XlaOp(ConstantR1<native_type>(b, len, f)); \
+  } \
+  xla_op constant_r1_ ## native_type(const xla_builder b, const native_type *f, size_t len) { \
+    return new XlaOp(ConstantR1<native_type>(b, absl::Span<const native_type>(f, len))); \
+  } \
+  literal create_r0_ ## native_type(native_type f) { \
+    return new Literal(LiteralUtil::CreateR0<native_type>(f)); \
+  } \
+  literal create_r1_ ## native_type(const native_type *f, size_t nel) { \
+    return new Literal(LiteralUtil::CreateR1<native_type>(absl::Span<const native_type>(f, nel))); \
+  }
 
-xla_op constant_r1_float(const xla_builder b, int64_t len, float f) {
-  return new XlaOp(ConstantR1<float>(b, len, f));
-}
+FOR_EACH_NATIVE_TYPE(CONST_OP_R01)
+#undef CONST_OP_R01
 
 xla_op parameter(const xla_builder b, int64_t id, int pr_type, int dsize, const long int *ds, const char *name) {
   return new XlaOp(Parameter(b, id, ShapeUtil::MakeShape((PrimitiveType)pr_type, absl::Span<const long int>(ds, dsize)), std::string(name)));
@@ -462,14 +474,6 @@ status execute_literal(const pjrt_loaded_executable exe, const literal *inputs, 
   out[results.size()] = nullptr;
   *outputs = out;
   return nullptr;
-}
-
-literal create_r0_f32(float f) {
-    return new Literal(LiteralUtil::CreateR0<float>(f));
-}
-
-literal create_r1_f32(const float *f, int nel) {
-    return new Literal(LiteralUtil::CreateR1<float>(absl::Span<const float>(f, nel)));
 }
 
 float literal_get_first_element_f32(const literal l) {

@@ -390,8 +390,13 @@ impl XlaBuilder {
         XlaOp { op, marker: PhantomData }
     }
 
-    pub fn constant_r1(&self, len: i64, f: f32) -> XlaOp {
-        let op = unsafe { c_lib::constant_r1_float(self.0, len, f) };
+    pub fn constant_r1c(&self, f: f32, len: usize) -> XlaOp {
+        let op = unsafe { c_lib::constant_r1c_float(self.0, f, len) };
+        XlaOp { op, marker: PhantomData }
+    }
+
+    pub fn constant_r1(&self, f: &[f32]) -> XlaOp {
+        let op = unsafe { c_lib::constant_r1_float(self.0, f.as_ptr(), f.len()) };
         XlaOp { op, marker: PhantomData }
     }
 
@@ -606,14 +611,14 @@ impl Literal {
 
 impl From<f32> for Literal {
     fn from(f: f32) -> Self {
-        let ptr = unsafe { c_lib::create_r0_f32(f) };
+        let ptr = unsafe { c_lib::create_r0_float(f) };
         Literal(ptr)
     }
 }
 
 impl From<&[f32]> for Literal {
     fn from(f: &[f32]) -> Self {
-        let ptr = unsafe { c_lib::create_r1_f32(f.as_ptr(), f.len() as i32) };
+        let ptr = unsafe { c_lib::create_r1_float(f.as_ptr(), f.len()) };
         Literal(ptr)
     }
 }
