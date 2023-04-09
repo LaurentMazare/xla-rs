@@ -379,6 +379,14 @@ xla_op op_convert_element_type(const xla_op arg, int pr_type) {
   return new XlaOp(ConvertElementType(*arg, (PrimitiveType)pr_type));
 }
 
+xla_op op_dimension_size(const xla_op arg, size_t dim) {
+  return new XlaOp(GetDimensionSize(*arg, dim));
+}
+
+xla_op op_reduce(const xla_op arg, const xla_op init, const xla_computation comp, const int64_t* dims, size_t ndims) {
+  return new XlaOp(Reduce(*arg, *init, *comp, absl::Span<const int64_t>(dims, ndims)));
+}
+
 int xla_op_valid(const xla_op op) {
   return op->valid();
 }

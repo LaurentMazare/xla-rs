@@ -643,6 +643,17 @@ impl XlaOp<'_> {
         let op = unsafe { c_lib::op_convert_element_type(self.op, element_type as i32) };
         XlaOp { op, marker: PhantomData }
     }
+
+    pub fn dimension_size(&self, dim: i64) -> Self {
+        let op = unsafe { c_lib::op_dimension_size(self.op, dim) };
+        XlaOp { op, marker: PhantomData }
+    }
+
+    pub fn reduce(&self, init_value: Self, comp: XlaComputation, dims: &[i64]) -> Self {
+        let op =
+            unsafe { c_lib::op_reduce(self.op, init_value.op, comp.0, dims.as_ptr(), dims.len()) };
+        XlaOp { op, marker: PhantomData }
+    }
 }
 
 impl Literal {
