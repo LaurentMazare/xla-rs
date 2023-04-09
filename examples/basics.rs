@@ -26,7 +26,7 @@ fn main() -> Result<()> {
         "Result: {:?} {:?} {}",
         shape,
         result.to_vec::<f32>(),
-        result.get_first_element::<f32>()
+        result.get_first_element::<f32>()?,
     );
     let param = xla_builder.parameter(0, &xla::Shape::new::<f32>(vec![]), "p");
     let sum = param.add(&param);

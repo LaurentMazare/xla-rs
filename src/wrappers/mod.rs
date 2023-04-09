@@ -646,8 +646,16 @@ impl XlaOp<'_> {
 }
 
 impl Literal {
-    pub fn get_first_element<T: NativeType>(&self) -> T {
-        unsafe { T::literal_get_first_element(self.0) }
+    pub fn get_first_element<T: NativeType + ElementType>(&self) -> Result<T> {
+        let element_type = self.element_type()?;
+        if element_type != T::PRIMITIVE_TYPE {
+            Err(Error::ElementTypeMismatch { on_device: element_type, on_host: T::PRIMITIVE_TYPE })?
+        }
+        if self.element_count() == 0 {
+            Err(Error::EmptyLiteral)?
+        }
+        let v = unsafe { T::literal_get_first_element(self.0) };
+        Ok(v)
     }
 
     pub fn element_count(&self) -> usize {

@@ -22,6 +22,9 @@ pub enum Error {
 
     #[error("binary buffer is too large, element count {element_count}, buffer_len: {buffer_len}")]
     BinaryBufferIsTooLarge { element_count: usize, buffer_len: usize },
+
+    #[error("empty literal")]
+    EmptyLiteral,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
