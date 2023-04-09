@@ -45,6 +45,37 @@ pub trait ElementType: Copy {
     const ZERO: Self;
 }
 
+#[allow(clippy::missing_safety_doc)]
+pub trait NativeType: Copy {
+    unsafe fn constant_r0(b: c_lib::xla_builder, v: Self) -> c_lib::xla_op;
+    unsafe fn constant_r1(b: c_lib::xla_builder, v: *const Self, l: usize) -> c_lib::xla_op;
+    unsafe fn constant_r1c(b: c_lib::xla_builder, v: Self, l: usize) -> c_lib::xla_op;
+    unsafe fn create_r0(v: Self) -> c_lib::literal;
+    unsafe fn create_r1(v: *const Self, l: usize) -> c_lib::literal;
+    unsafe fn literal_get_first_element(l: c_lib::literal) -> Self;
+}
+
+impl NativeType for f32 {
+    unsafe fn constant_r0(b: c_lib::xla_builder, v: Self) -> c_lib::xla_op {
+        c_lib::constant_r0_float(b, v)
+    }
+    unsafe fn constant_r1(b: c_lib::xla_builder, v: *const Self, l: usize) -> c_lib::xla_op {
+        c_lib::constant_r1_float(b, v, l)
+    }
+    unsafe fn constant_r1c(b: c_lib::xla_builder, v: Self, l: usize) -> c_lib::xla_op {
+        c_lib::constant_r1c_float(b, v, l)
+    }
+    unsafe fn create_r0(v: Self) -> c_lib::literal {
+        c_lib::create_r0_float(v)
+    }
+    unsafe fn create_r1(v: *const Self, l: usize) -> c_lib::literal {
+        c_lib::create_r1_float(v, l)
+    }
+    unsafe fn literal_get_first_element(l: c_lib::literal) -> Self {
+        c_lib::literal_get_first_element_float(l)
+    }
+}
+
 macro_rules! element_type {
     ($ty:ty, $v:ident, $sz:tt) => {
         impl ElementType for $ty {
@@ -547,8 +578,8 @@ impl XlaOp<'_> {
 }
 
 impl Literal {
-    pub fn get_first_element_f32(&self) -> f32 {
-        unsafe { c_lib::literal_get_first_element_f32(self.0) }
+    pub fn get_first_element<T: NativeType>(&self) -> T {
+        unsafe { T::literal_get_first_element(self.0) }
     }
 
     pub fn element_count(&self) -> usize {

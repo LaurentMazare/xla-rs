@@ -11,5 +11,5 @@ fn assign_ops() {
     let result = result[0][0].to_literal_sync().unwrap();
     assert_eq!(result.element_count(), 2);
     assert_eq!(result.shape().unwrap(), xla::Shape::new::<f32>(vec![2]));
-    assert_eq!(result.get_first_element_f32(), 85.)
+    assert_eq!(result.get_first_element::<f32>(), 85.)
 }

@@ -133,7 +133,6 @@ status compile(const pjrt_client, const xla_computation, pjrt_loaded_executable*
 status execute(const pjrt_loaded_executable, const pjrt_buffer *, int, pjrt_buffer ***);
 status execute_literal(const pjrt_loaded_executable, const literal *, int, pjrt_buffer ***);
 
-float literal_get_first_element_f32(const literal);
 int64_t literal_element_count(const literal);
 int literal_element_type(const literal);
 void literal_shape(const literal, shape*);
@@ -159,7 +158,8 @@ char *status_error_message(status);
   xla_op constant_r1c_ ## native_type(const xla_builder, native_type, size_t); \
   xla_op constant_r1_ ## native_type(const xla_builder, const native_type*, size_t); \
   literal create_r0_ ## native_type(native_type); \
-  literal create_r1_ ## native_type(const native_type*, size_t);
+  literal create_r1_ ## native_type(const native_type*, size_t); \
+  native_type literal_get_first_element_ ## native_type(const literal);
 
 FOR_EACH_NATIVE_TYPE(CONST_OP_R01)
 #undef CONST_OP_R01

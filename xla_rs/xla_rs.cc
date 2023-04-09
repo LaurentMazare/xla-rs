@@ -167,6 +167,9 @@ xla_op constant_literal(const xla_builder b, const literal l) {
   } \
   literal create_r1_ ## native_type(const native_type *f, size_t nel) { \
     return new Literal(LiteralUtil::CreateR1<native_type>(absl::Span<const native_type>(f, nel))); \
+  } \
+  native_type literal_get_first_element_ ## native_type(const literal l) { \
+    return l->GetFirstElement<native_type>(); \
   }
 
 FOR_EACH_NATIVE_TYPE(CONST_OP_R01)
@@ -474,10 +477,6 @@ status execute_literal(const pjrt_loaded_executable exe, const literal *inputs, 
   out[results.size()] = nullptr;
   *outputs = out;
   return nullptr;
-}
-
-float literal_get_first_element_f32(const literal l) {
-  return l->GetFirstElement<float>();
 }
 
 int64_t literal_element_count(const literal l) {
