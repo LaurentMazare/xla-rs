@@ -55,26 +55,94 @@ pub trait NativeType: Copy {
     unsafe fn literal_get_first_element(l: c_lib::literal) -> Self;
 }
 
-impl NativeType for f32 {
-    unsafe fn constant_r0(b: c_lib::xla_builder, v: Self) -> c_lib::xla_op {
-        c_lib::constant_r0_float(b, v)
-    }
-    unsafe fn constant_r1(b: c_lib::xla_builder, v: *const Self, l: usize) -> c_lib::xla_op {
-        c_lib::constant_r1_float(b, v, l)
-    }
-    unsafe fn constant_r1c(b: c_lib::xla_builder, v: Self, l: usize) -> c_lib::xla_op {
-        c_lib::constant_r1c_float(b, v, l)
-    }
-    unsafe fn create_r0(v: Self) -> c_lib::literal {
-        c_lib::create_r0_float(v)
-    }
-    unsafe fn create_r1(v: *const Self, l: usize) -> c_lib::literal {
-        c_lib::create_r1_float(v, l)
-    }
-    unsafe fn literal_get_first_element(l: c_lib::literal) -> Self {
-        c_lib::literal_get_first_element_float(l)
-    }
+macro_rules! native_type {
+    ($ty:ty, $cst0:ident, $cst1:ident, $cst1c:ident, $cre0:ident, $cre1:ident, $gf:ident) => {
+        impl NativeType for $ty {
+            unsafe fn constant_r0(b: c_lib::xla_builder, v: Self) -> c_lib::xla_op {
+                c_lib::$cst0(b, v)
+            }
+            unsafe fn constant_r1(
+                b: c_lib::xla_builder,
+                v: *const Self,
+                l: usize,
+            ) -> c_lib::xla_op {
+                c_lib::$cst1(b, v, l)
+            }
+            unsafe fn constant_r1c(b: c_lib::xla_builder, v: Self, l: usize) -> c_lib::xla_op {
+                c_lib::$cst1c(b, v, l)
+            }
+            unsafe fn create_r0(v: Self) -> c_lib::literal {
+                c_lib::$cre0(v)
+            }
+            unsafe fn create_r1(v: *const Self, l: usize) -> c_lib::literal {
+                c_lib::$cre1(v, l)
+            }
+            unsafe fn literal_get_first_element(l: c_lib::literal) -> Self {
+                c_lib::$gf(l)
+            }
+        }
+    };
 }
+
+native_type!(
+    i32,
+    constant_r0_int32_t,
+    constant_r1_int32_t,
+    constant_r1c_int32_t,
+    create_r0_int32_t,
+    create_r1_int32_t,
+    literal_get_first_element_int32_t
+);
+
+native_type!(
+    i64,
+    constant_r0_int64_t,
+    constant_r1_int64_t,
+    constant_r1c_int64_t,
+    create_r0_int64_t,
+    create_r1_int64_t,
+    literal_get_first_element_int64_t
+);
+
+native_type!(
+    u32,
+    constant_r0_uint32_t,
+    constant_r1_uint32_t,
+    constant_r1c_uint32_t,
+    create_r0_uint32_t,
+    create_r1_uint32_t,
+    literal_get_first_element_uint32_t
+);
+
+native_type!(
+    u64,
+    constant_r0_uint64_t,
+    constant_r1_uint64_t,
+    constant_r1c_uint64_t,
+    create_r0_uint64_t,
+    create_r1_uint64_t,
+    literal_get_first_element_uint64_t
+);
+
+native_type!(
+    f32,
+    constant_r0_float,
+    constant_r1_float,
+    constant_r1c_float,
+    create_r0_float,
+    create_r1_float,
+    literal_get_first_element_float
+);
+
+native_type!(
+    f64,
+    constant_r0_double,
+    constant_r1_double,
+    constant_r1c_double,
+    create_r0_double,
+    create_r1_double,
+    literal_get_first_element_double
+);
 
 macro_rules! element_type {
     ($ty:ty, $v:ident, $sz:tt) => {

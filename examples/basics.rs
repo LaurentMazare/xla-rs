@@ -14,8 +14,8 @@ fn main() -> Result<()> {
         )
     }
     let xla_builder = xla::XlaBuilder::new("test");
-    let cst42 = xla::XlaBuilder::constant_r0(&xla_builder, 42.);
-    let cst43 = xla::XlaBuilder::constant_r1(&xla_builder, &[43., 44.]);
+    let cst42 = xla::XlaBuilder::constant_r0(&xla_builder, 42f32);
+    let cst43 = xla::XlaBuilder::constant_r1(&xla_builder, &[43f32, 44f32]);
     let sum = cst42.add(&cst43);
     println!("Shape: {:?}", xla_builder.get_shape(&sum));
     let computation = xla_builder.build(&sum)?;
@@ -33,10 +33,10 @@ fn main() -> Result<()> {
     let sum = sum.sqrt();
     let computation = xla_builder.build(&sum)?;
     let result = client.compile(&computation)?;
-    let result = result.execute_literal(&[xla::Literal::from(12.0)])?[0][0].to_literal_sync()?;
+    let result = result.execute_literal(&[xla::Literal::from(12f32)])?[0][0].to_literal_sync()?;
     println!("Result: {:?} {:?}", result.shape(), result.get_first_element::<f32>());
     let result = client.compile(&computation)?;
-    let result = result.execute_literal(&[xla::Literal::from(13.0)])?[0][0].to_literal_sync()?;
+    let result = result.execute_literal(&[xla::Literal::from(13f32)])?[0][0].to_literal_sync()?;
     println!("Result: {:?} {:?}", result.shape(), result.get_first_element::<f32>());
     Ok(())
 }
