@@ -2,7 +2,7 @@ use super::{ElementType, Literal, PjRtBuffer, PjRtDevice, PjRtLoadedExecutable, 
 use crate::{c_lib, Error, Result};
 use std::marker::PhantomData;
 
-pub struct PjRtClient(pub(crate) c_lib::pjrt_client);
+pub struct PjRtClient(pub(self) c_lib::pjrt_client);
 
 impl PjRtClient {
     pub fn cpu() -> Result<Self> {

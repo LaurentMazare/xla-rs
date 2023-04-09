@@ -1,7 +1,7 @@
 use super::{ElementType, FromPrimitive, NativeType, PrimitiveType, Shape};
 use crate::{c_lib, Error, Result};
 
-pub struct Literal(pub(crate) c_lib::literal);
+pub struct Literal(pub(super) c_lib::literal);
 
 impl Literal {
     pub fn get_first_element<T: NativeType + ElementType>(&self) -> Result<T> {

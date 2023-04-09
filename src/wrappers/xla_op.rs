@@ -3,8 +3,8 @@ use crate::c_lib;
 use std::marker::PhantomData;
 
 pub struct XlaOp<'a> {
-    pub(crate) op: c_lib::xla_op,
-    pub(crate) marker: PhantomData<&'a XlaBuilder>,
+    pub(super) op: c_lib::xla_op,
+    pub(super) marker: PhantomData<&'a XlaBuilder>,
 }
 
 macro_rules! binary_op {

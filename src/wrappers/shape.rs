@@ -2,8 +2,8 @@ use super::{ElementType, PrimitiveType};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Shape {
-    pub(crate) element_type: PrimitiveType,
-    pub(crate) dimensions: Vec<i64>,
+    pub(super) element_type: PrimitiveType,
+    pub(super) dimensions: Vec<i64>,
 }
 
 impl Shape {

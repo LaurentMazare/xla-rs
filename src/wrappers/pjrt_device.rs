@@ -2,8 +2,8 @@ use crate::c_lib;
 use std::marker::PhantomData;
 
 pub struct PjRtDevice<'a> {
-    pub(crate) device: c_lib::pjrt_device,
-    pub(crate) marker: PhantomData<&'a super::PjRtClient>,
+    pub(super) device: c_lib::pjrt_device,
+    pub(super) marker: PhantomData<&'a super::PjRtClient>,
 }
 
 impl<'a> PjRtDevice<'a> {

@@ -1,7 +1,7 @@
 use super::{Literal, PjRtBuffer};
 use crate::{c_lib, Result};
 
-pub struct PjRtLoadedExecutable(pub(crate) c_lib::pjrt_loaded_executable);
+pub struct PjRtLoadedExecutable(pub(super) c_lib::pjrt_loaded_executable);
 
 impl PjRtLoadedExecutable {
     fn process_execute_outputs(outputs: *mut *mut c_lib::pjrt_buffer) -> Vec<Vec<PjRtBuffer>> {

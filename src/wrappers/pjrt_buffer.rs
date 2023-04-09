@@ -1,7 +1,7 @@
 use super::{ElementType, FromPrimitive, Literal, PjRtDevice, Shape};
 use crate::{c_lib, Error, Result};
 
-pub struct PjRtBuffer(pub(crate) c_lib::pjrt_buffer);
+pub struct PjRtBuffer(pub(super) c_lib::pjrt_buffer);
 
 impl PjRtBuffer {
     pub fn copy_to_device(&self, device: PjRtDevice<'_>) -> Result<Self> {

@@ -21,7 +21,7 @@ pub use shape::Shape;
 pub use xla_builder::XlaBuilder;
 pub use xla_op::XlaOp;
 
-pub(crate) unsafe fn c_ptr_to_string(ptr: *const std::ffi::c_char) -> String {
+pub(self) unsafe fn c_ptr_to_string(ptr: *const std::ffi::c_char) -> String {
     let str = std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned();
     libc::free(ptr as *mut libc::c_void);
     str
@@ -178,7 +178,7 @@ element_type!(f64, F64, 8);
 
 pub struct XlaComputation(c_lib::xla_computation);
 
-pub(crate) fn handle_status(status: c_lib::status) -> Result<()> {
+pub(self) fn handle_status(status: c_lib::status) -> Result<()> {
     if status.is_null() {
         Ok(())
     } else {
