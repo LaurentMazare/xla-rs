@@ -402,8 +402,8 @@ impl XlaBuilder {
         XlaOp { op, marker: PhantomData }
     }
 
-    pub fn constant_r0(&self, f: f32) -> XlaOp {
-        let op = unsafe { c_lib::constant_r0_float(self.0, f) };
+    pub fn constant_r0<T: NativeType>(&self, f: T) -> XlaOp {
+        let op = unsafe { T::constant_r0(self.0, f) };
         XlaOp { op, marker: PhantomData }
     }
 
@@ -421,13 +421,13 @@ impl XlaBuilder {
         XlaOp { op, marker: PhantomData }
     }
 
-    pub fn constant_r1c(&self, f: f32, len: usize) -> XlaOp {
-        let op = unsafe { c_lib::constant_r1c_float(self.0, f, len) };
+    pub fn constant_r1c<T: NativeType>(&self, f: T, len: usize) -> XlaOp {
+        let op = unsafe { T::constant_r1c(self.0, f, len) };
         XlaOp { op, marker: PhantomData }
     }
 
-    pub fn constant_r1(&self, f: &[f32]) -> XlaOp {
-        let op = unsafe { c_lib::constant_r1_float(self.0, f.as_ptr(), f.len()) };
+    pub fn constant_r1<T: NativeType>(&self, f: &[T]) -> XlaOp {
+        let op = unsafe { T::constant_r1(self.0, f.as_ptr(), f.len()) };
         XlaOp { op, marker: PhantomData }
     }
 
@@ -640,16 +640,16 @@ impl Literal {
     }
 }
 
-impl From<f32> for Literal {
-    fn from(f: f32) -> Self {
-        let ptr = unsafe { c_lib::create_r0_float(f) };
+impl<T: NativeType> From<T> for Literal {
+    fn from(f: T) -> Self {
+        let ptr = unsafe { T::create_r0(f) };
         Literal(ptr)
     }
 }
 
-impl From<&[f32]> for Literal {
-    fn from(f: &[f32]) -> Self {
-        let ptr = unsafe { c_lib::create_r1_float(f.as_ptr(), f.len()) };
+impl<T: NativeType> From<&[T]> for Literal {
+    fn from(f: &[T]) -> Self {
+        let ptr = unsafe { T::create_r1(f.as_ptr(), f.len()) };
         Literal(ptr)
     }
 }
