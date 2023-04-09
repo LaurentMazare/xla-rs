@@ -63,6 +63,7 @@ impl XlaOp<'_> {
     unary_op!(is_finite, c_lib::op_is_finite);
     unary_op!(neg, c_lib::op_neg);
     unary_op!(copy, c_lib::op_copy);
+    unary_op!(zeros_like, c_lib::op_zeros_like);
 
     pub fn reshape(&self, dims: &[i64]) -> Self {
         let op = unsafe { c_lib::op_reshape(self.op, dims.len(), dims.as_ptr()) };

@@ -323,6 +323,15 @@ xla_op op_copy(const xla_op arg) {
   return new XlaOp(Copy(*arg));
 }
 
+xla_op op_zeros_like(const xla_op arg) {
+  return new XlaOp(ZerosLike(*arg));
+}
+
+xla_op op_zero_like(const xla_op arg) {
+  const Shape* shape = arg->builder()->GetShapePtr(*arg).value();
+  return new XlaOp(Zero(arg->builder(), shape->element_type()));
+}
+
 xla_op op_reshape(const xla_op arg, size_t dsize, const int64_t *ds) {
   return new XlaOp(Reshape(*arg, absl::Span<const int64_t>(ds, dsize)));
 }
@@ -385,6 +394,10 @@ xla_op op_dimension_size(const xla_op arg, size_t dim) {
 
 xla_op op_reduce(const xla_op arg, const xla_op init, const xla_computation comp, const int64_t* dims, size_t ndims) {
   return new XlaOp(Reduce(*arg, *init, *comp, absl::Span<const int64_t>(dims, ndims)));
+}
+
+xla_builder op_builder(const xla_op arg) {
+  return arg->builder();
 }
 
 int xla_op_valid(const xla_op op) {

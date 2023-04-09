@@ -7,6 +7,7 @@
 #pragma GCC diagnostic ignored "-Winvalid-offsetof"
 #pragma GCC diagnostic ignored "-Wreturn-type"
 #include "tensorflow/compiler/xla/client/client_library.h"
+#include "tensorflow/compiler/xla/client/lib/constants.h"
 #include "tensorflow/compiler/xla/client/xla_builder.h"
 #include "tensorflow/compiler/xla/pjrt/tfrt_cpu_pjrt_client.h"
 #include "tensorflow/compiler/xla/pjrt/pjrt_client.h"
@@ -106,6 +107,8 @@ xla_op op_cbrt(const xla_op);
 xla_op op_is_finite(const xla_op);
 xla_op op_neg(const xla_op);
 xla_op op_copy(const xla_op);
+xla_op op_zeros_like(const xla_op);
+xla_op op_zero_like(const xla_op);
 xla_op op_reshape(const xla_op, size_t, const int64_t*);
 xla_op op_broadcast(const xla_op, size_t, const int64_t*);
 xla_op op_collapse(const xla_op, size_t, const int64_t*);
@@ -119,6 +122,7 @@ xla_op op_concat_in_dim(const xla_op, const xla_op *, size_t, int64_t);
 xla_op op_convert_element_type(const xla_op, int);
 xla_op op_dimension_size(const xla_op, int64_t);
 xla_op op_reduce(const xla_op, const xla_op, const xla_computation, const int64_t*, size_t);
+xla_builder op_builder(const xla_op);
 
 int xla_op_valid(const xla_op);
 void xla_op_free(xla_op);
