@@ -199,6 +199,10 @@ impl XlaComputation {
             c_ptr_to_string(ptr)
         }
     }
+
+    pub fn compile(&self, client: &PjRtClient) -> Result<PjRtLoadedExecutable> {
+        client.compile(self)
+    }
 }
 
 impl Drop for XlaComputation {

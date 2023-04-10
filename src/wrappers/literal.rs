@@ -72,19 +72,27 @@ impl Literal {
         self.copy_raw(&mut data)?;
         Ok(data)
     }
+
+    pub fn scalar<T: NativeType>(t: T) -> Self {
+        let ptr = unsafe { T::create_r0(t) };
+        Literal(ptr)
+    }
+
+    pub fn vec<T: NativeType>(f: &[T]) -> Self {
+        let ptr = unsafe { T::create_r1(f.as_ptr(), f.len()) };
+        Literal(ptr)
+    }
 }
 
 impl<T: NativeType> From<T> for Literal {
     fn from(f: T) -> Self {
-        let ptr = unsafe { T::create_r0(f) };
-        Literal(ptr)
+        Literal::scalar(f)
     }
 }
 
 impl<T: NativeType> From<&[T]> for Literal {
     fn from(f: &[T]) -> Self {
-        let ptr = unsafe { T::create_r1(f.as_ptr(), f.len()) };
-        Literal(ptr)
+        Literal::vec(f)
     }
 }
 

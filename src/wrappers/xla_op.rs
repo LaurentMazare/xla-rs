@@ -166,9 +166,10 @@ impl XlaOp {
     // TODO: Maybe this should return [Self] rather than [Result<Self>] and encode possible errors
     // in the XlaOp?
     pub fn sum(&self, dims: &[i64]) -> Result<Self> {
+        let builder = XlaBuilder::new("Sum");
         let et = self.element_type()?;
-        let x = self.builder.parameter(0, et, &[], "x");
-        let y = self.builder.parameter(1, et, &[], "y");
+        let x = builder.parameter(0, et, &[], "x");
+        let y = builder.parameter(1, et, &[], "y");
         let sum = x.add(&y).build()?;
         let init_value = self.builder.zero(et);
         Ok(self.reduce(init_value, sum, dims))
