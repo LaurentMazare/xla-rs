@@ -16,7 +16,7 @@ fn main() -> Result<()> {
     let xla_builder = xla::XlaBuilder::new("test");
     let cst42 = xla_builder.constant_r0(42f32);
     let cst43 = xla_builder.constant_r1(&[43f32, 44f32]);
-    let sum = cst42.add(&cst43);
+    let sum = cst42 + cst43;
     println!("Shape: {:?}", xla_builder.get_shape(&sum));
     let sum = sum.build()?;
     let result = client.compile(&sum)?;
@@ -29,7 +29,7 @@ fn main() -> Result<()> {
         result.get_first_element::<f32>()?,
     );
     let param = xla_builder.parameter_with_shape(0, &xla::Shape::new::<f32>(vec![]), "p");
-    let sum = param.add(&param);
+    let sum = param.add_(&param);
     let sum = sum.sqrt().build()?;
     let result = client.compile(&sum)?;
     let result = result.execute_literal(&[xla::Literal::from(12f32)])?[0][0].to_literal_sync()?;

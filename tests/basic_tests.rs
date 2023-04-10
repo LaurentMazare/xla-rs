@@ -6,7 +6,7 @@ fn add_op() -> Result<()> {
     let builder = xla::XlaBuilder::new("test");
     let cst42 = builder.constant_r0(42f32);
     let cst43 = builder.constant_r1c(43f32, 2);
-    let sum = cst42.add(&cst43);
+    let sum = cst42 + &cst43;
     let computation = sum.build()?;
     let result = client.compile(&computation)?;
     let result = result.execute::<xla::PjRtBuffer>(&[])?;

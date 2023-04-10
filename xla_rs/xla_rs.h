@@ -107,6 +107,7 @@ xla_op op_cbrt(const xla_op);
 xla_op op_is_finite(const xla_op);
 xla_op op_neg(const xla_op);
 xla_op op_copy(const xla_op);
+xla_op op_clone(const xla_op);
 xla_op op_zeros_like(const xla_op);
 xla_op op_zero_like(const xla_op);
 xla_op op_zero(const xla_builder, int);

@@ -347,6 +347,10 @@ xla_op op_copy(const xla_op arg) {
   return new XlaOp(Copy(*arg));
 }
 
+xla_op op_clone(const xla_op arg) {
+  return new XlaOp(*arg);
+}
+
 xla_op op_zeros_like(const xla_op arg) {
   return new XlaOp(ZerosLike(*arg));
 }

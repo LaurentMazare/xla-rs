@@ -37,6 +37,10 @@ impl XlaBuilder {
         XlaOp { op, builder: self.clone() }
     }
 
+    pub fn c0<T: NativeType>(&self, f: T) -> XlaOp {
+        self.constant_r0(f)
+    }
+
     pub fn parameter(
         &self,
         parameter_number: i64,
@@ -69,6 +73,10 @@ impl XlaBuilder {
     pub fn constant_r1<T: NativeType>(&self, f: &[T]) -> XlaOp {
         let op = unsafe { T::constant_r1(self.ptr(), f.as_ptr(), f.len()) };
         XlaOp { op, builder: self.clone() }
+    }
+
+    pub fn c1<T: NativeType>(&self, f: &[T]) -> XlaOp {
+        self.constant_r1(f)
     }
 
     pub fn zero(&self, element_type: super::PrimitiveType) -> XlaOp {

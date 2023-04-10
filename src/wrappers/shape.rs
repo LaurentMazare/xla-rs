@@ -18,4 +18,8 @@ impl Shape {
     pub fn size(&self) -> usize {
         self.dimensions.iter().map(|d| *d as usize).product::<usize>()
     }
+
+    pub fn dimensions(&self) -> &[i64] {
+        &self.dimensions
+    }
 }

@@ -24,6 +24,13 @@ macro_rules! unary_op {
     };
 }
 
+impl Clone for XlaOp {
+    fn clone(&self) -> Self {
+        let op = unsafe { c_lib::op_clone(self.op) };
+        Self { op, builder: self.builder.clone() }
+    }
+}
+
 impl XlaOp {
     pub(super) fn wrap(&self, op: c_lib::xla_op) -> Self {
         XlaOp { op, builder: self.builder.clone() }
@@ -33,11 +40,11 @@ impl XlaOp {
         &self.builder
     }
 
-    binary_op!(add, c_lib::op_add);
-    binary_op!(sub, c_lib::op_sub);
-    binary_op!(mul, c_lib::op_mul);
-    binary_op!(div, c_lib::op_div);
-    binary_op!(rem, c_lib::op_rem);
+    binary_op!(add_, c_lib::op_add);
+    binary_op!(sub_, c_lib::op_sub);
+    binary_op!(mul_, c_lib::op_mul);
+    binary_op!(div_, c_lib::op_div);
+    binary_op!(rem_, c_lib::op_rem);
     binary_op!(max, c_lib::op_max);
     binary_op!(min, c_lib::op_min);
     binary_op!(and, c_lib::op_and);
@@ -170,7 +177,7 @@ impl XlaOp {
         let et = self.element_type()?;
         let x = builder.parameter(0, et, &[], "x");
         let y = builder.parameter(1, et, &[], "y");
-        let sum = x.add(&y).build()?;
+        let sum = x.add_(&y).build()?;
         let init_value = self.builder.zero(et);
         Ok(self.reduce(init_value, sum, dims))
     }
@@ -185,3 +192,28 @@ impl Drop for XlaOp {
         unsafe { c_lib::xla_op_free(self.op) }
     }
 }
+
+macro_rules! bin_trait {
+    ($trait:ident, $fn1:ident, $fn2:ident) => {
+        impl<B: std::borrow::Borrow<XlaOp>> std::ops::$trait<B> for XlaOp {
+            type Output = XlaOp;
+
+            fn $fn1(self, rhs: B) -> Self::Output {
+                self.$fn2(rhs.borrow())
+            }
+        }
+
+        impl<B: std::borrow::Borrow<XlaOp>> std::ops::$trait<B> for &XlaOp {
+            type Output = XlaOp;
+
+            fn $fn1(self, rhs: B) -> Self::Output {
+                self.$fn2(rhs.borrow())
+            }
+        }
+    };
+}
+
+bin_trait!(Add, add, add_);
+bin_trait!(Sub, sub, sub_);
+bin_trait!(Mul, mul, mul_);
+bin_trait!(Div, div, div_);
