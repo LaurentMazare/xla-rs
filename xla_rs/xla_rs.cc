@@ -440,7 +440,7 @@ xla_op op_convert_element_type(const xla_op arg, int pr_type) {
   return new XlaOp(ConvertElementType(*arg, (PrimitiveType)pr_type));
 }
 
-xla_op op_dimension_size(const xla_op arg, size_t dim) {
+xla_op op_dimension_size(const xla_op arg, int64_t dim) {
   return new XlaOp(GetDimensionSize(*arg, dim));
 }
 

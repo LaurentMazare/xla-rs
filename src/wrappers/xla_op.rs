@@ -211,7 +211,7 @@ impl XlaOp {
     pub fn reduce_mean_e(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
         let b = &self.builder();
         let et = self.element_type()?;
-        let mut scale = b.one(et);
+        let mut scale = b.one(PrimitiveType::S32);
         for d in dims.iter() {
             scale = scale * self.dimension_size(*d);
         }
