@@ -1,37 +1,44 @@
 use super::{handle_status, FromPrimitive, Literal, NativeType, Shape, XlaComputation, XlaOp};
 use crate::{c_lib, Error, Result};
-use std::marker::PhantomData;
+use std::rc::Rc;
 
-pub struct XlaBuilder(c_lib::xla_builder);
+pub(super) struct XlaBuilderInternal(c_lib::xla_builder);
+
+#[derive(Clone)]
+pub struct XlaBuilder(Rc<XlaBuilderInternal>);
 
 impl XlaBuilder {
     pub fn new(name: &str) -> XlaBuilder {
         let name = std::ffi::CString::new(name).unwrap();
         let xla_builder = unsafe { c_lib::xla_builder_create(name.as_ptr()) };
-        XlaBuilder(xla_builder)
+        XlaBuilder(Rc::new(XlaBuilderInternal(xla_builder)))
+    }
+
+    fn ptr(&self) -> c_lib::xla_builder {
+        self.0 .0
     }
 
     pub fn build(&self, op: &XlaOp) -> Result<XlaComputation> {
         let mut result: c_lib::xla_computation = std::ptr::null_mut();
-        let status = unsafe { c_lib::build(self.0, op.op, &mut result) };
+        let status = unsafe { c_lib::build(self.ptr(), op.op, &mut result) };
         handle_status(status)?;
         Ok(XlaComputation(result))
     }
 
     pub fn constant_literal(&self, literal: Literal) -> XlaOp {
-        let op = unsafe { c_lib::constant_literal(self.0, literal.0) };
-        XlaOp { op, marker: PhantomData }
+        let op = unsafe { c_lib::constant_literal(self.ptr(), literal.0) };
+        XlaOp { op, builder: self.clone() }
     }
 
     pub fn constant_r0<T: NativeType>(&self, f: T) -> XlaOp {
-        let op = unsafe { T::constant_r0(self.0, f) };
-        XlaOp { op, marker: PhantomData }
+        let op = unsafe { T::constant_r0(self.ptr(), f) };
+        XlaOp { op, builder: self.clone() }
     }
 
     pub fn parameter(&self, id: i64, shape: &Shape, name: &str) -> XlaOp {
         let op = unsafe {
             c_lib::parameter(
-                self.0,
+                self.ptr(),
                 id,
                 shape.element_type as i32,
                 shape.dimensions.len() as i32,
@@ -39,22 +46,34 @@ impl XlaBuilder {
                 name.as_ptr() as *const libc::c_char,
             )
         };
-        XlaOp { op, marker: PhantomData }
+        XlaOp { op, builder: self.clone() }
     }
 
     pub fn constant_r1c<T: NativeType>(&self, f: T, len: usize) -> XlaOp {
-        let op = unsafe { T::constant_r1c(self.0, f, len) };
-        XlaOp { op, marker: PhantomData }
+        let op = unsafe { T::constant_r1c(self.ptr(), f, len) };
+        XlaOp { op, builder: self.clone() }
     }
 
     pub fn constant_r1<T: NativeType>(&self, f: &[T]) -> XlaOp {
-        let op = unsafe { T::constant_r1(self.0, f.as_ptr(), f.len()) };
-        XlaOp { op, marker: PhantomData }
+        let op = unsafe { T::constant_r1(self.ptr(), f.as_ptr(), f.len()) };
+        XlaOp { op, builder: self.clone() }
+    }
+
+    pub fn internal_error(&self, msg: &str) -> XlaOp {
+        let msg = std::ffi::CString::new(msg).unwrap();
+        let op = unsafe { c_lib::op_internal_error(self.ptr(), msg.as_ptr()) };
+        XlaOp { op, builder: self.clone() }
+    }
+
+    pub fn invalid_argument_error(&self, msg: &str) -> XlaOp {
+        let msg = std::ffi::CString::new(msg).unwrap();
+        let op = unsafe { c_lib::op_invalid_argument_error(self.ptr(), msg.as_ptr()) };
+        XlaOp { op, builder: self.clone() }
     }
 
     pub fn get_shape(&self, op: &XlaOp) -> Result<Shape> {
         let mut out: c_lib::shape = std::ptr::null_mut();
-        let status = unsafe { c_lib::get_shape(self.0, op.op, &mut out) };
+        let status = unsafe { c_lib::get_shape(self.ptr(), op.op, &mut out) };
         handle_status(status)?;
         let rank = unsafe { c_lib::shape_dimensions_size(out) };
         let dimensions: Vec<_> =
@@ -68,7 +87,7 @@ impl XlaBuilder {
     }
 }
 
-impl Drop for XlaBuilder {
+impl Drop for XlaBuilderInternal {
     fn drop(&mut self) {
         unsafe { c_lib::xla_builder_free(self.0) }
     }

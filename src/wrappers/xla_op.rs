@@ -1,17 +1,16 @@
 use super::{PrimitiveType, Shape, XlaBuilder, XlaComputation};
 use crate::c_lib;
-use std::marker::PhantomData;
 
-pub struct XlaOp<'a> {
+pub struct XlaOp {
     pub(super) op: c_lib::xla_op,
-    pub(super) marker: PhantomData<&'a XlaBuilder>,
+    pub(super) builder: XlaBuilder,
 }
 
 macro_rules! binary_op {
     ($func_name:ident, $expression:expr) => {
         pub fn $func_name(&self, op: &XlaOp) -> XlaOp {
             let op = unsafe { $expression(self.op, op.op) };
-            XlaOp { op, marker: PhantomData }
+            self.wrap(op)
         }
     };
 }
@@ -20,12 +19,20 @@ macro_rules! unary_op {
     ($func_name:ident, $expression:expr) => {
         pub fn $func_name(&self) -> XlaOp {
             let op = unsafe { $expression(self.op) };
-            XlaOp { op, marker: PhantomData }
+            self.wrap(op)
         }
     };
 }
 
-impl XlaOp<'_> {
+impl XlaOp {
+    pub(super) fn wrap(&self, op: c_lib::xla_op) -> Self {
+        XlaOp { op, builder: self.builder.clone() }
+    }
+
+    pub fn builder(&self) -> &XlaBuilder {
+        &self.builder
+    }
+
     binary_op!(add, c_lib::op_add);
     binary_op!(sub, c_lib::op_sub);
     binary_op!(mul, c_lib::op_mul);
@@ -67,43 +74,43 @@ impl XlaOp<'_> {
 
     pub fn reshape(&self, dims: &[i64]) -> Self {
         let op = unsafe { c_lib::op_reshape(self.op, dims.len(), dims.as_ptr()) };
-        XlaOp { op, marker: PhantomData }
+        self.wrap(op)
     }
 
     pub fn broadcast(&self, dims: &[i64]) -> Self {
         let op = unsafe { c_lib::op_broadcast(self.op, dims.len(), dims.as_ptr()) };
-        XlaOp { op, marker: PhantomData }
+        self.wrap(op)
     }
 
     pub fn collapse(&self, dims: &[i64]) -> Self {
         let op = unsafe { c_lib::op_collapse(self.op, dims.len(), dims.as_ptr()) };
-        XlaOp { op, marker: PhantomData }
+        self.wrap(op)
     }
 
     pub fn transpose(&self, index_perm: &[i64]) -> Self {
         let op = unsafe { c_lib::op_collapse(self.op, index_perm.len(), index_perm.as_ptr()) };
-        XlaOp { op, marker: PhantomData }
+        self.wrap(op)
     }
 
     pub fn slice_in_dim(&self, start_index: i64, stop_index: i64, stride: i64, dim: i64) -> Self {
         let op = unsafe { c_lib::op_slice_in_dim(self.op, start_index, stop_index, stride, dim) };
-        XlaOp { op, marker: PhantomData }
+        self.wrap(op)
     }
 
     pub fn concat_in_dim(&self, args: &[&Self], dim: i64) -> Self {
         let args: Vec<_> = args.iter().map(|a| a.op).collect();
         let op = unsafe { c_lib::op_concat_in_dim(self.op, args.as_ptr(), args.len(), dim) };
-        XlaOp { op, marker: PhantomData }
+        self.wrap(op)
     }
 
     pub fn clamp(&self, min: &Self, max: &Self) -> Self {
         let op = unsafe { c_lib::op_clamp(min.op, self.op, max.op) };
-        XlaOp { op, marker: PhantomData }
+        self.wrap(op)
     }
 
     pub fn select(&self, on_true: &Self, on_false: &Self) -> Self {
         let op = unsafe { c_lib::op_select(self.op, on_true.op, on_false.op) };
-        XlaOp { op, marker: PhantomData }
+        self.wrap(op)
     }
 
     pub fn rng_uniform(min: &Self, max: &Self, shape: &Shape) -> Self {
@@ -116,7 +123,7 @@ impl XlaOp<'_> {
                 shape.dimensions.as_ptr(),
             )
         };
-        XlaOp { op, marker: PhantomData }
+        min.wrap(op)
     }
 
     pub fn rng_normal(mu: &Self, sigma: &Self, shape: &Shape) -> Self {
@@ -129,27 +136,27 @@ impl XlaOp<'_> {
                 shape.dimensions.as_ptr(),
             )
         };
-        XlaOp { op, marker: PhantomData }
+        mu.wrap(op)
     }
 
     pub fn convert_element_type(&self, element_type: PrimitiveType) -> Self {
         let op = unsafe { c_lib::op_convert_element_type(self.op, element_type as i32) };
-        XlaOp { op, marker: PhantomData }
+        self.wrap(op)
     }
 
     pub fn dimension_size(&self, dim: i64) -> Self {
         let op = unsafe { c_lib::op_dimension_size(self.op, dim) };
-        XlaOp { op, marker: PhantomData }
+        self.wrap(op)
     }
 
     pub fn reduce(&self, init_value: Self, comp: XlaComputation, dims: &[i64]) -> Self {
         let op =
             unsafe { c_lib::op_reduce(self.op, init_value.op, comp.0, dims.as_ptr(), dims.len()) };
-        XlaOp { op, marker: PhantomData }
+        self.wrap(op)
     }
 }
 
-impl Drop for XlaOp<'_> {
+impl Drop for XlaOp {
     fn drop(&mut self) {
         unsafe { c_lib::xla_op_free(self.op) }
     }

@@ -396,6 +396,14 @@ xla_op op_reduce(const xla_op arg, const xla_op init, const xla_computation comp
   return new XlaOp(Reduce(*arg, *init, *comp, absl::Span<const int64_t>(dims, ndims)));
 }
 
+xla_op op_internal_error(const xla_builder b, const char* error) {
+  return new XlaOp(b->ReportError(tsl::errors::Internal(error)));
+}
+
+xla_op op_invalid_argument_error(const xla_builder b, const char* error) {
+  return new XlaOp(b->ReportError(tsl::errors::InvalidArgument(error)));
+}
+
 xla_builder op_builder(const xla_op arg) {
   return arg->builder();
 }

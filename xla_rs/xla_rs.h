@@ -64,11 +64,11 @@ shape pjrt_buffer_on_device_shape(pjrt_buffer);
 status pjrt_buffer_copy_to_device(pjrt_buffer, pjrt_device, pjrt_buffer *);
 void pjrt_buffer_free(pjrt_buffer);
 
-xla_builder xla_builder_create(const char *name);
+xla_builder xla_builder_create(const char*);
 void xla_builder_free(xla_builder);
 
 xla_op constant_literal(const xla_builder, const literal);
-xla_op parameter(const xla_builder, int64_t, int, int, const long int *, const char *);
+xla_op parameter(const xla_builder, int64_t, int, int, const long int *, const char*);
 
 // Ops
 xla_op op_add(const xla_op, const xla_op);
@@ -122,6 +122,8 @@ xla_op op_concat_in_dim(const xla_op, const xla_op *, size_t, int64_t);
 xla_op op_convert_element_type(const xla_op, int);
 xla_op op_dimension_size(const xla_op, int64_t);
 xla_op op_reduce(const xla_op, const xla_op, const xla_computation, const int64_t*, size_t);
+xla_op op_internal_error(const xla_builder, const char*);
+xla_op op_invalid_argument_error(const xla_builder, const char*);
 xla_builder op_builder(const xla_op);
 
 int xla_op_valid(const xla_op);
