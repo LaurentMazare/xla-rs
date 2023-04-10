@@ -176,7 +176,31 @@ FOR_EACH_NATIVE_TYPE(CONST_OP_R01)
 #undef CONST_OP_R01
 
 xla_op parameter(const xla_builder b, int64_t id, int pr_type, int dsize, const long int *ds, const char *name) {
-  return new XlaOp(Parameter(b, id, ShapeUtil::MakeShape((PrimitiveType)pr_type, absl::Span<const long int>(ds, dsize)), std::string(name)));
+  bool has_negative_dim = false;
+  for (int i = 0; i < dsize; ++i) {
+    if (ds[i] < 0) {
+      has_negative_dim = true;
+      break;
+    }
+  }
+  Shape shape;
+  if (has_negative_dim) {
+    std::vector<bool> dynamic;
+    std::vector<int64_t> bounds;
+    for (int i = 0; i < dsize; ++i) {
+      if (ds[i] < 0) {
+        bounds.push_back(-ds[i]);
+        dynamic.push_back(true);
+      } else {
+        bounds.push_back(ds[i]);
+        dynamic.push_back(false);
+      }
+    }
+    shape = ShapeUtil::MakeShape((PrimitiveType)pr_type, absl::Span<const long int>(bounds.data(), bounds.size()), dynamic);
+  } else {
+    shape = ShapeUtil::MakeShape((PrimitiveType)pr_type, absl::Span<const long int>(ds, dsize));
+  }
+  return new XlaOp(Parameter(b, id, shape, std::string(name)));
 }
 
 xla_op op_add(const xla_op lhs, const xla_op rhs) {
@@ -464,6 +488,7 @@ status compile(const pjrt_client client, const xla_computation computation, pjrt
 
 status execute(const pjrt_loaded_executable exe, const pjrt_buffer *inputs, int ninputs, pjrt_buffer ***outputs) {
   ExecuteOptions options;
+  options.strict_shape_checking = false;
   std::vector<PjRtBuffer*> input_buffer_ptrs;
   for (int i = 0; i < ninputs; ++i) {
     input_buffer_ptrs.push_back(inputs[i]);

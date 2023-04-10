@@ -30,7 +30,7 @@ fn sum_op() -> Result<()> {
     assert_eq!(result.to_vec::<f32>()?, [4.2, 1.337]);
 
     let builder = xla::XlaBuilder::new("test");
-    let x = builder.parameter(0, f32::PRIMITIVE_TYPE, &[2], "x");
+    let x = builder.parameter(0, f32::PRIMITIVE_TYPE, &[-2], "x");
     let sum = x.sum(&[0])?.build()?.compile(&client)?;
     let input = xla::Literal::vec(&[4.2f32, 1.337f32]);
     let result = sum.execute_literal::<xla::Literal>(&[input])?;
