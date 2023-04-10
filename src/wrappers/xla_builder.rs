@@ -1,4 +1,6 @@
-use super::{handle_status, FromPrimitive, Literal, NativeType, Shape, XlaComputation, XlaOp};
+use super::{
+    handle_status, FromPrimitive, Literal, NativeType, PrimitiveType, Shape, XlaComputation, XlaOp,
+};
 use crate::{c_lib, Error, Result};
 use std::rc::Rc;
 
@@ -35,18 +37,28 @@ impl XlaBuilder {
         XlaOp { op, builder: self.clone() }
     }
 
-    pub fn parameter(&self, id: i64, shape: &Shape, name: &str) -> XlaOp {
+    pub fn parameter(
+        &self,
+        parameter_number: i64,
+        element_type: PrimitiveType,
+        dims: &[i64],
+        name: &str,
+    ) -> XlaOp {
         let op = unsafe {
             c_lib::parameter(
                 self.ptr(),
-                id,
-                shape.element_type as i32,
-                shape.dimensions.len() as i32,
-                shape.dimensions.as_ptr(),
+                parameter_number,
+                element_type as i32,
+                dims.len() as i32,
+                dims.as_ptr(),
                 name.as_ptr() as *const libc::c_char,
             )
         };
         XlaOp { op, builder: self.clone() }
+    }
+
+    pub fn parameter_with_shape(&self, parameter_number: i64, shape: &Shape, name: &str) -> XlaOp {
+        self.parameter(parameter_number, shape.element_type, &shape.dimensions, name)
     }
 
     pub fn constant_r1c<T: NativeType>(&self, f: T, len: usize) -> XlaOp {
@@ -56,6 +68,11 @@ impl XlaBuilder {
 
     pub fn constant_r1<T: NativeType>(&self, f: &[T]) -> XlaOp {
         let op = unsafe { T::constant_r1(self.ptr(), f.as_ptr(), f.len()) };
+        XlaOp { op, builder: self.clone() }
+    }
+
+    pub fn zero(&self, element_type: super::PrimitiveType) -> XlaOp {
+        let op = unsafe { c_lib::op_zero(self.ptr(), element_type as i32) };
         XlaOp { op, builder: self.clone() }
     }
 
@@ -84,6 +101,13 @@ impl XlaBuilder {
             None => Err(Error::UnexpectedElementType(element_type)),
             Some(element_type) => Ok(Shape { element_type, dimensions }),
         }
+    }
+
+    pub fn get_element_type(&self, op: &XlaOp) -> Result<super::PrimitiveType> {
+        let mut element_type = 0i32;
+        let status = unsafe { c_lib::get_element_type(self.ptr(), op.op, &mut element_type) };
+        handle_status(status)?;
+        FromPrimitive::from_i32(element_type).ok_or(Error::UnexpectedElementType(element_type))
     }
 }
 

@@ -1,5 +1,5 @@
 use super::{PrimitiveType, Shape, XlaBuilder, XlaComputation};
-use crate::c_lib;
+use crate::{c_lib, Result};
 
 pub struct XlaOp {
     pub(super) op: c_lib::xla_op,
@@ -153,6 +153,29 @@ impl XlaOp {
         let op =
             unsafe { c_lib::op_reduce(self.op, init_value.op, comp.0, dims.as_ptr(), dims.len()) };
         self.wrap(op)
+    }
+
+    pub fn element_type(&self) -> Result<PrimitiveType> {
+        self.builder.get_element_type(self)
+    }
+
+    pub fn shape(&self) -> Result<Shape> {
+        self.builder.get_shape(self)
+    }
+
+    // TODO: Maybe this should return [Self] rather than [Result<Self>] and encode possible errors
+    // in the XlaOp?
+    pub fn sum(&self, dims: &[i64]) -> Result<Self> {
+        let et = self.element_type()?;
+        let x = self.builder.parameter(0, et, &[], "x");
+        let y = self.builder.parameter(1, et, &[], "y");
+        let sum = x.add(&y).build()?;
+        let init_value = self.builder.zero(et);
+        Ok(self.reduce(init_value, sum, dims))
+    }
+
+    pub fn build(&self) -> Result<XlaComputation> {
+        self.builder.build(self)
     }
 }
 

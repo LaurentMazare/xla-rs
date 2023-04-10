@@ -404,6 +404,10 @@ xla_op op_invalid_argument_error(const xla_builder b, const char* error) {
   return new XlaOp(b->ReportError(tsl::errors::InvalidArgument(error)));
 }
 
+xla_op op_zero(const xla_builder b, int pr_type) {
+  return new XlaOp(Zero(b, (PrimitiveType)pr_type));
+}
+
 xla_builder op_builder(const xla_op arg) {
   return arg->builder();
 }
@@ -435,6 +439,12 @@ void shape_free(shape s) {
 status get_shape(const xla_builder b, const xla_op o, shape *out_shape) {
   ASSIGN_OR_RETURN_STATUS(shape, b->GetShape(*o));
   *out_shape = new Shape(shape);
+  return nullptr;
+}
+
+status get_element_type(const xla_builder b, const xla_op o, int *out_element_type) {
+  ASSIGN_OR_RETURN_STATUS(shape, b->GetShape(*o));
+  *out_element_type = shape.element_type();
   return nullptr;
 }
 

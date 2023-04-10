@@ -109,6 +109,7 @@ xla_op op_neg(const xla_op);
 xla_op op_copy(const xla_op);
 xla_op op_zeros_like(const xla_op);
 xla_op op_zero_like(const xla_op);
+xla_op op_zero(const xla_builder, int);
 xla_op op_reshape(const xla_op, size_t, const int64_t*);
 xla_op op_broadcast(const xla_op, size_t, const int64_t*);
 xla_op op_collapse(const xla_op, size_t, const int64_t*);
@@ -135,6 +136,7 @@ int64_t shape_dimensions(const shape, int);
 void shape_free(shape);
 
 status get_shape(const xla_builder, const xla_op, shape*);
+status get_element_type(const xla_builder, const xla_op, int*);
 
 status build(const xla_builder, const xla_op, xla_computation*);
 status compile(const pjrt_client, const xla_computation, pjrt_loaded_executable*);
