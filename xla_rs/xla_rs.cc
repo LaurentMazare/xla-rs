@@ -15,6 +15,14 @@
   auto statusor = (rexpr); \
   if (!statusor.ok()) return new Status(statusor);
 
+#define BEGIN_PROTECT_OP try {
+#define END_PROTECT_OP_B(builder) } catch (std::exception e) { \
+  return new XlaOp(builder->ReportError(tsl::errors::Internal(e.what()))); \
+}
+#define END_PROTECT_OP(arg) } catch (std::exception e) { \
+  return new XlaOp(arg->builder()->ReportError(tsl::errors::Internal(e.what()))); \
+}
+
 status pjrt_client_create(pjrt_client *output) {
   ASSIGN_OR_RETURN_STATUS(client, xla::GetTfrtCpuClient(false));
   *output = client.release();
@@ -149,7 +157,9 @@ void xla_builder_free(xla_builder b) {
 }
 
 xla_op constant_literal(const xla_builder b, const literal l) {
+  BEGIN_PROTECT_OP
   return new XlaOp(ConstantLiteral(b, *l));
+  END_PROTECT_OP_B(b)
 }
 
 #define CONST_OP_R01(native_type, primitive_type) \
@@ -176,6 +186,7 @@ FOR_EACH_NATIVE_TYPE(CONST_OP_R01)
 #undef CONST_OP_R01
 
 xla_op parameter(const xla_builder b, int64_t id, int pr_type, int dsize, const long int *ds, const char *name) {
+  BEGIN_PROTECT_OP
   bool has_negative_dim = false;
   for (int i = 0; i < dsize; ++i) {
     if (ds[i] < 0) {
@@ -201,279 +212,410 @@ xla_op parameter(const xla_builder b, int64_t id, int pr_type, int dsize, const 
     shape = ShapeUtil::MakeShape((PrimitiveType)pr_type, absl::Span<const long int>(ds, dsize));
   }
   return new XlaOp(Parameter(b, id, shape, std::string(name)));
+  END_PROTECT_OP_B(b)
 }
 
 xla_op op_add(const xla_op lhs, const xla_op rhs) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Add(*lhs, *rhs));
+  END_PROTECT_OP(lhs)
 }
 
 xla_op op_sub(const xla_op lhs, const xla_op rhs) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Sub(*lhs, *rhs));
+  END_PROTECT_OP(lhs)
 }
 
 xla_op op_mul(const xla_op lhs, const xla_op rhs) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Mul(*lhs, *rhs));
+  END_PROTECT_OP(lhs)
 }
 
 xla_op op_div(const xla_op lhs, const xla_op rhs) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Div(*lhs, *rhs));
+  END_PROTECT_OP(lhs)
 }
 
 xla_op op_rem(const xla_op lhs, const xla_op rhs) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Rem(*lhs, *rhs));
+  END_PROTECT_OP(lhs)
 }
 
 xla_op op_max(const xla_op lhs, const xla_op rhs) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Max(*lhs, *rhs));
+  END_PROTECT_OP(lhs)
 }
 
 xla_op op_min(const xla_op lhs, const xla_op rhs) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Min(*lhs, *rhs));
+  END_PROTECT_OP(lhs)
 }
 
 xla_op op_and(const xla_op lhs, const xla_op rhs) {
+  BEGIN_PROTECT_OP
   return new XlaOp(And(*lhs, *rhs));
+  END_PROTECT_OP(lhs)
 }
 
 xla_op op_or(const xla_op lhs, const xla_op rhs) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Or(*lhs, *rhs));
+  END_PROTECT_OP(lhs)
 }
 
 xla_op op_xor(const xla_op lhs, const xla_op rhs) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Xor(*lhs, *rhs));
+  END_PROTECT_OP(lhs)
 }
 
 xla_op op_atan2(const xla_op lhs, const xla_op rhs) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Atan2(*lhs, *rhs));
+  END_PROTECT_OP(lhs)
 }
 
 xla_op op_pow(const xla_op lhs, const xla_op rhs) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Pow(*lhs, *rhs));
+  END_PROTECT_OP(lhs)
 }
 
 xla_op op_dot(const xla_op lhs, const xla_op rhs) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Dot(*lhs, *rhs));
+  END_PROTECT_OP(lhs)
 }
 
 xla_op op_eq(const xla_op lhs, const xla_op rhs) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Eq(*lhs, *rhs));
+  END_PROTECT_OP(lhs)
 }
 
 xla_op op_ne(const xla_op lhs, const xla_op rhs) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Ne(*lhs, *rhs));
+  END_PROTECT_OP(lhs)
 }
 
 xla_op op_ge(const xla_op lhs, const xla_op rhs) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Ge(*lhs, *rhs));
+  END_PROTECT_OP(lhs)
 }
 
 xla_op op_gt(const xla_op lhs, const xla_op rhs) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Gt(*lhs, *rhs));
+  END_PROTECT_OP(lhs)
 }
 
 xla_op op_le(const xla_op lhs, const xla_op rhs) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Le(*lhs, *rhs));
+  END_PROTECT_OP(lhs)
 }
 
 xla_op op_lt(const xla_op lhs, const xla_op rhs) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Lt(*lhs, *rhs));
+  END_PROTECT_OP(lhs)
 }
 
 xla_op op_not(const xla_op arg) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Not(*arg));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_abs(const xla_op arg) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Abs(*arg));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_exp(const xla_op arg) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Exp(*arg));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_expm1(const xla_op arg) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Expm1(*arg));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_floor(const xla_op arg) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Floor(*arg));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_ceil(const xla_op arg) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Ceil(*arg));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_round(const xla_op arg) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Round(*arg));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_log(const xla_op arg) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Log(*arg));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_log1p(const xla_op arg) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Log1p(*arg));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_logistic(const xla_op arg) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Logistic(*arg));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_sign(const xla_op arg) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Sign(*arg));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_clz(const xla_op arg) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Clz(*arg));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_cos(const xla_op arg) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Cos(*arg));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_sin(const xla_op arg) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Sin(*arg));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_tanh(const xla_op arg) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Tanh(*arg));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_real(const xla_op arg) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Real(*arg));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_imag(const xla_op arg) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Imag(*arg));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_sqrt(const xla_op arg) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Sqrt(*arg));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_rsqrt(const xla_op arg) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Rsqrt(*arg));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_cbrt(const xla_op arg) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Cbrt(*arg));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_is_finite(const xla_op arg) {
+  BEGIN_PROTECT_OP
   return new XlaOp(IsFinite(*arg));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_neg(const xla_op arg) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Neg(*arg));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_copy(const xla_op arg) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Copy(*arg));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_clone(const xla_op arg) {
+  BEGIN_PROTECT_OP
   return new XlaOp(*arg);
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_zeros_like(const xla_op arg) {
+  BEGIN_PROTECT_OP
   return new XlaOp(ZerosLike(*arg));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_zero_like(const xla_op arg) {
+  BEGIN_PROTECT_OP
   const Shape* shape = arg->builder()->GetShapePtr(*arg).value();
   return new XlaOp(Zero(arg->builder(), shape->element_type()));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_reshape(const xla_op arg, size_t dsize, const int64_t *ds) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Reshape(*arg, absl::Span<const int64_t>(ds, dsize)));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_broadcast(const xla_op arg, size_t dsize, const int64_t *ds) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Broadcast(*arg, absl::Span<const int64_t>(ds, dsize)));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_collapse(const xla_op arg, size_t dsize, const int64_t *ds) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Collapse(*arg, absl::Span<const int64_t>(ds, dsize)));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_transpose(const xla_op arg, size_t dsize, const int64_t *ds) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Transpose(*arg, absl::Span<const int64_t>(ds, dsize)));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_clamp(const xla_op arg1, const xla_op arg2, const xla_op arg3) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Clamp(*arg1, *arg2, *arg3));
+  END_PROTECT_OP(arg1)
 }
 
 xla_op op_select(const xla_op arg1, const xla_op arg2, const xla_op arg3) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Select(*arg1, *arg2, *arg3));
+  END_PROTECT_OP(arg1)
 }
 
 xla_op op_rng_uniform(const xla_op arg1, const xla_op arg2, int pr_type, int dsize, const int64_t *ds) {
+  BEGIN_PROTECT_OP
   auto shape = ShapeUtil::MakeShape(
       (PrimitiveType)pr_type,
       absl::Span<const long int>(ds, dsize)
   );
   return new XlaOp(RngUniform(*arg1, *arg2, shape));
+  END_PROTECT_OP(arg1)
 }
 
 xla_op op_rng_normal(const xla_op arg1, const xla_op arg2, int pr_type, int dsize, const int64_t *ds) {
+  BEGIN_PROTECT_OP
   auto shape = ShapeUtil::MakeShape(
       (PrimitiveType)pr_type,
       absl::Span<const long int>(ds, dsize)
   );
   return new XlaOp(RngNormal(*arg1, *arg2, shape));
+  END_PROTECT_OP(arg1)
 }
 
 xla_op op_slice_in_dim(const xla_op arg, int64_t start, int64_t stop, int64_t stride, int64_t dim) {
+  BEGIN_PROTECT_OP
   return new XlaOp(SliceInDim(*arg, start, stop, stride, dim));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_concat_in_dim(const xla_op arg, const xla_op *args, size_t nargs, int64_t dim) {
+  BEGIN_PROTECT_OP
   std::vector<XlaOp> args_ = { *arg };
   for (size_t i = 0; i < nargs; ++i) {
     args_.push_back(*args[i]);
   }
   return new XlaOp(ConcatInDim(arg->builder(), absl::Span<const XlaOp>(args_), dim));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_convert_element_type(const xla_op arg, int pr_type) {
+  BEGIN_PROTECT_OP
   return new XlaOp(ConvertElementType(*arg, (PrimitiveType)pr_type));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_dimension_size(const xla_op arg, int64_t dim) {
+  BEGIN_PROTECT_OP
   return new XlaOp(GetDimensionSize(*arg, dim));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_reduce(const xla_op arg, const xla_op init, const xla_computation comp, const int64_t* dims, size_t ndims) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Reduce(*arg, *init, *comp, absl::Span<const int64_t>(dims, ndims)));
+  END_PROTECT_OP(arg)
 }
 
 xla_op op_internal_error(const xla_builder b, const char* error) {
+  BEGIN_PROTECT_OP
   return new XlaOp(b->ReportError(tsl::errors::Internal(error)));
+  END_PROTECT_OP_B(b)
 }
 
 xla_op op_unknown_error(const xla_builder b, const char* error) {
+  BEGIN_PROTECT_OP
   return new XlaOp(b->ReportError(tsl::errors::Unknown(error)));
+  END_PROTECT_OP_B(b)
 }
 
 xla_op op_invalid_argument_error(const xla_builder b, const char* error) {
+  BEGIN_PROTECT_OP
   return new XlaOp(b->ReportError(tsl::errors::InvalidArgument(error)));
+  END_PROTECT_OP_B(b)
 }
 
 xla_op op_zero(const xla_builder b, int pr_type) {
+  BEGIN_PROTECT_OP
   return new XlaOp(Zero(b, (PrimitiveType)pr_type));
+  END_PROTECT_OP_B(b)
 }
 
 xla_op op_one(const xla_builder b, int pr_type) {
+  BEGIN_PROTECT_OP
   return new XlaOp(One(b, (PrimitiveType)pr_type));
+  END_PROTECT_OP_B(b)
 }
 
 xla_op op_min_value(const xla_builder b, int pr_type) {
+  BEGIN_PROTECT_OP
   return new XlaOp(MinValue(b, (PrimitiveType)pr_type));
+  END_PROTECT_OP_B(b)
 }
 
 xla_op op_max_value(const xla_builder b, int pr_type) {
+  BEGIN_PROTECT_OP
   return new XlaOp(MaxValue(b, (PrimitiveType)pr_type));
+  END_PROTECT_OP_B(b)
 }
 
 xla_builder op_builder(const xla_op arg) {
