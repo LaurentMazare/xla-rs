@@ -89,8 +89,7 @@ impl CausalSelfAttention {
             * builder.c0(1f32 / (k_shape.last_dim().unwrap() as f32).sqrt());
         let bias = self.bias.slice_in_dim(0, t, 1, 2).slice_in_dim(0, t, 1, 3);
         let att = masked_fill(&att, &bias.eq(&builder.c0(0f32)), f32::NEG_INFINITY)?;
-        // TODO: softmax
-        let y = att.dot(&v);
+        let y = att.softmax(-1).dot(&v);
         let y = y.transpose(&[1, 2]).reshape(x_shape.dimensions());
         let y = self.c_proj.forward(&y);
         Ok(y)

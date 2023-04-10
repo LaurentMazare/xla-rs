@@ -117,6 +117,7 @@ xla_op op_clone(const xla_op);
 xla_op op_zeros_like(const xla_op);
 xla_op op_zero_like(const xla_op);
 xla_op op_zero(const xla_builder, int);
+xla_op op_one(const xla_builder, int);
 xla_op op_min_value(const xla_builder, int);
 xla_op op_max_value(const xla_builder, int);
 xla_op op_reshape(const xla_op, size_t, const int64_t*);

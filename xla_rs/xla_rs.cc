@@ -464,6 +464,10 @@ xla_op op_zero(const xla_builder b, int pr_type) {
   return new XlaOp(Zero(b, (PrimitiveType)pr_type));
 }
 
+xla_op op_one(const xla_builder b, int pr_type) {
+  return new XlaOp(One(b, (PrimitiveType)pr_type));
+}
+
 xla_op op_min_value(const xla_builder b, int pr_type) {
   return new XlaOp(MinValue(b, (PrimitiveType)pr_type));
 }

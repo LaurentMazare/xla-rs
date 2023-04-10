@@ -1,3 +1,4 @@
+/// For details on the semantics, see https://www.tensorflow.org/xla/operation_semantics
 use super::{PrimitiveType, Shape, XlaBuilder, XlaComputation};
 use crate::{c_lib, Result};
 
@@ -207,6 +208,24 @@ impl XlaOp {
         }
     }
 
+    pub fn reduce_mean_e(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
+        let b = &self.builder();
+        let et = self.element_type()?;
+        let mut scale = b.one(et);
+        for d in dims.iter() {
+            scale = scale * self.dimension_size(*d);
+        }
+        let sum = self.reduce_sum_e(dims, keep_dims)?;
+        Ok(sum / scale.convert_element_type(et))
+    }
+
+    pub fn reduce_mean(&self, dims: &[i64], keep_dims: bool) -> Self {
+        match self.reduce_mean_e(dims, keep_dims) {
+            Ok(op) => op,
+            Err(err) => self.builder().internal_error(&format!("reduce_mean: {err:?}")),
+        }
+    }
+
     pub fn reduce_max_e(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
         let builder = XlaBuilder::new("Max");
         let et = self.element_type()?;
@@ -241,6 +260,19 @@ impl XlaOp {
             Ok(op) => op,
             Err(err) => self.builder().internal_error(&format!("reduce_min: {err:?}")),
         }
+    }
+
+    pub fn softmax(&self, dim: i64) -> Self {
+        let max = self.reduce_max(&[dim], true);
+        let unnormalized = (self - max).exp();
+        let sum = unnormalized.reduce_sum(&[dim], true);
+        unnormalized / sum
+    }
+
+    pub fn layer_norm(&self, dim: i64) -> Self {
+        let demeaned = self - self.reduce_mean(&[dim], true);
+        let scale = (&demeaned * &demeaned).reduce_mean(&[dim], true).rsqrt();
+        demeaned * scale
     }
 
     pub fn build(&self) -> Result<XlaComputation> {

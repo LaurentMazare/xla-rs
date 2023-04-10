@@ -84,6 +84,11 @@ impl XlaBuilder {
         XlaOp { op, builder: self.clone() }
     }
 
+    pub fn one(&self, element_type: super::PrimitiveType) -> XlaOp {
+        let op = unsafe { c_lib::op_one(self.ptr(), element_type as i32) };
+        XlaOp { op, builder: self.clone() }
+    }
+
     pub fn min_value(&self, element_type: super::PrimitiveType) -> XlaOp {
         let op = unsafe { c_lib::op_min_value(self.ptr(), element_type as i32) };
         XlaOp { op, builder: self.clone() }
