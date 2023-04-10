@@ -255,6 +255,30 @@ xla_op op_dot(const xla_op lhs, const xla_op rhs) {
   return new XlaOp(Dot(*lhs, *rhs));
 }
 
+xla_op op_eq(const xla_op lhs, const xla_op rhs) {
+  return new XlaOp(Eq(*lhs, *rhs));
+}
+
+xla_op op_ne(const xla_op lhs, const xla_op rhs) {
+  return new XlaOp(Ne(*lhs, *rhs));
+}
+
+xla_op op_ge(const xla_op lhs, const xla_op rhs) {
+  return new XlaOp(Ge(*lhs, *rhs));
+}
+
+xla_op op_gt(const xla_op lhs, const xla_op rhs) {
+  return new XlaOp(Gt(*lhs, *rhs));
+}
+
+xla_op op_le(const xla_op lhs, const xla_op rhs) {
+  return new XlaOp(Le(*lhs, *rhs));
+}
+
+xla_op op_lt(const xla_op lhs, const xla_op rhs) {
+  return new XlaOp(Lt(*lhs, *rhs));
+}
+
 xla_op op_not(const xla_op arg) {
   return new XlaOp(Not(*arg));
 }

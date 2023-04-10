@@ -53,6 +53,12 @@ impl XlaOp {
     binary_op!(atan2, c_lib::op_atan2);
     binary_op!(pow, c_lib::op_pow);
     binary_op!(dot, c_lib::op_dot);
+    binary_op!(eq, c_lib::op_add);
+    binary_op!(ne, c_lib::op_add);
+    binary_op!(ge, c_lib::op_add);
+    binary_op!(gt, c_lib::op_add);
+    binary_op!(le, c_lib::op_add);
+    binary_op!(lt, c_lib::op_add);
 
     unary_op!(not, c_lib::op_not);
     unary_op!(abs, c_lib::op_abs);

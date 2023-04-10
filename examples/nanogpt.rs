@@ -66,14 +66,15 @@ struct CausalSelfAttention {
     c_proj: Linear,
     n_head: usize,
     n_embd: usize,
+    bias: XlaOp,
 }
 
 impl CausalSelfAttention {
     #[allow(dead_code)]
     fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
+        let builder = x.builder();
         let x_shape = x.shape()?;
-        // TODO: extract shapes from x
-        let (b, t, c) = (0, 0, 0);
+        let (b, t, c) = <(i64, i64, i64)>::try_from(&x_shape)?;
         let qkv = self.c_attn.forward(x);
         let n_embd = self.n_embd as i64;
         let q = qkv.slice_in_dim(0, n_embd, 1, 2);
@@ -83,11 +84,13 @@ impl CausalSelfAttention {
         let k = k.reshape(&target_dim).transpose(&[1, 2]);
         let q = q.reshape(&target_dim).transpose(&[1, 2]);
         let v = v.reshape(&target_dim).transpose(&[1, 2]);
+        let k_shape = k.shape()?;
         // TODO divide by sqrt(k.size[-1])
-        let att = q.dot(&k.transpose(&[-2, -1]));
+        let att = q.dot(&k.transpose(&[-2, -1]))
+            * builder.c0(1f32 / (k_shape.last_dim().unwrap() as f32).sqrt());
         // TODO: bias + indexing
-        let bias = &att;
-        let att = masked_fill(&att, bias, f32::NEG_INFINITY)?;
+        let bias = self.bias.slice_in_dim(0, t, 1, 2).slice_in_dim(0, t, 1, 3);
+        let att = masked_fill(&att, &bias.eq(&builder.c0(0f32)), f32::NEG_INFINITY)?;
         // TODO: softmax
         let y = att.dot(&v);
         let y = y.transpose(&[1, 2]).reshape(x_shape.dimensions());

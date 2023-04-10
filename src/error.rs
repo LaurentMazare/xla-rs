@@ -12,6 +12,9 @@ pub enum Error {
     #[error("unexpected element type {0}")]
     UnexpectedElementType(i32),
 
+    #[error("unexpected number of dimensions, expected: {expected}, got: {got} ({dims:?})")]
+    UnexpectedNumberOfDims { expected: usize, got: usize, dims: Vec<i64> },
+
     #[error("element type mismatch, on-device: {on_device:?}, on-host: {on_host:?}")]
     ElementTypeMismatch { on_device: crate::PrimitiveType, on_host: crate::PrimitiveType },
 
