@@ -452,12 +452,24 @@ xla_op op_internal_error(const xla_builder b, const char* error) {
   return new XlaOp(b->ReportError(tsl::errors::Internal(error)));
 }
 
+xla_op op_unknown_error(const xla_builder b, const char* error) {
+  return new XlaOp(b->ReportError(tsl::errors::Unknown(error)));
+}
+
 xla_op op_invalid_argument_error(const xla_builder b, const char* error) {
   return new XlaOp(b->ReportError(tsl::errors::InvalidArgument(error)));
 }
 
 xla_op op_zero(const xla_builder b, int pr_type) {
   return new XlaOp(Zero(b, (PrimitiveType)pr_type));
+}
+
+xla_op op_min_value(const xla_builder b, int pr_type) {
+  return new XlaOp(MinValue(b, (PrimitiveType)pr_type));
+}
+
+xla_op op_max_value(const xla_builder b, int pr_type) {
+  return new XlaOp(MaxValue(b, (PrimitiveType)pr_type));
 }
 
 xla_builder op_builder(const xla_op arg) {

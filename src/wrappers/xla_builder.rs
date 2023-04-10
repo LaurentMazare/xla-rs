@@ -84,9 +84,25 @@ impl XlaBuilder {
         XlaOp { op, builder: self.clone() }
     }
 
+    pub fn min_value(&self, element_type: super::PrimitiveType) -> XlaOp {
+        let op = unsafe { c_lib::op_min_value(self.ptr(), element_type as i32) };
+        XlaOp { op, builder: self.clone() }
+    }
+
+    pub fn max_value(&self, element_type: super::PrimitiveType) -> XlaOp {
+        let op = unsafe { c_lib::op_max_value(self.ptr(), element_type as i32) };
+        XlaOp { op, builder: self.clone() }
+    }
+
     pub fn internal_error(&self, msg: &str) -> XlaOp {
         let msg = std::ffi::CString::new(msg).unwrap();
         let op = unsafe { c_lib::op_internal_error(self.ptr(), msg.as_ptr()) };
+        XlaOp { op, builder: self.clone() }
+    }
+
+    pub fn unknown_error(&self, msg: &str) -> XlaOp {
+        let msg = std::ffi::CString::new(msg).unwrap();
+        let op = unsafe { c_lib::op_unknown_error(self.ptr(), msg.as_ptr()) };
         XlaOp { op, builder: self.clone() }
     }
 
@@ -94,6 +110,13 @@ impl XlaBuilder {
         let msg = std::ffi::CString::new(msg).unwrap();
         let op = unsafe { c_lib::op_invalid_argument_error(self.ptr(), msg.as_ptr()) };
         XlaOp { op, builder: self.clone() }
+    }
+
+    pub fn wrap_error(&self, op: Result<XlaOp>) -> XlaOp {
+        match op {
+            Ok(op) => op,
+            Err(err) => self.internal_error(&err.to_string()),
+        }
     }
 
     pub fn get_shape(&self, op: &XlaOp) -> Result<Shape> {

@@ -176,16 +176,71 @@ impl XlaOp {
         self.builder.get_shape(self)
     }
 
-    // TODO: Maybe this should return [Self] rather than [Result<Self>] and encode possible errors
-    // in the XlaOp?
-    pub fn sum(&self, dims: &[i64]) -> Result<Self> {
+    fn maybe_keep_dims(&self, res: XlaOp, dims: &[i64], keep_dims: bool) -> Result<XlaOp> {
+        if keep_dims && !dims.is_empty() {
+            let shape = self.shape()?;
+            let mut dimensions = shape.dimensions().to_vec();
+            for d in dims.iter() {
+                dimensions[*d as usize] = 1;
+            }
+            Ok(res.reshape(&dimensions))
+        } else {
+            Ok(res)
+        }
+    }
+
+    pub fn reduce_sum_e(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
         let builder = XlaBuilder::new("Sum");
         let et = self.element_type()?;
         let x = builder.parameter(0, et, &[], "x");
         let y = builder.parameter(1, et, &[], "y");
         let sum = x.add_(&y).build()?;
         let init_value = self.builder.zero(et);
-        Ok(self.reduce(init_value, sum, dims))
+        let res = self.reduce(init_value, sum, dims);
+        self.maybe_keep_dims(res, dims, keep_dims)
+    }
+
+    pub fn reduce_sum(&self, dims: &[i64], keep_dims: bool) -> Self {
+        match self.reduce_sum_e(dims, keep_dims) {
+            Ok(op) => op,
+            Err(err) => self.builder().internal_error(&format!("reduce_sum: {err:?}")),
+        }
+    }
+
+    pub fn reduce_max_e(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
+        let builder = XlaBuilder::new("Max");
+        let et = self.element_type()?;
+        let x = builder.parameter(0, et, &[], "x");
+        let y = builder.parameter(1, et, &[], "y");
+        let sum = x.max(&y).build()?;
+        let init_value = self.builder.min_value(et);
+        let res = self.reduce(init_value, sum, dims);
+        self.maybe_keep_dims(res, dims, keep_dims)
+    }
+
+    pub fn reduce_max(&self, dims: &[i64], keep_dims: bool) -> Self {
+        match self.reduce_max_e(dims, keep_dims) {
+            Ok(op) => op,
+            Err(err) => self.builder().internal_error(&format!("reduce_max: {err:?}")),
+        }
+    }
+
+    pub fn reduce_min_e(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
+        let builder = XlaBuilder::new("Min");
+        let et = self.element_type()?;
+        let x = builder.parameter(0, et, &[], "x");
+        let y = builder.parameter(1, et, &[], "y");
+        let sum = x.min(&y).build()?;
+        let init_value = self.builder.max_value(et);
+        let res = self.reduce(init_value, sum, dims);
+        self.maybe_keep_dims(res, dims, keep_dims)
+    }
+
+    pub fn reduce_min(&self, dims: &[i64], keep_dims: bool) -> Self {
+        match self.reduce_min_e(dims, keep_dims) {
+            Ok(op) => op,
+            Err(err) => self.builder().internal_error(&format!("reduce_min: {err:?}")),
+        }
     }
 
     pub fn build(&self) -> Result<XlaComputation> {
