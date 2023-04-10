@@ -8,6 +8,7 @@
 #pragma GCC diagnostic ignored "-Wreturn-type"
 #include "tensorflow/compiler/xla/client/client_library.h"
 #include "tensorflow/compiler/xla/client/lib/constants.h"
+#include "tensorflow/compiler/xla/client/lib/matrix.h"
 #include "tensorflow/compiler/xla/client/xla_builder.h"
 #include "tensorflow/compiler/xla/pjrt/tfrt_cpu_pjrt_client.h"
 #include "tensorflow/compiler/xla/pjrt/pjrt_client.h"
@@ -112,6 +113,10 @@ xla_op op_rsqrt(const xla_op);
 xla_op op_cbrt(const xla_op);
 xla_op op_is_finite(const xla_op);
 xla_op op_neg(const xla_op);
+xla_op op_lower_triangle(const xla_op);
+xla_op op_upper_triangle(const xla_op);
+xla_op op_einsum1(const xla_op, const char*);
+xla_op op_einsum2(const xla_op, const xla_op, const char*);
 xla_op op_copy(const xla_op);
 xla_op op_clone(const xla_op);
 xla_op op_zeros_like(const xla_op);

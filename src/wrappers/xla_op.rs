@@ -83,8 +83,22 @@ impl XlaOp {
     unary_op!(cbrt, c_lib::op_cbrt);
     unary_op!(is_finite, c_lib::op_is_finite);
     unary_op!(neg, c_lib::op_neg);
+    unary_op!(lower_triangle, c_lib::op_lower_triangle);
+    unary_op!(upper_triangle, c_lib::op_upper_triangle);
     unary_op!(copy, c_lib::op_copy);
     unary_op!(zeros_like, c_lib::op_zeros_like);
+
+    pub fn einsum1(&self, config: &str) -> Self {
+        let config = std::ffi::CString::new(config).unwrap();
+        let op = unsafe { c_lib::op_einsum1(self.op, config.as_ptr()) };
+        self.wrap(op)
+    }
+
+    pub fn einsum2(&self, rhs: &XlaOp, config: &str) -> Self {
+        let config = std::ffi::CString::new(config).unwrap();
+        let op = unsafe { c_lib::op_einsum2(self.op, rhs.op, config.as_ptr()) };
+        self.wrap(op)
+    }
 
     pub fn reshape(&self, dims: &[i64]) -> Self {
         let op = unsafe { c_lib::op_reshape(self.op, dims.len(), dims.as_ptr()) };

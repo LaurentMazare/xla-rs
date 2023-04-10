@@ -461,6 +461,30 @@ xla_op op_neg(const xla_op arg) {
   END_PROTECT_OP(arg)
 }
 
+xla_op op_lower_triangle(const xla_op arg) {
+  BEGIN_PROTECT_OP
+  return new XlaOp(LowerTriangle(*arg));
+  END_PROTECT_OP(arg)
+}
+
+xla_op op_upper_triangle(const xla_op arg) {
+  BEGIN_PROTECT_OP
+  return new XlaOp(UpperTriangle(*arg));
+  END_PROTECT_OP(arg)
+}
+
+xla_op op_einsum1(const xla_op arg, const char *config) {
+  BEGIN_PROTECT_OP
+  return new XlaOp(Einsum(*arg, config));
+  END_PROTECT_OP(arg)
+}
+
+xla_op op_einsum2(const xla_op arg1, const xla_op arg2, const char *config) {
+  BEGIN_PROTECT_OP
+  return new XlaOp(Einsum(*arg1, *arg2, config));
+  END_PROTECT_OP(arg1)
+}
+
 xla_op op_copy(const xla_op arg) {
   BEGIN_PROTECT_OP
   return new XlaOp(Copy(*arg));
