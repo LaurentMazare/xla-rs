@@ -236,7 +236,7 @@ impl XlaOp {
         }
         let axis = if axis < 0 { axis + ndims as i64 } else { axis };
         let offset_dims: Vec<_> =
-            dims.iter().filter_map(|&x| if x == axis { None } else { Some(x) }).collect();
+            (0..dims.len() as i64).filter_map(|x| if x == axis { None } else { Some(x) }).collect();
         let mut slice_sizes: Vec<_> = dims.to_vec();
         slice_sizes[axis as usize] = 1;
         self.gather(indices, &offset_dims, &[axis], &[axis], None, &slice_sizes)

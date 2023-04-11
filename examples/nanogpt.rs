@@ -20,9 +20,9 @@ struct Embedding {
 }
 
 impl Embedding {
-    fn new(_vocab_size: usize, _n_embd: usize) -> Self {
+    fn new(vocab_size: usize, n_embd: usize) -> Self {
         // TODO
-        let embeddings = Literal::scalar(0f32);
+        let embeddings = Literal::create_from_shape(ET, &[vocab_size, n_embd]);
         Self { embeddings }
     }
 
@@ -38,10 +38,10 @@ struct LayerNorm {
 }
 
 impl LayerNorm {
-    fn new(_vs: usize) -> Self {
+    fn new(size: usize) -> Self {
         // TODO
-        let scale = Literal::scalar(0f32);
-        let bias = Literal::scalar(0f32);
+        let scale = Literal::create_from_shape(ET, &[size]);
+        let bias = Literal::create_from_shape(ET, &[size]);
         Self { scale, bias }
     }
 
@@ -59,10 +59,10 @@ struct Linear {
 }
 
 impl Linear {
-    fn new(_dim1: usize, _dim2: usize) -> Self {
+    fn new(in_size: usize, out_size: usize) -> Self {
         // TODO
-        let ws = Literal::scalar(0f32);
-        let bs = Literal::scalar(0f32);
+        let ws = Literal::create_from_shape(ET, &[in_size, out_size]);
+        let bs = Literal::create_from_shape(ET, &[out_size]);
         Self { ws, bs: Some(bs) }
     }
 
@@ -204,7 +204,7 @@ impl Gpt {
         let x_shape = x.shape()?;
         let (_b, t) = <(i64, i64)>::try_from(&x_shape)?;
         let arange: Vec<_> = (0..t).collect();
-        let pos = builder.c1(&arange).convert_element_type(ET);
+        let pos = builder.c1(&arange);
 
         let tok_emb = self.wte.forward(x);
         let pos_emb = self.wpe.forward(&pos);
@@ -220,8 +220,9 @@ impl Gpt {
 
 fn gpt_computation() -> Result<xla::XlaComputation> {
     let b = XlaBuilder::new("gpt");
-    let gpt = Gpt::new(&Default::default())?;
-    let input = b.parameter(0, xla::PrimitiveType::S32, &[], "tokens");
+    let config = GptConfig::default();
+    let gpt = Gpt::new(&config)?;
+    let input = b.parameter(0, xla::PrimitiveType::S32, &[1, config.block_size as i64], "tokens");
     let model = gpt.forward(&input)?;
     Ok(model.build()?)
 }

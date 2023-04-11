@@ -795,6 +795,12 @@ status execute_literal(const pjrt_loaded_executable exe, const literal *inputs, 
   return nullptr;
 }
 
+literal literal_create_from_shape(int pr_type, const int64_t* dims, size_t ndims) {
+  auto shape = ShapeUtil::MakeShape((PrimitiveType)pr_type, absl::Span<const int64_t>(dims, ndims));
+  Literal l = Literal::CreateFromShape(shape);
+  return new Literal(std::move(l));
+}
+
 int64_t literal_element_count(const literal l) {
   return l->element_count();
 }

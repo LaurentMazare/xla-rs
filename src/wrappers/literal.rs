@@ -4,6 +4,14 @@ use crate::{c_lib, Error, Result};
 pub struct Literal(pub(super) c_lib::literal);
 
 impl Literal {
+    pub fn create_from_shape(element_type: PrimitiveType, dims: &[usize]) -> Self {
+        let dims: Vec<_> = dims.iter().map(|x| *x as i64).collect();
+        let v = unsafe {
+            c_lib::literal_create_from_shape(element_type as i32, dims.as_ptr(), dims.len())
+        };
+        Self(v)
+    }
+
     pub fn get_first_element<T: NativeType + ElementType>(&self) -> Result<T> {
         let element_type = self.element_type()?;
         if element_type != T::PRIMITIVE_TYPE {

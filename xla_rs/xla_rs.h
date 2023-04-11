@@ -162,6 +162,7 @@ status execute_literal(const pjrt_loaded_executable, const literal *, int, pjrt_
 status first_error(const xla_builder);
 status get_current_status(const xla_builder);
 
+literal literal_create_from_shape(int, const int64_t*, size_t);
 int64_t literal_element_count(const literal);
 int literal_element_type(const literal);
 void literal_shape(const literal, shape*);
