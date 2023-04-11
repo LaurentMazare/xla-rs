@@ -27,6 +27,18 @@ impl XlaBuilder {
         Ok(XlaComputation(result))
     }
 
+    pub fn first_error(&self) -> Result<()> {
+        let status = unsafe { c_lib::first_error(self.ptr()) };
+        handle_status(status)?;
+        Ok(())
+    }
+
+    pub fn get_current_status(&self) -> Result<()> {
+        let status = unsafe { c_lib::get_current_status(self.ptr()) };
+        handle_status(status)?;
+        Ok(())
+    }
+
     pub fn constant_literal(&self, literal: Literal) -> XlaOp {
         let op = unsafe { c_lib::constant_literal(self.ptr(), literal.0) };
         XlaOp { op, builder: self.clone() }

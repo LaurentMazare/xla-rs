@@ -283,10 +283,14 @@ impl XlaOp {
         unnormalized / sum
     }
 
-    pub fn layer_norm(&self, dim: i64) -> Self {
-        let demeaned = self - self.reduce_mean(&[dim], true);
-        let scale = (&demeaned * &demeaned).reduce_mean(&[dim], true).rsqrt();
-        demeaned * scale
+    pub fn layer_norm(&self, dim: i64, scale: &XlaOp, bias: &XlaOp) -> Self {
+        let et = self.element_type().unwrap_or(PrimitiveType::F32);
+        let eps = self.builder().c0(1e-5).convert_element_type(et);
+        let mean = self.reduce_mean(&[dim], true);
+        let mean2 = (self * self).reduce_mean(&[dim], true);
+        let var = mean2 - &mean * &mean;
+        let mul = (var + eps).rsqrt();
+        (self - mean) * mul * scale + bias
     }
 
     pub fn build(&self) -> Result<XlaComputation> {

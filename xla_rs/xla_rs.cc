@@ -696,6 +696,16 @@ status compile(const pjrt_client client, const xla_computation computation, pjrt
   return nullptr;
 }
 
+status first_error(const xla_builder b) {
+  MAYBE_RETURN_STATUS(b->first_error());
+  return nullptr;
+}
+
+status get_current_status(const xla_builder b) {
+  MAYBE_RETURN_STATUS(b->GetCurrentStatus());
+  return nullptr;
+}
+
 status execute(const pjrt_loaded_executable exe, const pjrt_buffer *inputs, int ninputs, pjrt_buffer ***outputs) {
   ExecuteOptions options;
   options.strict_shape_checking = false;

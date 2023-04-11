@@ -5,6 +5,8 @@ use anyhow::Result;
 extern crate xla;
 use xla::{Literal, XlaBuilder, XlaOp};
 
+const ET: xla::PrimitiveType = xla::PrimitiveType::F32;
+
 #[allow(dead_code)]
 fn new_gelu(x: &XlaOp) -> XlaOp {
     let b = x.builder();
@@ -26,13 +28,15 @@ impl Embedding {
 }
 
 #[allow(dead_code)]
-struct LayerNorm;
+struct LayerNorm {
+    scale: XlaOp,
+    bias: XlaOp,
+}
 
 impl LayerNorm {
     #[allow(dead_code)]
-    fn forward(&self, input: &XlaOp) -> XlaOp {
-        // TODO
-        input.clone()
+    fn forward(&self, x: &XlaOp) -> XlaOp {
+        x.layer_norm(-1, &self.scale, &self.bias)
     }
 }
 
@@ -66,7 +70,6 @@ struct CausalSelfAttention {
     c_proj: Linear,
     n_head: usize,
     n_embd: usize,
-    bias: XlaOp,
 }
 
 impl CausalSelfAttention {
@@ -87,8 +90,8 @@ impl CausalSelfAttention {
         let k_shape = k.shape()?;
         let att = q.dot(&k.transpose(&[-2, -1]))
             * builder.c0(1f32 / (k_shape.last_dim().unwrap() as f32).sqrt());
-        let bias = self.bias.slice_in_dim(0, t, 1, 2).slice_in_dim(0, t, 1, 3);
-        let att = masked_fill(&att, &bias.eq(&builder.c0(0f32)), f32::NEG_INFINITY)?;
+        let mask = builder.one(ET).broadcast(&[t, t]).lower_triangle().broadcast(&[1, 1, t, t]);
+        let att = masked_fill(&att, &mask.eq(&builder.c0(0f32)), f32::NEG_INFINITY)?;
         let y = att.softmax(-1).dot(&v);
         let y = y.transpose(&[1, 2]).reshape(x_shape.dimensions());
         let y = self.c_proj.forward(&y);
@@ -139,9 +142,22 @@ struct Gpt {
 
 impl Gpt {
     #[allow(dead_code)]
-    fn forward(&self, input: &XlaOp) -> XlaOp {
-        // TODO
-        input.clone()
+    fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
+        let builder = x.builder();
+        let x_shape = x.shape()?;
+        let (_b, t) = <(i64, i64)>::try_from(&x_shape)?;
+        let arange: Vec<_> = (0..t).collect();
+        let pos = builder.c1(&arange).convert_element_type(ET);
+
+        let tok_emb = self.wte.forward(x);
+        let pos_emb = self.wpe.forward(&pos);
+        let mut x = tok_emb + pos_emb;
+        for block in self.blocks.iter() {
+            x = block.forward(&x)?;
+        }
+        let x = self.ln_f.forward(&x);
+        let logits = self.lm_head.forward(&x.slice_in_dim(-1, -1, 1, 1));
+        Ok(logits)
     }
 }
 
