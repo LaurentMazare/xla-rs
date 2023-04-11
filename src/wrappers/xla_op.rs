@@ -222,6 +222,26 @@ impl XlaOp {
         self.wrap(op)
     }
 
+    pub fn take(&self, indices: &XlaOp, axis: i64) -> Self {
+        let shape = match self.shape() {
+            Ok(shape) => shape,
+            Err(err) => return self.builder().internal_error(&err.to_string()),
+        };
+        let dims = shape.dimensions();
+        let ndims = dims.len();
+        if axis >= ndims as i64 || axis + (ndims as i64) < 0 {
+            return self
+                .builder()
+                .invalid_argument_error(&format!("axis {axis} cannot be used with {ndims} dims"));
+        }
+        let axis = if axis < 0 { axis + ndims as i64 } else { axis };
+        let offset_dims: Vec<_> =
+            dims.iter().filter_map(|&x| if x == axis { None } else { Some(x) }).collect();
+        let mut slice_sizes: Vec<_> = dims.to_vec();
+        slice_sizes[axis as usize] = 1;
+        self.gather(indices, &offset_dims, &[axis], &[axis], None, &slice_sizes)
+    }
+
     fn maybe_keep_dims(&self, res: XlaOp, dims: &[i64], keep_dims: bool) -> Result<XlaOp> {
         if keep_dims && !dims.is_empty() {
             let shape = self.shape()?;
