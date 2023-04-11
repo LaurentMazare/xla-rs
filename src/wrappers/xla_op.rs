@@ -227,6 +227,11 @@ impl XlaOp {
             Ok(shape) => shape,
             Err(err) => return self.builder().internal_error(&err.to_string()),
         };
+        let indices_shape = match indices.shape() {
+            Ok(shape) => shape,
+            Err(err) => return self.builder().internal_error(&err.to_string()),
+        };
+        let index_dims = indices_shape.dimensions();
         let dims = shape.dimensions();
         let ndims = dims.len();
         if axis >= ndims as i64 || axis + (ndims as i64) < 0 {
@@ -235,10 +240,15 @@ impl XlaOp {
                 .invalid_argument_error(&format!("axis {axis} cannot be used with {ndims} dims"));
         }
         let axis = if axis < 0 { axis + ndims as i64 } else { axis };
-        let offset_dims: Vec<_> = (0..dims.len() as i64).filter(|x| *x != axis).collect();
+        let offset_dims: Vec<_> = (0..((dims.len() + index_dims.len()) as i64 - 1))
+            .filter(|x| *x < axis || *x >= axis + index_dims.len() as i64)
+            .collect();
         let mut slice_sizes: Vec<_> = dims.to_vec();
         slice_sizes[axis as usize] = 1;
-        self.gather(indices, &offset_dims, &[axis], &[axis], None, &slice_sizes)
+        let mut index_dims_plus_1 = index_dims.to_vec();
+        index_dims_plus_1.push(1);
+        let indices = indices.reshape(&index_dims_plus_1);
+        self.gather(&indices, &offset_dims, &[axis], &[axis], None, &slice_sizes)
     }
 
     fn maybe_keep_dims(&self, res: XlaOp, dims: &[i64], keep_dims: bool) -> Result<XlaOp> {

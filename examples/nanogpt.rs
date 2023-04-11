@@ -204,7 +204,7 @@ impl Gpt {
         let x_shape = x.shape()?;
         let (_b, t) = <(i64, i64)>::try_from(&x_shape)?;
         let arange: Vec<_> = (0..t).collect();
-        let pos = builder.c1(&arange);
+        let pos = builder.c1(&arange).reshape(&[1, t]);
 
         let tok_emb = self.wte.forward(x);
         let pos_emb = self.wpe.forward(&pos);
