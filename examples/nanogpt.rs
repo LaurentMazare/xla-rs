@@ -7,7 +7,6 @@ use xla::{Literal, XlaBuilder, XlaOp};
 
 const ET: xla::PrimitiveType = xla::PrimitiveType::F32;
 
-#[allow(dead_code)]
 fn new_gelu(x: &XlaOp) -> XlaOp {
     let b = x.builder();
     let sqrt_two_over_pi = b.c0((2f32 / std::f32::consts::PI).sqrt());
@@ -16,55 +15,77 @@ fn new_gelu(x: &XlaOp) -> XlaOp {
     b.c0(0.5f32) * x * (v.tanh() + b.c0(1f32))
 }
 
-#[allow(dead_code)]
-struct Embedding;
+struct Embedding {
+    embeddings: Literal,
+}
 
 impl Embedding {
-    #[allow(dead_code)]
-    fn forward(&self, input: &XlaOp) -> XlaOp {
+    fn new(_vocab_size: usize, _n_embd: usize) -> Self {
         // TODO
-        input.clone()
+        let embeddings = Literal::scalar(0f32);
+        Self { embeddings }
+    }
+
+    fn forward(&self, indexes: &XlaOp) -> XlaOp {
+        let embeddings = indexes.builder().constant_literal(&self.embeddings);
+        embeddings.take(indexes, 0)
     }
 }
 
-#[allow(dead_code)]
 struct LayerNorm {
-    scale: XlaOp,
-    bias: XlaOp,
+    scale: Literal,
+    bias: Literal,
 }
 
 impl LayerNorm {
-    #[allow(dead_code)]
+    fn new(_vs: usize) -> Self {
+        // TODO
+        let scale = Literal::scalar(0f32);
+        let bias = Literal::scalar(0f32);
+        Self { scale, bias }
+    }
+
     fn forward(&self, x: &XlaOp) -> XlaOp {
-        x.layer_norm(-1, &self.scale, &self.bias)
+        let b = x.builder();
+        let scale = b.constant_literal(&self.scale);
+        let bias = b.constant_literal(&self.bias);
+        x.layer_norm(-1, &scale, &bias)
     }
 }
 
-#[allow(dead_code)]
 struct Linear {
-    ws: XlaOp,
-    bs: Option<XlaOp>,
+    ws: Literal,
+    bs: Option<Literal>,
 }
 
 impl Linear {
-    #[allow(dead_code)]
+    fn new(_dim1: usize, _dim2: usize) -> Self {
+        // TODO
+        let ws = Literal::scalar(0f32);
+        let bs = Literal::scalar(0f32);
+        Self { ws, bs: Some(bs) }
+    }
+
     fn forward(&self, x: &XlaOp) -> XlaOp {
-        let x = x.dot(&self.ws.transpose(&[-2, -1]));
+        let b = x.builder();
+        let ws = b.constant_literal(&self.ws);
+        let x = x.dot(&ws.transpose(&[-2, -1]));
         match &self.bs {
             None => x,
-            Some(bs) => x + bs,
+            Some(bs) => {
+                let bs = b.constant_literal(bs);
+                x + bs
+            }
         }
     }
 }
 
-#[allow(dead_code)]
 fn masked_fill<T: xla::NativeType>(on_false: &XlaOp, mask: &XlaOp, on_true: T) -> Result<XlaOp> {
     let shape = mask.shape()?;
     let on_true = mask.builder().c0(on_true).broadcast(shape.dimensions());
     Ok(mask.select(&on_true, on_false))
 }
 
-#[allow(dead_code)]
 struct CausalSelfAttention {
     c_attn: Linear,
     c_proj: Linear,
@@ -73,7 +94,12 @@ struct CausalSelfAttention {
 }
 
 impl CausalSelfAttention {
-    #[allow(dead_code)]
+    fn new(n_head: usize, n_embd: usize) -> Self {
+        let c_attn = Linear::new(n_embd, 3 * n_embd);
+        let c_proj = Linear::new(n_embd, n_embd);
+        Self { c_attn, c_proj, n_head, n_embd }
+    }
+
     fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
         let builder = x.builder();
         let x_shape = x.shape()?;
@@ -99,14 +125,18 @@ impl CausalSelfAttention {
     }
 }
 
-#[allow(dead_code)]
 struct Mlp {
     c_fc: Linear,
     c_proj: Linear,
 }
 
 impl Mlp {
-    #[allow(dead_code)]
+    fn new(config: &GptConfig) -> Self {
+        let c_fc = Linear::new(config.n_embd, 4 * config.n_embd);
+        let c_proj = Linear::new(4 * config.n_embd, config.n_embd);
+        Self { c_fc, c_proj }
+    }
+
     fn forward(&self, x: &XlaOp) -> XlaOp {
         let x = self.c_fc.forward(x);
         let x = new_gelu(&x);
@@ -114,7 +144,6 @@ impl Mlp {
     }
 }
 
-#[allow(dead_code)]
 struct Block {
     ln1: LayerNorm,
     attn: CausalSelfAttention,
@@ -122,8 +151,29 @@ struct Block {
     mlp: Mlp,
 }
 
+struct GptConfig {
+    block_size: usize,
+    vocab_size: usize,
+    n_layer: usize,
+    n_head: usize,
+    n_embd: usize,
+}
+
+impl Default for GptConfig {
+    fn default() -> Self {
+        Self { block_size: 1024, vocab_size: 50304, n_layer: 12, n_head: 12, n_embd: 768 }
+    }
+}
+
 impl Block {
-    #[allow(dead_code)]
+    fn new(config: &GptConfig) -> Self {
+        let ln1 = LayerNorm::new(config.n_embd);
+        let attn = CausalSelfAttention::new(config.n_head, config.n_embd);
+        let ln2 = LayerNorm::new(config.n_embd);
+        let mlp = Mlp::new(config);
+        Self { ln1, attn, ln2, mlp }
+    }
+
     fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
         let x = self.attn.forward(&self.ln1.forward(x))? + x;
         let x = self.mlp.forward(&self.ln2.forward(&x)) + x;
@@ -131,7 +181,6 @@ impl Block {
     }
 }
 
-#[allow(dead_code)]
 struct Gpt {
     lm_head: Linear,
     wte: Embedding,
@@ -141,7 +190,15 @@ struct Gpt {
 }
 
 impl Gpt {
-    #[allow(dead_code)]
+    fn new(config: &GptConfig) -> Result<Self> {
+        let lm_head = Linear::new(config.n_embd, config.vocab_size);
+        let wte = Embedding::new(config.vocab_size, config.n_embd);
+        let wpe = Embedding::new(config.block_size, config.n_embd);
+        let blocks = (0..config.n_layer).map(|_i| Block::new(config)).collect();
+        let ln_f = LayerNorm::new(config.n_embd);
+        Ok(Self { lm_head, wte, wpe, blocks, ln_f })
+    }
+
     fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
         let builder = x.builder();
         let x_shape = x.shape()?;
@@ -161,10 +218,12 @@ impl Gpt {
     }
 }
 
-fn gpt_computation() -> xla::Result<xla::XlaComputation> {
+fn gpt_computation() -> Result<xla::XlaComputation> {
     let b = XlaBuilder::new("gpt");
-    let model = b.constant_r0(42f32);
-    model.build()
+    let gpt = Gpt::new(&Default::default())?;
+    let input = b.parameter(0, xla::PrimitiveType::S32, &[], "tokens");
+    let model = gpt.forward(&input)?;
+    Ok(model.build()?)
 }
 
 fn main() -> Result<()> {

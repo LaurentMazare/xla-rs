@@ -39,7 +39,7 @@ impl XlaBuilder {
         Ok(())
     }
 
-    pub fn constant_literal(&self, literal: Literal) -> XlaOp {
+    pub fn constant_literal(&self, literal: &Literal) -> XlaOp {
         let op = unsafe { c_lib::constant_literal(self.ptr(), literal.0) };
         XlaOp { op, builder: self.clone() }
     }
