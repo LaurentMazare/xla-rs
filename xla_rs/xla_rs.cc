@@ -582,6 +582,38 @@ xla_op op_concat_in_dim(const xla_op arg, const xla_op *args, size_t nargs, int6
   END_PROTECT_OP(arg)
 }
 
+xla_op op_gather(
+    const xla_op arg1,
+    const xla_op arg2,
+    const int64_t* offset_dims,
+    size_t noffset_dims,
+    const int64_t* collapsed_slice_dims,
+    size_t ncollapsed_slice_dims,
+    const int64_t* start_index_map,
+    size_t nstart_index_map,
+    const int64_t* set_index_vector_dim,
+    const int64_t* slice_sizes,
+    size_t nslice_sizes
+) {
+  BEGIN_PROTECT_OP
+  GatherDimensionNumbers dn;
+  for (size_t i = 0; i < noffset_dims; ++i) {
+    dn.add_offset_dims(offset_dims[i]);
+  }
+  for (size_t i = 0; i < ncollapsed_slice_dims; ++i) {
+    dn.add_collapsed_slice_dims(collapsed_slice_dims[i]);
+  }
+  for (size_t i = 0; i < nstart_index_map; ++i) {
+    dn.add_start_index_map(start_index_map[i]);
+  }
+  if (set_index_vector_dim) {
+    dn.set_index_vector_dim(*set_index_vector_dim);
+  }
+  auto ss = absl::Span<const int64_t>(slice_sizes, nslice_sizes);
+  return new XlaOp(Gather(*arg1, *arg2, dn, ss));
+  END_PROTECT_OP(arg1)
+}
+
 xla_op op_convert_element_type(const xla_op arg, int pr_type) {
   BEGIN_PROTECT_OP
   return new XlaOp(ConvertElementType(*arg, (PrimitiveType)pr_type));

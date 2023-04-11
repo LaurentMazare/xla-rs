@@ -191,6 +191,37 @@ impl XlaOp {
         self.builder.get_shape(self)
     }
 
+    pub fn gather(
+        &self,
+        start_indices: &XlaOp,
+        offset_dims: &[i64],
+        collapsed_slice_dims: &[i64],
+        start_index_map: &[i64],
+        set_index_vector_dim: Option<i64>,
+        slice_sizes: &[i64],
+    ) -> Self {
+        let set_index_vector_dim = match set_index_vector_dim {
+            None => std::ptr::null(),
+            Some(v) => &v as *const i64,
+        };
+        let op = unsafe {
+            c_lib::op_gather(
+                self.op,
+                start_indices.op,
+                offset_dims.as_ptr(),
+                offset_dims.len(),
+                collapsed_slice_dims.as_ptr(),
+                collapsed_slice_dims.len(),
+                start_index_map.as_ptr(),
+                start_index_map.len(),
+                set_index_vector_dim,
+                slice_sizes.as_ptr(),
+                slice_sizes.len(),
+            )
+        };
+        self.wrap(op)
+    }
+
     fn maybe_keep_dims(&self, res: XlaOp, dims: &[i64], keep_dims: bool) -> Result<XlaOp> {
         if keep_dims && !dims.is_empty() {
             let shape = self.shape()?;
