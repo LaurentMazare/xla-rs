@@ -157,6 +157,13 @@ impl XlaBuilder {
         handle_status(status)?;
         FromPrimitive::from_i32(element_type).ok_or(Error::UnexpectedElementType(element_type))
     }
+
+    pub fn get_dimensions_size(&self, op: &XlaOp) -> Result<usize> {
+        let mut dsize = 0i32;
+        let status = unsafe { c_lib::get_dimensions_size(self.ptr(), op.op, &mut dsize) };
+        handle_status(status)?;
+        Ok(dsize as usize)
+    }
 }
 
 impl Drop for XlaBuilderInternal {

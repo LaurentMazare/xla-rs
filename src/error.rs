@@ -28,6 +28,9 @@ pub enum Error {
 
     #[error("empty literal")]
     EmptyLiteral,
+
+    #[error("index out of bounds {index}, rank {rank}")]
+    IndexOutOfBounds { index: i64, rank: usize },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

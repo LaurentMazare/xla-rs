@@ -709,8 +709,14 @@ status get_shape(const xla_builder b, const xla_op o, shape *out_shape) {
 }
 
 status get_element_type(const xla_builder b, const xla_op o, int *out_element_type) {
-  ASSIGN_OR_RETURN_STATUS(shape, b->GetShape(*o));
-  *out_element_type = shape.element_type();
+  ASSIGN_OR_RETURN_STATUS(shape, b->GetShapePtr(*o));
+  *out_element_type = shape->element_type();
+  return nullptr;
+}
+
+status get_dimensions_size(const xla_builder b, const xla_op o, int *out_rank) {
+  ASSIGN_OR_RETURN_STATUS(shape, b->GetShapePtr(*o));
+  *out_rank = shape->dimensions_size();
   return nullptr;
 }
 

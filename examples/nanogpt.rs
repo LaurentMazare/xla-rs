@@ -26,9 +26,10 @@ impl Embedding {
         Self { embeddings }
     }
 
-    fn forward(&self, indexes: &XlaOp) -> XlaOp {
+    fn forward(&self, indexes: &XlaOp) -> Result<XlaOp> {
         let embeddings = indexes.builder().constant_literal(&self.embeddings);
-        embeddings.take(indexes, 0)
+        let features = embeddings.take(indexes, 0)?;
+        Ok(features)
     }
 }
 
@@ -45,11 +46,12 @@ impl LayerNorm {
         Self { scale, bias }
     }
 
-    fn forward(&self, x: &XlaOp) -> XlaOp {
+    fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
         let b = x.builder();
         let scale = b.constant_literal(&self.scale);
         let bias = b.constant_literal(&self.bias);
-        x.layer_norm(-1, &scale, &bias)
+        let x_norm = x.layer_norm(-1, &scale, &bias)?;
+        Ok(x_norm)
     }
 }
 
@@ -118,7 +120,7 @@ impl CausalSelfAttention {
             * builder.c0(1f32 / (k_shape.last_dim().unwrap() as f32).sqrt());
         let mask = builder.one(ET).broadcast(&[t, t]).lower_triangle().broadcast(&[1, 1, t, t]);
         let att = masked_fill(&att, &mask.eq(&builder.c0(0f32)), f32::NEG_INFINITY)?;
-        let y = att.softmax(-1).dot(&v);
+        let y = att.softmax(-1)?.dot(&v);
         let y = y.transpose(&[1, 2]).reshape(x_shape.dimensions());
         let y = self.c_proj.forward(&y);
         Ok(y)
@@ -175,8 +177,8 @@ impl Block {
     }
 
     fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
-        let x = self.attn.forward(&self.ln1.forward(x))? + x;
-        let x = self.mlp.forward(&self.ln2.forward(&x)) + x;
+        let x = self.attn.forward(&self.ln1.forward(x)?)? + x;
+        let x = self.mlp.forward(&self.ln2.forward(&x)?) + x;
         Ok(x)
     }
 }
@@ -187,6 +189,13 @@ struct Gpt {
     wpe: Embedding,
     blocks: Vec<Block>,
     ln_f: LayerNorm,
+}
+
+fn debug(builder: &XlaBuilder, message: &str) -> Result<()> {
+    let status = builder.get_current_status();
+    println!("{message} {status:?}");
+    status?;
+    Ok(())
 }
 
 impl Gpt {
@@ -206,13 +215,17 @@ impl Gpt {
         let arange: Vec<_> = (0..t).collect();
         let pos = builder.c1(&arange).reshape(&[1, t]);
 
-        let tok_emb = self.wte.forward(x);
-        let pos_emb = self.wpe.forward(&pos);
+        let tok_emb = self.wte.forward(x)?;
+        let pos_emb = self.wpe.forward(&pos)?;
+        debug(builder, "post embedding")?;
         let mut x = tok_emb + pos_emb;
+        debug(builder, "pre blocks")?;
         for block in self.blocks.iter() {
             x = block.forward(&x)?;
         }
-        let x = self.ln_f.forward(&x);
+        debug(builder, "post blocks")?;
+        let x = self.ln_f.forward(&x)?;
+        debug(builder, "post ln_f")?;
         let logits = self.lm_head.forward(&x.slice_in_dim(-1, -1, 1, 1));
         Ok(logits)
     }

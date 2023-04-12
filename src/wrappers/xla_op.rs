@@ -1,6 +1,6 @@
 /// For details on the semantics, see https://www.tensorflow.org/xla/operation_semantics
 use super::{PrimitiveType, Shape, XlaBuilder, XlaComputation};
-use crate::{c_lib, Result};
+use crate::{c_lib, Error, Result};
 
 pub struct XlaOp {
     pub(super) op: c_lib::xla_op,
@@ -172,29 +172,63 @@ impl XlaOp {
         self.wrap(op)
     }
 
-    pub fn dimension_size(&self, dim: i64) -> Self {
-        let dim = if dim >= 0 {
-            dim
-        } else {
-            // TODO: Add a faster way to obtain the rank.
-            let rank = match self.shape() {
-                Ok(shape) => shape.dimensions.len() as i64,
-                Err(err) => return self.builder().internal_error(&err.to_string()),
-            };
-            rank + dim
-        };
-        let op = unsafe { c_lib::op_dimension_size(self.op, dim) };
-        self.wrap(op)
+    fn normalize_indexes(&self, indexes: &[i64]) -> Result<Vec<i64>> {
+        let rank = self.rank()?;
+        indexes
+            .iter()
+            .map(|&index| {
+                if index >= rank as i64 {
+                    Err(Error::IndexOutOfBounds { index, rank })
+                } else if index >= 0 {
+                    Ok(index)
+                } else if index + rank as i64 >= 0 {
+                    Ok(index + rank as i64)
+                } else {
+                    Err(Error::IndexOutOfBounds { index, rank })
+                }
+            })
+            .collect()
     }
 
-    pub fn reduce(&self, init_value: Self, comp: XlaComputation, dims: &[i64]) -> Self {
+    fn normalize_index(&self, index: i64) -> Result<i64> {
+        let rank = self.rank()?;
+        if index >= rank as i64 {
+            Err(Error::IndexOutOfBounds { index, rank })
+        } else if index >= 0 {
+            Ok(index)
+        } else if index + rank as i64 >= 0 {
+            Ok(index + rank as i64)
+        } else {
+            Err(Error::IndexOutOfBounds { index, rank })
+        }
+    }
+
+    pub fn dimension_size(&self, index: i64) -> Result<Self> {
+        let index = self.normalize_index(index)?;
+        let op = unsafe { c_lib::op_dimension_size(self.op, index) };
+        Ok(self.wrap(op))
+    }
+
+    pub fn reduce(
+        &self,
+        init_value: Self,
+        comp: XlaComputation,
+        dims: &[i64],
+        keep_dims: bool,
+    ) -> Result<Self> {
+        let dims = self.normalize_indexes(dims)?;
         let op =
             unsafe { c_lib::op_reduce(self.op, init_value.op, comp.0, dims.as_ptr(), dims.len()) };
-        self.wrap(op)
+        let op = self.wrap(op);
+        self.maybe_keep_dims(op, &dims, keep_dims)
     }
 
     pub fn element_type(&self) -> Result<PrimitiveType> {
         self.builder.get_element_type(self)
+    }
+
+    pub fn rank(&self) -> Result<usize> {
+        self.builder.get_dimensions_size(self)
     }
 
     pub fn shape(&self) -> Result<Shape> {
@@ -232,24 +266,12 @@ impl XlaOp {
         self.wrap(op)
     }
 
-    pub fn take(&self, indices: &XlaOp, axis: i64) -> Self {
-        let shape = match self.shape() {
-            Ok(shape) => shape,
-            Err(err) => return self.builder().internal_error(&err.to_string()),
-        };
-        let indices_shape = match indices.shape() {
-            Ok(shape) => shape,
-            Err(err) => return self.builder().internal_error(&err.to_string()),
-        };
+    pub fn take(&self, indices: &XlaOp, axis: i64) -> Result<Self> {
+        let axis = self.normalize_index(axis)?;
+        let shape = self.shape()?;
+        let indices_shape = indices.shape()?;
         let index_dims = indices_shape.dimensions();
         let dims = shape.dimensions();
-        let ndims = dims.len();
-        if axis >= ndims as i64 || axis + (ndims as i64) < 0 {
-            return self
-                .builder()
-                .invalid_argument_error(&format!("axis {axis} cannot be used with {ndims} dims"));
-        }
-        let axis = if axis < 0 { axis + ndims as i64 } else { axis };
         let offset_dims: Vec<_> = (0..((dims.len() + index_dims.len()) as i64 - 1))
             .filter(|x| *x < axis || *x >= axis + index_dims.len() as i64)
             .collect();
@@ -260,7 +282,9 @@ impl XlaOp {
         let indices = indices.reshape(&index_dims_plus_1);
         // Same as in Jax: always use the last dimension for index_vector_dim.
         let index_vector_dim = Some(index_dims.len() as i64);
-        self.gather(&indices, &offset_dims, &[axis], &[axis], index_vector_dim, &slice_sizes)
+        let gather =
+            self.gather(&indices, &offset_dims, &[axis], &[axis], index_vector_dim, &slice_sizes);
+        Ok(gather)
     }
 
     fn maybe_keep_dims(&self, res: XlaOp, dims: &[i64], keep_dims: bool) -> Result<XlaOp> {
@@ -276,93 +300,62 @@ impl XlaOp {
         }
     }
 
-    pub fn reduce_sum_e(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
+    pub fn reduce_sum(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
         let builder = XlaBuilder::new("Sum");
         let et = self.element_type()?;
         let x = builder.parameter(0, et, &[], "x");
         let y = builder.parameter(1, et, &[], "y");
         let sum = x.add_(&y).build()?;
         let init_value = self.builder.zero(et);
-        let res = self.reduce(init_value, sum, dims);
-        self.maybe_keep_dims(res, dims, keep_dims)
+        self.reduce(init_value, sum, dims, keep_dims)
     }
 
-    pub fn reduce_sum(&self, dims: &[i64], keep_dims: bool) -> Self {
-        match self.reduce_sum_e(dims, keep_dims) {
-            Ok(op) => op,
-            Err(err) => self.builder().internal_error(&format!("reduce_sum: {err:?}")),
-        }
-    }
-
-    pub fn reduce_mean_e(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
+    pub fn reduce_mean(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
         let b = &self.builder();
         let et = self.element_type()?;
         let mut scale = b.one(PrimitiveType::S32);
         for d in dims.iter() {
-            scale = scale * self.dimension_size(*d);
+            scale = scale * self.dimension_size(*d)?;
         }
-        let sum = self.reduce_sum_e(dims, keep_dims)?;
+        let sum = self.reduce_sum(dims, keep_dims)?;
         Ok(sum / scale.convert_element_type(et))
     }
 
-    pub fn reduce_mean(&self, dims: &[i64], keep_dims: bool) -> Self {
-        match self.reduce_mean_e(dims, keep_dims) {
-            Ok(op) => op,
-            Err(err) => self.builder().internal_error(&format!("reduce_mean: {err:?}")),
-        }
-    }
-
-    pub fn reduce_max_e(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
+    pub fn reduce_max(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
         let builder = XlaBuilder::new("Max");
         let et = self.element_type()?;
         let x = builder.parameter(0, et, &[], "x");
         let y = builder.parameter(1, et, &[], "y");
         let sum = x.max(&y).build()?;
         let init_value = self.builder.min_value(et);
-        let res = self.reduce(init_value, sum, dims);
-        self.maybe_keep_dims(res, dims, keep_dims)
+        self.reduce(init_value, sum, dims, keep_dims)
     }
 
-    pub fn reduce_max(&self, dims: &[i64], keep_dims: bool) -> Self {
-        match self.reduce_max_e(dims, keep_dims) {
-            Ok(op) => op,
-            Err(err) => self.builder().internal_error(&format!("reduce_max: {err:?}")),
-        }
-    }
-
-    pub fn reduce_min_e(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
+    pub fn reduce_min(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
         let builder = XlaBuilder::new("Min");
         let et = self.element_type()?;
         let x = builder.parameter(0, et, &[], "x");
         let y = builder.parameter(1, et, &[], "y");
         let sum = x.min(&y).build()?;
         let init_value = self.builder.max_value(et);
-        let res = self.reduce(init_value, sum, dims);
-        self.maybe_keep_dims(res, dims, keep_dims)
+        self.reduce(init_value, sum, dims, keep_dims)
     }
 
-    pub fn reduce_min(&self, dims: &[i64], keep_dims: bool) -> Self {
-        match self.reduce_min_e(dims, keep_dims) {
-            Ok(op) => op,
-            Err(err) => self.builder().internal_error(&format!("reduce_min: {err:?}")),
-        }
-    }
-
-    pub fn softmax(&self, dim: i64) -> Self {
-        let max = self.reduce_max(&[dim], true);
+    pub fn softmax(&self, dim: i64) -> Result<Self> {
+        let max = self.reduce_max(&[dim], true)?;
         let unnormalized = (self - max).exp();
-        let sum = unnormalized.reduce_sum(&[dim], true);
-        unnormalized / sum
+        let sum = unnormalized.reduce_sum(&[dim], true)?;
+        Ok(unnormalized / sum)
     }
 
-    pub fn layer_norm(&self, dim: i64, scale: &XlaOp, bias: &XlaOp) -> Self {
+    pub fn layer_norm(&self, dim: i64, scale: &XlaOp, bias: &XlaOp) -> Result<Self> {
         let et = self.element_type().unwrap_or(PrimitiveType::F32);
         let eps = self.builder().c0(1e-5).convert_element_type(et);
-        let mean = self.reduce_mean(&[dim], true);
-        let mean2 = (self * self).reduce_mean(&[dim], true);
+        let mean = self.reduce_mean(&[dim], true)?;
+        let mean2 = (self * self).reduce_mean(&[dim], true)?;
         let var = mean2 - &mean * &mean;
         let mul = (var + eps).rsqrt();
-        (self - mean) * mul * scale + bias
+        Ok((self - mean) * mul * scale + bias)
     }
 
     pub fn build(&self) -> Result<XlaComputation> {

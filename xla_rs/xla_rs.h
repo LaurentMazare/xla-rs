@@ -154,6 +154,7 @@ void shape_free(shape);
 
 status get_shape(const xla_builder, const xla_op, shape*);
 status get_element_type(const xla_builder, const xla_op, int*);
+status get_dimensions_size(const xla_builder, const xla_op, int*);
 
 status build(const xla_builder, const xla_op, xla_computation*);
 status compile(const pjrt_client, const xla_computation, pjrt_loaded_executable*);
