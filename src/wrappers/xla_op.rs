@@ -123,8 +123,8 @@ impl XlaOp {
     pub fn swap_dims(&self, index1: i64, index2: i64) -> Result<Self> {
         let index1 = self.normalize_index(index1)?;
         let index2 = self.normalize_index(index2)?;
-        let shape = self.shape()?;
-        let mut index_perm = shape.dimensions().to_vec();
+        let rank = self.rank()?;
+        let mut index_perm: Vec<_> = (0..rank as i64).collect();
         index_perm[index1 as usize] = index2;
         index_perm[index2 as usize] = index1;
         Ok(self.transpose(&index_perm))

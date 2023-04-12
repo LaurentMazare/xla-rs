@@ -74,7 +74,7 @@ impl Linear {
         let b = x.builder();
         let x_rank = x.rank()?;
         let ws = b.constant_literal(&self.ws);
-        let x = x.dot_general(&ws.swap_dims(-2, -1)?, &[x_rank as i64 - 1], &[0], &[], &[]);
+        let x = x.dot_general(&ws, &[x_rank as i64 - 1], &[0], &[], &[]);
         let y = match &self.bs {
             None => x,
             Some(bs) => {
