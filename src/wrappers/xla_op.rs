@@ -9,7 +9,7 @@ pub struct XlaOp {
 
 macro_rules! binary_op {
     ($func_name:ident, $expression:expr) => {
-        pub fn $func_name(&self, op: &XlaOp) -> XlaOp {
+        pub fn $func_name(&self, op: &XlaOp) -> Result<Self> {
             let op = unsafe { $expression(self.op, op.op) };
             self.wrap(op)
         }
@@ -18,7 +18,7 @@ macro_rules! binary_op {
 
 macro_rules! unary_op {
     ($func_name:ident, $expression:expr) => {
-        pub fn $func_name(&self) -> XlaOp {
+        pub fn $func_name(&self) -> Result<Self> {
             let op = unsafe { $expression(self.op) };
             self.wrap(op)
         }
@@ -33,8 +33,9 @@ impl Clone for XlaOp {
 }
 
 impl XlaOp {
-    pub(super) fn wrap(&self, op: c_lib::xla_op) -> Self {
-        XlaOp { op, builder: self.builder.clone() }
+    pub(super) fn wrap(&self, op: c_lib::xla_op) -> Result<Self> {
+        self.builder.get_current_status()?;
+        Ok(XlaOp { op, builder: self.builder.clone() })
     }
 
     pub fn builder(&self) -> &XlaBuilder {
@@ -88,34 +89,34 @@ impl XlaOp {
     unary_op!(copy, c_lib::op_copy);
     unary_op!(zeros_like, c_lib::op_zeros_like);
 
-    pub fn einsum1(&self, config: &str) -> Self {
+    pub fn einsum1(&self, config: &str) -> Result<Self> {
         let config = std::ffi::CString::new(config).unwrap();
         let op = unsafe { c_lib::op_einsum1(self.op, config.as_ptr()) };
         self.wrap(op)
     }
 
-    pub fn einsum2(&self, rhs: &XlaOp, config: &str) -> Self {
+    pub fn einsum2(&self, rhs: &XlaOp, config: &str) -> Result<Self> {
         let config = std::ffi::CString::new(config).unwrap();
         let op = unsafe { c_lib::op_einsum2(self.op, rhs.op, config.as_ptr()) };
         self.wrap(op)
     }
 
-    pub fn reshape(&self, dims: &[i64]) -> Self {
+    pub fn reshape(&self, dims: &[i64]) -> Result<Self> {
         let op = unsafe { c_lib::op_reshape(self.op, dims.len(), dims.as_ptr()) };
         self.wrap(op)
     }
 
-    pub fn broadcast(&self, dims: &[i64]) -> Self {
+    pub fn broadcast(&self, dims: &[i64]) -> Result<Self> {
         let op = unsafe { c_lib::op_broadcast(self.op, dims.len(), dims.as_ptr()) };
         self.wrap(op)
     }
 
-    pub fn collapse(&self, dims: &[i64]) -> Self {
+    pub fn collapse(&self, dims: &[i64]) -> Result<Self> {
         let op = unsafe { c_lib::op_collapse(self.op, dims.len(), dims.as_ptr()) };
         self.wrap(op)
     }
 
-    pub fn transpose(&self, index_perm: &[i64]) -> Self {
+    pub fn transpose(&self, index_perm: &[i64]) -> Result<Self> {
         let op = unsafe { c_lib::op_transpose(self.op, index_perm.len(), index_perm.as_ptr()) };
         self.wrap(op)
     }
@@ -127,31 +128,37 @@ impl XlaOp {
         let mut index_perm: Vec<_> = (0..rank as i64).collect();
         index_perm[index1 as usize] = index2;
         index_perm[index2 as usize] = index1;
-        Ok(self.transpose(&index_perm))
+        self.transpose(&index_perm)
     }
 
-    pub fn slice_in_dim(&self, start_index: i64, stop_index: i64, stride: i64, dim: i64) -> Self {
+    pub fn slice_in_dim(
+        &self,
+        start_index: i64,
+        stop_index: i64,
+        stride: i64,
+        dim: i64,
+    ) -> Result<Self> {
         let op = unsafe { c_lib::op_slice_in_dim(self.op, start_index, stop_index, stride, dim) };
         self.wrap(op)
     }
 
-    pub fn concat_in_dim(&self, args: &[&Self], dim: i64) -> Self {
+    pub fn concat_in_dim(&self, args: &[&Self], dim: i64) -> Result<Self> {
         let args: Vec<_> = args.iter().map(|a| a.op).collect();
         let op = unsafe { c_lib::op_concat_in_dim(self.op, args.as_ptr(), args.len(), dim) };
         self.wrap(op)
     }
 
-    pub fn clamp(&self, min: &Self, max: &Self) -> Self {
+    pub fn clamp(&self, min: &Self, max: &Self) -> Result<Self> {
         let op = unsafe { c_lib::op_clamp(min.op, self.op, max.op) };
         self.wrap(op)
     }
 
-    pub fn select(&self, on_true: &Self, on_false: &Self) -> Self {
+    pub fn select(&self, on_true: &Self, on_false: &Self) -> Result<Self> {
         let op = unsafe { c_lib::op_select(self.op, on_true.op, on_false.op) };
         self.wrap(op)
     }
 
-    pub fn rng_uniform(min: &Self, max: &Self, shape: &Shape) -> Self {
+    pub fn rng_uniform(min: &Self, max: &Self, shape: &Shape) -> Result<Self> {
         let op = unsafe {
             c_lib::op_rng_uniform(
                 min.op,
@@ -164,7 +171,7 @@ impl XlaOp {
         min.wrap(op)
     }
 
-    pub fn rng_normal(mu: &Self, sigma: &Self, shape: &Shape) -> Self {
+    pub fn rng_normal(mu: &Self, sigma: &Self, shape: &Shape) -> Result<Self> {
         let op = unsafe {
             c_lib::op_rng_normal(
                 mu.op,
@@ -177,7 +184,7 @@ impl XlaOp {
         mu.wrap(op)
     }
 
-    pub fn convert_element_type(&self, element_type: PrimitiveType) -> Self {
+    pub fn convert_element_type(&self, element_type: PrimitiveType) -> Result<Self> {
         let op = unsafe { c_lib::op_convert_element_type(self.op, element_type as i32) };
         self.wrap(op)
     }
@@ -216,7 +223,7 @@ impl XlaOp {
     pub fn dimension_size(&self, index: i64) -> Result<Self> {
         let index = self.normalize_index(index)?;
         let op = unsafe { c_lib::op_dimension_size(self.op, index) };
-        Ok(self.wrap(op))
+        self.wrap(op)
     }
 
     pub fn reduce(
@@ -229,7 +236,7 @@ impl XlaOp {
         let dims = self.normalize_indexes(dims)?;
         let op =
             unsafe { c_lib::op_reduce(self.op, init_value.op, comp.0, dims.as_ptr(), dims.len()) };
-        let op = self.wrap(op);
+        let op = self.wrap(op)?;
         self.maybe_keep_dims(op, &dims, keep_dims)
     }
 
@@ -252,7 +259,7 @@ impl XlaOp {
         rhs_contracting_dims: &[i64],
         lhs_batch_dims: &[i64],
         rhs_batch_dims: &[i64],
-    ) -> Self {
+    ) -> Result<Self> {
         let op = unsafe {
             c_lib::op_dot_general(
                 self.op,
@@ -278,7 +285,7 @@ impl XlaOp {
         start_index_map: &[i64],
         set_index_vector_dim: Option<i64>,
         slice_sizes: &[i64],
-    ) -> Self {
+    ) -> Result<Self> {
         let set_index_vector_dim = match set_index_vector_dim {
             None => std::ptr::null(),
             Some(v) => &v as *const i64,
@@ -314,12 +321,10 @@ impl XlaOp {
         slice_sizes[axis as usize] = 1;
         let mut index_dims_plus_1 = index_dims.to_vec();
         index_dims_plus_1.push(1);
-        let indices = indices.reshape(&index_dims_plus_1);
+        let indices = indices.reshape(&index_dims_plus_1)?;
         // Same as in Jax: always use the last dimension for index_vector_dim.
         let index_vector_dim = Some(index_dims.len() as i64);
-        let gather =
-            self.gather(&indices, &offset_dims, &[axis], &[axis], index_vector_dim, &slice_sizes);
-        Ok(gather)
+        self.gather(&indices, &offset_dims, &[axis], &[axis], index_vector_dim, &slice_sizes)
     }
 
     fn maybe_keep_dims(&self, res: XlaOp, dims: &[i64], keep_dims: bool) -> Result<XlaOp> {
@@ -329,7 +334,7 @@ impl XlaOp {
             for d in dims.iter() {
                 dimensions[*d as usize] = 1;
             }
-            Ok(res.reshape(&dimensions))
+            res.reshape(&dimensions)
         } else {
             Ok(res)
         }
@@ -340,7 +345,7 @@ impl XlaOp {
         let et = self.element_type()?;
         let x = builder.parameter(0, et, &[], "x");
         let y = builder.parameter(1, et, &[], "y");
-        let sum = x.add_(&y).build()?;
+        let sum = x.add_(&y)?.build()?;
         let init_value = self.builder.zero(et);
         self.reduce(init_value, sum, dims, keep_dims)
     }
@@ -350,10 +355,10 @@ impl XlaOp {
         let et = self.element_type()?;
         let mut scale = b.one(PrimitiveType::S32);
         for d in dims.iter() {
-            scale = scale * self.dimension_size(*d)?;
+            scale = (scale * self.dimension_size(*d)?)?;
         }
         let sum = self.reduce_sum(dims, keep_dims)?;
-        Ok(sum / scale.convert_element_type(et))
+        sum / scale.convert_element_type(et)?
     }
 
     pub fn reduce_max(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
@@ -361,7 +366,7 @@ impl XlaOp {
         let et = self.element_type()?;
         let x = builder.parameter(0, et, &[], "x");
         let y = builder.parameter(1, et, &[], "y");
-        let sum = x.max(&y).build()?;
+        let sum = x.max(&y)?.build()?;
         let init_value = self.builder.min_value(et);
         self.reduce(init_value, sum, dims, keep_dims)
     }
@@ -371,26 +376,26 @@ impl XlaOp {
         let et = self.element_type()?;
         let x = builder.parameter(0, et, &[], "x");
         let y = builder.parameter(1, et, &[], "y");
-        let sum = x.min(&y).build()?;
+        let sum = x.min(&y)?.build()?;
         let init_value = self.builder.max_value(et);
         self.reduce(init_value, sum, dims, keep_dims)
     }
 
     pub fn softmax(&self, dim: i64) -> Result<Self> {
         let max = self.reduce_max(&[dim], true)?;
-        let unnormalized = (self - max).exp();
+        let unnormalized = (self - max)?.exp()?;
         let sum = unnormalized.reduce_sum(&[dim], true)?;
-        Ok(unnormalized / sum)
+        unnormalized / sum
     }
 
     pub fn layer_norm(&self, dim: i64, scale: &XlaOp, bias: &XlaOp) -> Result<Self> {
         let et = self.element_type().unwrap_or(PrimitiveType::F32);
-        let eps = self.builder().c0(1e-5).convert_element_type(et);
+        let eps = self.builder().c0(1e-5).convert_element_type(et)?;
         let mean = self.reduce_mean(&[dim], true)?;
-        let mean2 = (self * self).reduce_mean(&[dim], true)?;
-        let var = mean2 - &mean * &mean;
-        let mul = (var + eps).rsqrt();
-        Ok((self - mean) * mul * scale + bias)
+        let mean2 = (self * self)?.reduce_mean(&[dim], true)?;
+        let var = (mean2 - (&mean * &mean)?)?;
+        let mul = (var + eps)?.rsqrt()?;
+        bias + ((self - mean)? * mul)? * scale
     }
 
     pub fn build(&self) -> Result<XlaComputation> {
@@ -404,21 +409,56 @@ impl Drop for XlaOp {
     }
 }
 
+trait BorrowOpResult {
+    fn borrow(&self) -> Result<&XlaOp>;
+}
+
+impl BorrowOpResult for XlaOp {
+    fn borrow(&self) -> Result<&XlaOp> {
+        Ok(self)
+    }
+}
+
+impl BorrowOpResult for &XlaOp {
+    fn borrow(&self) -> Result<&XlaOp> {
+        Ok(self)
+    }
+}
+
+impl BorrowOpResult for Result<XlaOp> {
+    fn borrow(&self) -> Result<&XlaOp> {
+        match self {
+            Ok(v) => Ok(v),
+            Err(e) => Err(e.clone()),
+        }
+    }
+}
+
+impl BorrowOpResult for &Result<XlaOp> {
+    fn borrow(&self) -> Result<&XlaOp> {
+        match self {
+            Ok(v) => Ok(v),
+            Err(e) => Err(e.clone()),
+        }
+    }
+}
+
 macro_rules! bin_trait {
     ($trait:ident, $fn1:ident, $fn2:ident) => {
-        impl<B: std::borrow::Borrow<XlaOp>> std::ops::$trait<B> for XlaOp {
-            type Output = XlaOp;
+        impl<B: BorrowOpResult> std::ops::$trait<B> for XlaOp {
+            type Output = Result<XlaOp>;
 
             fn $fn1(self, rhs: B) -> Self::Output {
-                self.$fn2(rhs.borrow())
+                (&self).$fn1(rhs)
             }
         }
 
-        impl<B: std::borrow::Borrow<XlaOp>> std::ops::$trait<B> for &XlaOp {
-            type Output = XlaOp;
+        impl<B: BorrowOpResult> std::ops::$trait<B> for &XlaOp {
+            type Output = Result<XlaOp>;
 
             fn $fn1(self, rhs: B) -> Self::Output {
-                self.$fn2(rhs.borrow())
+                let rhs = rhs.borrow()?;
+                self.$fn2(rhs)
             }
         }
     };

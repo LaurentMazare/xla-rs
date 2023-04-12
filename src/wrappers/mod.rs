@@ -182,13 +182,14 @@ pub(self) fn handle_status(status: c_lib::status) -> Result<()> {
     if status.is_null() {
         Ok(())
     } else {
-        let error_message = unsafe {
+        let msg = unsafe {
             let error_message_ptr = c_lib::status_error_message(status);
             let error_message = c_ptr_to_string(error_message_ptr);
             c_lib::status_free(status);
             error_message
         };
-        Err(Error::XlaError(error_message))
+        let backtrace = std::backtrace::Backtrace::capture().to_string();
+        Err(Error::XlaError { msg, backtrace })
     }
 }
 

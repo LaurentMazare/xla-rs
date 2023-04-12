@@ -7,12 +7,13 @@ use xla::{Literal, XlaBuilder, XlaOp};
 
 const ET: xla::PrimitiveType = xla::PrimitiveType::F32;
 
-fn new_gelu(x: &XlaOp) -> XlaOp {
+fn new_gelu(x: &XlaOp) -> Result<XlaOp> {
     let b = x.builder();
     let sqrt_two_over_pi = b.c0((2f32 / std::f32::consts::PI).sqrt());
     // 0.5 * x * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) * (x + 0.044715 * torch.pow(x, 3.0))))
-    let v = sqrt_two_over_pi * (b.c0(0.044715f32) * x.pow(&b.c0(3f32)) + x);
-    b.c0(0.5f32) * x * (v.tanh() + b.c0(1f32))
+    let v = (sqrt_two_over_pi * ((b.c0(0.044715f32) * x.pow(&b.c0(3f32))?)? + x)?)?;
+    let res = ((b.c0(0.5f32) * x)? * (v.tanh()? + b.c0(1f32))?)?;
+    Ok(res)
 }
 
 struct Embedding {
@@ -49,8 +50,8 @@ impl LayerNorm {
 
     fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
         let b = x.builder();
-        let scale = b.constant_literal(&self.scale).reshape(&[1, 1, self.size]);
-        let bias = b.constant_literal(&self.bias).reshape(&[1, 1, self.size]);
+        let scale = b.constant_literal(&self.scale).reshape(&[1, 1, self.size])?;
+        let bias = b.constant_literal(&self.bias).reshape(&[1, 1, self.size])?;
         let x_norm = x.layer_norm(-1, &scale, &bias)?;
         Ok(x_norm)
     }
@@ -74,12 +75,12 @@ impl Linear {
         let b = x.builder();
         let x_rank = x.rank()?;
         let ws = b.constant_literal(&self.ws);
-        let x = x.dot_general(&ws, &[x_rank as i64 - 1], &[0], &[], &[]);
+        let x = x.dot_general(&ws, &[x_rank as i64 - 1], &[0], &[], &[])?;
         let y = match &self.bs {
             None => x,
             Some(bs) => {
-                let bs = b.constant_literal(bs).reshape(&[1, 1, self.out_size as i64]);
-                x + bs
+                let bs = b.constant_literal(bs).reshape(&[1, 1, self.out_size as i64])?;
+                (x + bs)?
             }
         };
         Ok(y)
@@ -88,8 +89,9 @@ impl Linear {
 
 fn masked_fill<T: xla::NativeType>(on_false: &XlaOp, mask: &XlaOp, on_true: T) -> Result<XlaOp> {
     let shape = mask.shape()?;
-    let on_true = mask.builder().c0(on_true).broadcast(shape.dimensions());
-    Ok(mask.select(&on_true, on_false))
+    let on_true = mask.builder().c0(on_true).broadcast(shape.dimensions())?;
+    let m = mask.select(&on_true, on_false)?;
+    Ok(m)
 }
 
 struct CausalSelfAttention {
@@ -112,28 +114,32 @@ impl CausalSelfAttention {
         let (b, t, c) = <(i64, i64, i64)>::try_from(&x_shape)?;
         let qkv = self.c_attn.forward(x)?;
         let n_embd = self.n_embd as i64;
-        let q = qkv.slice_in_dim(0, n_embd, 1, 2);
-        let k = qkv.slice_in_dim(n_embd, 2 * n_embd, 1, 2);
-        let v = qkv.slice_in_dim(2 * n_embd, 3 * n_embd, 1, 2);
+        let q = qkv.slice_in_dim(0, n_embd, 1, 2)?;
+        let k = qkv.slice_in_dim(n_embd, 2 * n_embd, 1, 2)?;
+        let v = qkv.slice_in_dim(2 * n_embd, 3 * n_embd, 1, 2)?;
         let target_dim = [b, t, self.n_head as i64, c / self.n_head as i64];
-        let k = k.reshape(&target_dim).swap_dims(1, 2)?;
-        let q = q.reshape(&target_dim).swap_dims(1, 2)?;
-        let v = v.reshape(&target_dim).swap_dims(1, 2)?;
+        let k = k.reshape(&target_dim)?.swap_dims(1, 2)?;
+        let q = q.reshape(&target_dim)?.swap_dims(1, 2)?;
+        let v = v.reshape(&target_dim)?.swap_dims(1, 2)?;
         let k_shape = k.shape()?;
         // TODO: Replace dot_general with matmul.
-        let att = q.dot_general(&k.swap_dims(-2, -1)?, &[3], &[2], &[0, 1], &[0, 1])
-            * builder.c0(1f32 / (k_shape.last_dim().unwrap() as f32).sqrt());
+        let att = (q.dot_general(&k.swap_dims(-2, -1)?, &[3], &[2], &[0, 1], &[0, 1])?
+            * builder.c0(1f32 / (k_shape.last_dim().unwrap() as f32).sqrt()))?;
         let mask = builder
             .one(xla::PrimitiveType::Pred)
-            .broadcast(&[t, t])
-            .lower_triangle()
-            .reshape(&[1, 1, t, t]);
-        let zero =
-            builder.zero(xla::PrimitiveType::Pred).broadcast(&[b, self.n_head as i64, 1024, 1024]);
-        let att = masked_fill(&att, &mask.eq(&zero), f32::NEG_INFINITY)?;
+            .broadcast(&[t, t])?
+            .lower_triangle()?
+            .reshape(&[1, 1, t, t])?;
+        let zero = builder.zero(xla::PrimitiveType::Pred).broadcast(&[
+            b,
+            self.n_head as i64,
+            1024,
+            1024,
+        ])?;
+        let att = masked_fill(&att, &mask.eq(&zero)?, f32::NEG_INFINITY)?;
         // TODO: Replace dot_general with matmul.
-        let y = att.softmax(-1)?.dot_general(&v, &[3], &[2], &[0, 1], &[0, 1]);
-        let y = y.swap_dims(1, 2)?.reshape(x_shape.dimensions());
+        let y = att.softmax(-1)?.dot_general(&v, &[3], &[2], &[0, 1], &[0, 1])?;
+        let y = y.swap_dims(1, 2)?.reshape(x_shape.dimensions())?;
         let y = self.c_proj.forward(&y)?;
         Ok(y)
     }
@@ -153,7 +159,7 @@ impl Mlp {
 
     fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
         let x = self.c_fc.forward(x)?;
-        let x = new_gelu(&x);
+        let x = new_gelu(&x)?;
         self.c_proj.forward(&x)
     }
 }
@@ -189,8 +195,8 @@ impl Block {
     }
 
     fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
-        let x = self.attn.forward(&self.ln1.forward(x)?)? + x;
-        let x = self.mlp.forward(&self.ln2.forward(&x)?)? + x;
+        let x = (self.attn.forward(&self.ln1.forward(x)?)? + x)?;
+        let x = (self.mlp.forward(&self.ln2.forward(&x)?)? + x)?;
         Ok(x)
     }
 }
@@ -201,13 +207,6 @@ struct Gpt {
     wpe: Embedding,
     blocks: Vec<Block>,
     ln_f: LayerNorm,
-}
-
-fn debug(builder: &XlaBuilder, message: &str) -> Result<()> {
-    let status = builder.get_current_status();
-    println!("{message} {status:?}");
-    status?;
-    Ok(())
 }
 
 impl Gpt {
@@ -225,21 +224,16 @@ impl Gpt {
         let x_shape = x.shape()?;
         let (_b, t) = <(i64, i64)>::try_from(&x_shape)?;
         let arange: Vec<_> = (0..t).collect();
-        let pos = builder.c1(&arange).reshape(&[1, t]);
+        let pos = builder.c1(&arange).reshape(&[1, t])?;
 
         let tok_emb = self.wte.forward(x)?;
         let pos_emb = self.wpe.forward(&pos)?;
-        debug(builder, "post embedding")?;
-        let mut x = tok_emb + pos_emb;
-        debug(builder, "pre blocks")?;
+        let mut x = (tok_emb + pos_emb)?;
         for block in self.blocks.iter() {
             x = block.forward(&x)?;
         }
-        debug(builder, "post blocks")?;
         let x = self.ln_f.forward(&x)?;
-        debug(builder, "post ln_f")?;
         let logits = self.lm_head.forward(&x)?;
-        debug(builder, "post logits")?;
         Ok(logits)
     }
 }
@@ -258,6 +252,9 @@ fn main() -> Result<()> {
     println!("{} {} {}", client.platform_name(), client.platform_version(), client.device_count());
     let gpt = gpt_computation()?;
     let gpt_exe = client.compile(&gpt)?;
-    let _result = gpt_exe.execute_literal(&[Literal::from(12f32)])?;
+    let input = vec![42f32; 1024 * 2];
+    let result = gpt_exe.execute_literal(&[Literal::vec(&input)])?;
+    let result = result[0][0].to_literal_sync()?;
+    println!("{:?}", result.shape());
     Ok(())
 }
