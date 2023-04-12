@@ -116,8 +116,18 @@ impl XlaOp {
     }
 
     pub fn transpose(&self, index_perm: &[i64]) -> Self {
-        let op = unsafe { c_lib::op_collapse(self.op, index_perm.len(), index_perm.as_ptr()) };
+        let op = unsafe { c_lib::op_transpose(self.op, index_perm.len(), index_perm.as_ptr()) };
         self.wrap(op)
+    }
+
+    pub fn swap_dims(&self, index1: i64, index2: i64) -> Result<Self> {
+        let index1 = self.normalize_index(index1)?;
+        let index2 = self.normalize_index(index2)?;
+        let shape = self.shape()?;
+        let mut index_perm = shape.dimensions().to_vec();
+        index_perm[index1 as usize] = index2;
+        index_perm[index2 as usize] = index1;
+        Ok(self.transpose(&index_perm))
     }
 
     pub fn slice_in_dim(&self, start_index: i64, stop_index: i64, stride: i64, dim: i64) -> Self {
@@ -233,6 +243,31 @@ impl XlaOp {
 
     pub fn shape(&self) -> Result<Shape> {
         self.builder.get_shape(self)
+    }
+
+    pub fn dot_general(
+        &self,
+        rhs: &XlaOp,
+        lhs_contracting_dims: &[i64],
+        rhs_contracting_dims: &[i64],
+        lhs_batch_dims: &[i64],
+        rhs_batch_dims: &[i64],
+    ) -> Self {
+        let op = unsafe {
+            c_lib::op_dot_general(
+                self.op,
+                rhs.op,
+                lhs_contracting_dims.as_ptr(),
+                lhs_contracting_dims.len(),
+                rhs_contracting_dims.as_ptr(),
+                rhs_contracting_dims.len(),
+                lhs_batch_dims.as_ptr(),
+                lhs_batch_dims.len(),
+                rhs_batch_dims.as_ptr(),
+                rhs_batch_dims.len(),
+            )
+        };
+        self.wrap(op)
     }
 
     pub fn gather(

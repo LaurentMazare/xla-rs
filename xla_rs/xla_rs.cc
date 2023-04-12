@@ -293,6 +293,32 @@ xla_op op_dot(const xla_op lhs, const xla_op rhs) {
   END_PROTECT_OP(lhs)
 }
 
+xla_op op_dot_general(
+    const xla_op lhs,
+    const xla_op rhs,
+    const int64_t* lhs_c,
+    size_t nlhs_c,
+    const int64_t* rhs_c,
+    size_t nrhs_c,
+    const int64_t* lhs_b,
+    size_t nlhs_b,
+    const int64_t* rhs_b,
+    size_t nrhs_b
+) {
+  BEGIN_PROTECT_OP
+  DotDimensionNumbers dnums;
+  for (size_t i = 0; i < nlhs_c; ++i)
+    dnums.add_lhs_contracting_dimensions(lhs_c[i]);
+  for (size_t i = 0; i < nrhs_c; ++i)
+    dnums.add_rhs_contracting_dimensions(rhs_c[i]);
+  for (size_t i = 0; i < nlhs_b; ++i)
+    dnums.add_lhs_batch_dimensions(lhs_b[i]);
+  for (size_t i = 0; i < nrhs_b; ++i)
+    dnums.add_rhs_batch_dimensions(rhs_b[i]);
+  return new XlaOp(DotGeneral(*lhs, *rhs, dnums));
+  END_PROTECT_OP(lhs)
+}
+ 
 xla_op op_eq(const xla_op lhs, const xla_op rhs) {
   BEGIN_PROTECT_OP
   return new XlaOp(Eq(*lhs, *rhs));

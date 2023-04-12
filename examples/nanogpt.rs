@@ -36,6 +36,7 @@ impl Embedding {
 struct LayerNorm {
     scale: Literal,
     bias: Literal,
+    size: i64,
 }
 
 impl LayerNorm {
@@ -43,13 +44,13 @@ impl LayerNorm {
         // TODO
         let scale = Literal::create_from_shape(ET, &[size]);
         let bias = Literal::create_from_shape(ET, &[size]);
-        Self { scale, bias }
+        Self { scale, bias, size: size as i64 }
     }
 
     fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
         let b = x.builder();
-        let scale = b.constant_literal(&self.scale);
-        let bias = b.constant_literal(&self.bias);
+        let scale = b.constant_literal(&self.scale).reshape(&[1, 1, self.size]);
+        let bias = b.constant_literal(&self.bias).reshape(&[1, 1, self.size]);
         let x_norm = x.layer_norm(-1, &scale, &bias)?;
         Ok(x_norm)
     }
@@ -58,6 +59,7 @@ impl LayerNorm {
 struct Linear {
     ws: Literal,
     bs: Option<Literal>,
+    out_size: usize,
 }
 
 impl Linear {
@@ -65,20 +67,22 @@ impl Linear {
         // TODO
         let ws = Literal::create_from_shape(ET, &[in_size, out_size]);
         let bs = Literal::create_from_shape(ET, &[out_size]);
-        Self { ws, bs: Some(bs) }
+        Self { ws, bs: Some(bs), out_size }
     }
 
-    fn forward(&self, x: &XlaOp) -> XlaOp {
+    fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
         let b = x.builder();
+        let x_rank = x.rank()?;
         let ws = b.constant_literal(&self.ws);
-        let x = x.dot(&ws.transpose(&[-2, -1]));
-        match &self.bs {
+        let x = x.dot_general(&ws.swap_dims(-2, -1)?, &[x_rank as i64 - 1], &[0], &[], &[]);
+        let y = match &self.bs {
             None => x,
             Some(bs) => {
-                let bs = b.constant_literal(bs);
+                let bs = b.constant_literal(bs).reshape(&[1, 1, self.out_size as i64]);
                 x + bs
             }
-        }
+        };
+        Ok(y)
     }
 }
 
@@ -106,23 +110,23 @@ impl CausalSelfAttention {
         let builder = x.builder();
         let x_shape = x.shape()?;
         let (b, t, c) = <(i64, i64, i64)>::try_from(&x_shape)?;
-        let qkv = self.c_attn.forward(x);
+        let qkv = self.c_attn.forward(x)?;
         let n_embd = self.n_embd as i64;
         let q = qkv.slice_in_dim(0, n_embd, 1, 2);
         let k = qkv.slice_in_dim(n_embd, 2 * n_embd, 1, 2);
         let v = qkv.slice_in_dim(2 * n_embd, 3 * n_embd, 1, 2);
-        let target_dim = [b, t, c / self.n_head as i64];
-        let k = k.reshape(&target_dim).transpose(&[1, 2]);
-        let q = q.reshape(&target_dim).transpose(&[1, 2]);
-        let v = v.reshape(&target_dim).transpose(&[1, 2]);
+        let target_dim = [b, t, self.n_head as i64, c / self.n_head as i64];
+        let k = k.reshape(&target_dim).swap_dims(1, 2)?;
+        let q = q.reshape(&target_dim).swap_dims(1, 2)?;
+        let v = v.reshape(&target_dim).swap_dims(1, 2)?;
         let k_shape = k.shape()?;
-        let att = q.dot(&k.transpose(&[-2, -1]))
+        let att = q.dot(&k.swap_dims(-2, -1)?)
             * builder.c0(1f32 / (k_shape.last_dim().unwrap() as f32).sqrt());
         let mask = builder.one(ET).broadcast(&[t, t]).lower_triangle().broadcast(&[1, 1, t, t]);
         let att = masked_fill(&att, &mask.eq(&builder.c0(0f32)), f32::NEG_INFINITY)?;
         let y = att.softmax(-1)?.dot(&v);
-        let y = y.transpose(&[1, 2]).reshape(x_shape.dimensions());
-        let y = self.c_proj.forward(&y);
+        let y = y.swap_dims(1, 2)?.reshape(x_shape.dimensions());
+        let y = self.c_proj.forward(&y)?;
         Ok(y)
     }
 }
@@ -139,8 +143,8 @@ impl Mlp {
         Self { c_fc, c_proj }
     }
 
-    fn forward(&self, x: &XlaOp) -> XlaOp {
-        let x = self.c_fc.forward(x);
+    fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
+        let x = self.c_fc.forward(x)?;
         let x = new_gelu(&x);
         self.c_proj.forward(&x)
     }
@@ -178,7 +182,7 @@ impl Block {
 
     fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
         let x = self.attn.forward(&self.ln1.forward(x)?)? + x;
-        let x = self.mlp.forward(&self.ln2.forward(&x)?) + x;
+        let x = self.mlp.forward(&self.ln2.forward(&x)?)? + x;
         Ok(x)
     }
 }
@@ -226,7 +230,7 @@ impl Gpt {
         debug(builder, "post blocks")?;
         let x = self.ln_f.forward(&x)?;
         debug(builder, "post ln_f")?;
-        let logits = self.lm_head.forward(&x.slice_in_dim(-1, -1, 1, 1));
+        let logits = self.lm_head.forward(&x.slice_in_dim(-1, -1, 1, 1))?;
         Ok(logits)
     }
 }
