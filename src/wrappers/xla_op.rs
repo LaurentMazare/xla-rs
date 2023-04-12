@@ -173,6 +173,16 @@ impl XlaOp {
     }
 
     pub fn dimension_size(&self, dim: i64) -> Self {
+        let dim = if dim >= 0 {
+            dim
+        } else {
+            // TODO: Add a faster way to obtain the rank.
+            let rank = match self.shape() {
+                Ok(shape) => shape.dimensions.len() as i64,
+                Err(err) => return self.builder().internal_error(&err.to_string()),
+            };
+            rank + dim
+        };
         let op = unsafe { c_lib::op_dimension_size(self.op, dim) };
         self.wrap(op)
     }
@@ -248,7 +258,9 @@ impl XlaOp {
         let mut index_dims_plus_1 = index_dims.to_vec();
         index_dims_plus_1.push(1);
         let indices = indices.reshape(&index_dims_plus_1);
-        self.gather(&indices, &offset_dims, &[axis], &[axis], None, &slice_sizes)
+        // Same as in Jax: always use the last dimension for index_vector_dim.
+        let index_vector_dim = Some(index_dims.len() as i64);
+        self.gather(&indices, &offset_dims, &[axis], &[axis], index_vector_dim, &slice_sizes)
     }
 
     fn maybe_keep_dims(&self, res: XlaOp, dims: &[i64], keep_dims: bool) -> Result<XlaOp> {

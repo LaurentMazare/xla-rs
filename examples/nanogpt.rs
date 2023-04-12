@@ -222,7 +222,7 @@ fn gpt_computation() -> Result<xla::XlaComputation> {
     let b = XlaBuilder::new("gpt");
     let config = GptConfig::default();
     let gpt = Gpt::new(&config)?;
-    let input = b.parameter(0, xla::PrimitiveType::S32, &[1, config.block_size as i64], "tokens");
+    let input = b.parameter(0, xla::PrimitiveType::S32, &[2, config.block_size as i64], "tokens");
     let model = gpt.forward(&input)?;
     Ok(model.build()?)
 }
