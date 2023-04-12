@@ -120,11 +120,19 @@ impl CausalSelfAttention {
         let q = q.reshape(&target_dim).swap_dims(1, 2)?;
         let v = v.reshape(&target_dim).swap_dims(1, 2)?;
         let k_shape = k.shape()?;
-        let att = q.dot(&k.swap_dims(-2, -1)?)
+        // TODO: Replace dot_general with matmul.
+        let att = q.dot_general(&k.swap_dims(-2, -1)?, &[3], &[2], &[0, 1], &[0, 1])
             * builder.c0(1f32 / (k_shape.last_dim().unwrap() as f32).sqrt());
-        let mask = builder.one(ET).broadcast(&[t, t]).lower_triangle().broadcast(&[1, 1, t, t]);
-        let att = masked_fill(&att, &mask.eq(&builder.c0(0f32)), f32::NEG_INFINITY)?;
-        let y = att.softmax(-1)?.dot(&v);
+        let mask = builder
+            .one(xla::PrimitiveType::Pred)
+            .broadcast(&[t, t])
+            .lower_triangle()
+            .reshape(&[1, 1, t, t]);
+        let zero =
+            builder.zero(xla::PrimitiveType::Pred).broadcast(&[b, self.n_head as i64, 1024, 1024]);
+        let att = masked_fill(&att, &mask.eq(&zero), f32::NEG_INFINITY)?;
+        // TODO: Replace dot_general with matmul.
+        let y = att.softmax(-1)?.dot_general(&v, &[3], &[2], &[0, 1], &[0, 1]);
         let y = y.swap_dims(1, 2)?.reshape(x_shape.dimensions());
         let y = self.c_proj.forward(&y)?;
         Ok(y)
@@ -230,7 +238,8 @@ impl Gpt {
         debug(builder, "post blocks")?;
         let x = self.ln_f.forward(&x)?;
         debug(builder, "post ln_f")?;
-        let logits = self.lm_head.forward(&x.slice_in_dim(-1, -1, 1, 1))?;
+        let logits = self.lm_head.forward(&x)?;
+        debug(builder, "post logits")?;
         Ok(logits)
     }
 }
