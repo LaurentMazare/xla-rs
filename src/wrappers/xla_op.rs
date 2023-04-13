@@ -70,12 +70,12 @@ impl XlaOp {
     binary_op!(atan2, c_lib::op_atan2);
     binary_op!(pow, c_lib::op_pow);
     binary_op!(dot, c_lib::op_dot);
-    binary_op!(eq, c_lib::op_add);
-    binary_op!(ne, c_lib::op_add);
-    binary_op!(ge, c_lib::op_add);
-    binary_op!(gt, c_lib::op_add);
-    binary_op!(le, c_lib::op_add);
-    binary_op!(lt, c_lib::op_add);
+    binary_op!(eq, c_lib::op_eq);
+    binary_op!(ne, c_lib::op_ne);
+    binary_op!(ge, c_lib::op_ge);
+    binary_op!(gt, c_lib::op_gt);
+    binary_op!(le, c_lib::op_le);
+    binary_op!(lt, c_lib::op_lt);
 
     unary_op!(not, c_lib::op_not);
     unary_op!(abs, c_lib::op_abs);
@@ -156,6 +156,15 @@ impl XlaOp {
         let dim = self.normalize_index(dim)?;
         let op = unsafe { c_lib::op_slice_in_dim(self.op, start_index, stop_index, stride, dim) };
         self.wrap(op)
+    }
+
+    pub fn slice_in_dim1(&self, start_index: i64, stop_index: i64, dim: i64) -> Result<Self> {
+        self.slice_in_dim(start_index, stop_index, 1, dim)
+    }
+
+    pub fn at(&self, index_in_dim: i64, dim_index: i64) -> Result<Self> {
+        let slice = self.slice_in_dim(index_in_dim, index_in_dim + 1, 1, dim_index)?;
+        slice.squeeze(dim_index)
     }
 
     pub fn squeeze(&self, index: i64) -> Result<Self> {

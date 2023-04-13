@@ -114,9 +114,9 @@ impl CausalSelfAttention {
         let (b, t, c) = (b as i64, t as i64, c as i64);
         let qkv = self.c_attn.forward(x)?;
         let n_embd = self.n_embd as i64;
-        let q = qkv.slice_in_dim(0, n_embd, 1, 2)?;
-        let k = qkv.slice_in_dim(n_embd, 2 * n_embd, 1, 2)?;
-        let v = qkv.slice_in_dim(2 * n_embd, 3 * n_embd, 1, 2)?;
+        let q = qkv.slice_in_dim1(0, n_embd, 2)?;
+        let k = qkv.slice_in_dim1(n_embd, 2 * n_embd, 2)?;
+        let v = qkv.slice_in_dim1(2 * n_embd, 3 * n_embd, 2)?;
         let target_dim = [b, t, self.n_head as i64, c / self.n_head as i64];
         let k = k.reshape(&target_dim)?.swap_dims(1, 2)?;
         let q = q.reshape(&target_dim)?.swap_dims(1, 2)?;
@@ -126,12 +126,12 @@ impl CausalSelfAttention {
         let att = (q.dot_general(&k.swap_dims(-2, -1)?, &[3], &[2], &[0, 1], &[0, 1])?
             * builder.c0(1f32 / (k_shape.last_dim().unwrap() as f32).sqrt()))?;
         let mask = builder
-            .one(xla::PrimitiveType::Pred)
+            .one(xla::PrimitiveType::S32)
             .broadcast(&[t, t])?
             .lower_triangle()?
             .reshape(&[1, 1, t, t])?;
         let zero =
-            builder.zero(xla::PrimitiveType::Pred).broadcast(&[b, self.n_head as i64, t, t])?;
+            builder.zero(xla::PrimitiveType::S32).broadcast(&[b, self.n_head as i64, t, t])?;
         let att = masked_fill(&att, &mask.eq(&zero)?, f32::NEG_INFINITY)?;
         // TODO: Replace dot_general with matmul.
         let y = att.softmax(-1)?.dot_general(&v, &[3], &[2], &[0, 1], &[0, 1])?;
@@ -251,5 +251,7 @@ fn main() -> Result<()> {
     let result = gpt_exe.execute_literal(&[Literal::vec(&input)])?;
     let result = result[0][0].to_literal_sync()?;
     println!("{:?}", result.shape());
+    let result: Vec<f32> = result.to_vec()?;
+    println!("{:?}", &result[..5]);
     Ok(())
 }
