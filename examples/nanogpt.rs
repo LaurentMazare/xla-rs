@@ -246,11 +246,17 @@ fn gpt_computation() -> Result<xla::XlaComputation> {
 fn main() -> Result<()> {
     let client = xla::PjRtClient::cpu()?;
     println!("{} {} {}", client.platform_name(), client.platform_version(), client.device_count());
+    let start_build = std::time::Instant::now();
     let gpt = gpt_computation()?;
+    println!("generated the computation in {:?}", start_build.elapsed());
+    let start_compile = std::time::Instant::now();
     let gpt_exe = client.compile(&gpt)?;
+    println!("compiled the executable in {:?}", start_compile.elapsed());
+    let start_eval = std::time::Instant::now();
     let input = vec![42f32; 1024 * 2];
     let result = gpt_exe.execute_literal(&[Literal::vec(&input)])?;
     let result = result[0][0].to_literal_sync()?;
+    println!("evaluated the executable in {:?}", start_eval.elapsed());
     println!("{:?}", result.shape());
     let result: Vec<f32> = result.to_vec()?;
     println!("{:?}", &result[..5]);
