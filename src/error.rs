@@ -6,7 +6,7 @@ pub enum Error {
     WrongElementCount { dims: Vec<usize>, element_count: usize },
 
     /// Error from the xla C++ library.
-    #[error("xla error {msg} {backtrace}")]
+    #[error("xla error {msg}\n{backtrace}")]
     XlaError { msg: String, backtrace: String },
 
     #[error("unexpected element type {0}")]

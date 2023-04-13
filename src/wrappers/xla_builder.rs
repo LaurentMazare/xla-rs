@@ -151,6 +151,14 @@ impl XlaBuilder {
         }
     }
 
+    pub fn get_dims(&self, op: &XlaOp) -> Result<Vec<usize>> {
+        let rank = self.get_dimensions_size(op)?;
+        let mut dims = vec![0; rank];
+        let status = unsafe { c_lib::get_dimensions(self.ptr(), op.op, dims.as_mut_ptr()) };
+        handle_status(status)?;
+        Ok(dims)
+    }
+
     pub fn get_element_type(&self, op: &XlaOp) -> Result<super::PrimitiveType> {
         let mut element_type = 0i32;
         let status = unsafe { c_lib::get_element_type(self.ptr(), op.op, &mut element_type) };

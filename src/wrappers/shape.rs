@@ -33,67 +33,29 @@ impl Shape {
     }
 }
 
-impl TryFrom<&Shape> for i64 {
-    type Error = Error;
+macro_rules! extract_dims {
+    ($cnt:tt, $dims:expr, $out_type:ty) => {
+        impl TryFrom<&Shape> for $out_type {
+            type Error = Error;
 
-    fn try_from(value: &Shape) -> Result<Self, Self::Error> {
-        let dims = &value.dimensions;
-        if dims.len() != 1 {
-            Err(Error::UnexpectedNumberOfDims { expected: 1, got: dims.len(), dims: dims.clone() })
-        } else {
-            Ok(dims[0])
+            fn try_from(value: &Shape) -> Result<Self, Self::Error> {
+                let dims = &value.dimensions;
+                if dims.len() != $cnt {
+                    Err(Error::UnexpectedNumberOfDims {
+                        expected: $cnt,
+                        got: dims.len(),
+                        dims: dims.clone(),
+                    })
+                } else {
+                    Ok($dims(dims))
+                }
+            }
         }
-    }
+    };
 }
 
-impl TryFrom<&Shape> for (i64, i64) {
-    type Error = Error;
-
-    fn try_from(value: &Shape) -> Result<Self, Self::Error> {
-        let dims = &value.dimensions;
-        if dims.len() != 2 {
-            Err(Error::UnexpectedNumberOfDims { expected: 2, got: dims.len(), dims: dims.clone() })
-        } else {
-            Ok((dims[0], dims[1]))
-        }
-    }
-}
-
-impl TryFrom<&Shape> for (i64, i64, i64) {
-    type Error = Error;
-
-    fn try_from(value: &Shape) -> Result<Self, Self::Error> {
-        let dims = &value.dimensions;
-        if dims.len() != 3 {
-            Err(Error::UnexpectedNumberOfDims { expected: 3, got: dims.len(), dims: dims.clone() })
-        } else {
-            Ok((dims[0], dims[1], dims[2]))
-        }
-    }
-}
-
-impl TryFrom<&Shape> for (i64, i64, i64, i64) {
-    type Error = Error;
-
-    fn try_from(value: &Shape) -> Result<Self, Self::Error> {
-        let dims = &value.dimensions;
-        if dims.len() != 4 {
-            Err(Error::UnexpectedNumberOfDims { expected: 4, got: dims.len(), dims: dims.clone() })
-        } else {
-            Ok((dims[0], dims[1], dims[2], dims[3]))
-        }
-    }
-}
-
-impl TryFrom<&Shape> for (i64, i64, i64, i64, i64) {
-    type Error = Error;
-
-    fn try_from(value: &Shape) -> Result<Self, Self::Error> {
-        let d = &value.dimensions;
-        if d.len() != 5 {
-            Err(Error::UnexpectedNumberOfDims { expected: 5, got: d.len(), dims: d.clone() })
-        } else {
-            Ok((d[0], d[1], d[2], d[3], d[4]))
-        }
-    }
-}
+extract_dims!(1, |d: &Vec<i64>| d[0], i64);
+extract_dims!(2, |d: &Vec<i64>| (d[0], d[1]), (i64, i64));
+extract_dims!(3, |d: &Vec<i64>| (d[0], d[1], d[2]), (i64, i64, i64));
+extract_dims!(4, |d: &Vec<i64>| (d[0], d[1], d[2], d[3]), (i64, i64, i64, i64));
+extract_dims!(5, |d: &Vec<i64>| (d[0], d[1], d[2], d[3], d[4]), (i64, i64, i64, i64, i64));

@@ -110,8 +110,8 @@ impl CausalSelfAttention {
 
     fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
         let builder = x.builder();
-        let x_shape = x.shape()?;
-        let (b, t, c) = <(i64, i64, i64)>::try_from(&x_shape)?;
+        let (b, t, c) = x.dim3()?;
+        let (b, t, c) = (b as i64, t as i64, c as i64);
         let qkv = self.c_attn.forward(x)?;
         let n_embd = self.n_embd as i64;
         let q = qkv.slice_in_dim(0, n_embd, 1, 2)?;
@@ -130,16 +130,12 @@ impl CausalSelfAttention {
             .broadcast(&[t, t])?
             .lower_triangle()?
             .reshape(&[1, 1, t, t])?;
-        let zero = builder.zero(xla::PrimitiveType::Pred).broadcast(&[
-            b,
-            self.n_head as i64,
-            1024,
-            1024,
-        ])?;
+        let zero =
+            builder.zero(xla::PrimitiveType::Pred).broadcast(&[b, self.n_head as i64, t, t])?;
         let att = masked_fill(&att, &mask.eq(&zero)?, f32::NEG_INFINITY)?;
         // TODO: Replace dot_general with matmul.
         let y = att.softmax(-1)?.dot_general(&v, &[3], &[2], &[0, 1], &[0, 1])?;
-        let y = y.swap_dims(1, 2)?.reshape(x_shape.dimensions())?;
+        let y = y.swap_dims(1, 2)?.reshape(&[b, t, c])?;
         let y = self.c_proj.forward(&y)?;
         Ok(y)
     }
@@ -221,8 +217,7 @@ impl Gpt {
 
     fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
         let builder = x.builder();
-        let x_shape = x.shape()?;
-        let (_b, t) = <(i64, i64)>::try_from(&x_shape)?;
+        let t = x.dim2()?.1 as i64;
         let arange: Vec<_> = (0..t).collect();
         let pos = builder.c1(&arange).reshape(&[1, t])?;
 

@@ -7,6 +7,21 @@ pub struct XlaOp {
     pub(super) builder: XlaBuilder,
 }
 
+macro_rules! extract_dims {
+    ($fn_name:ident, $cnt:tt, $dims:expr, $out_type:ty) => {
+        pub fn $fn_name(&self) -> Result<$out_type> {
+            let dims = self.builder.get_dims(self)?;
+            if dims.len() != $cnt {
+                let dims: Vec<_> = dims.iter().map(|d| *d as i64).collect();
+                Err(Error::UnexpectedNumberOfDims { expected: $cnt, got: dims.len(), dims })
+            } else {
+                let dims = $dims(dims);
+                Ok(dims)
+            }
+        }
+    };
+}
+
 macro_rules! binary_op {
     ($func_name:ident, $expression:expr) => {
         pub fn $func_name(&self, op: &XlaOp) -> Result<Self> {
@@ -138,8 +153,21 @@ impl XlaOp {
         stride: i64,
         dim: i64,
     ) -> Result<Self> {
+        let dim = self.normalize_index(dim)?;
         let op = unsafe { c_lib::op_slice_in_dim(self.op, start_index, stop_index, stride, dim) };
         self.wrap(op)
+    }
+
+    pub fn squeeze(&self, index: i64) -> Result<Self> {
+        let index = self.normalize_index(index)?;
+        let dims = self.dims()?;
+        let mut new_dims = vec![];
+        for (i, d) in dims.iter().enumerate() {
+            if i as i64 != index || *d != 1 {
+                new_dims.push(*d as i64)
+            }
+        }
+        self.reshape(&new_dims)
     }
 
     pub fn concat_in_dim(&self, args: &[&Self], dim: i64) -> Result<Self> {
@@ -220,9 +248,9 @@ impl XlaOp {
         }
     }
 
-    pub fn dimension_size(&self, index: i64) -> Result<Self> {
+    pub fn dimensions_size(&self, index: i64) -> Result<Self> {
         let index = self.normalize_index(index)?;
-        let op = unsafe { c_lib::op_dimension_size(self.op, index) };
+        let op = unsafe { c_lib::op_dimensions_size(self.op, index) };
         self.wrap(op)
     }
 
@@ -251,6 +279,21 @@ impl XlaOp {
     pub fn shape(&self) -> Result<Shape> {
         self.builder.get_shape(self)
     }
+
+    pub fn dims(&self) -> Result<Vec<usize>> {
+        self.builder.get_dims(self)
+    }
+
+    extract_dims!(dim1, 1, |d: Vec<usize>| d[0], usize);
+    extract_dims!(dim2, 2, |d: Vec<usize>| (d[0], d[1]), (usize, usize));
+    extract_dims!(dim3, 3, |d: Vec<usize>| (d[0], d[1], d[2]), (usize, usize, usize));
+    extract_dims!(dim4, 4, |d: Vec<usize>| (d[0], d[1], d[2], d[3]), (usize, usize, usize, usize));
+    extract_dims!(
+        dim5,
+        5,
+        |d: Vec<usize>| (d[0], d[1], d[2], d[3], d[4]),
+        (usize, usize, usize, usize, usize)
+    );
 
     pub fn dot_general(
         &self,
@@ -355,7 +398,7 @@ impl XlaOp {
         let et = self.element_type()?;
         let mut scale = b.one(PrimitiveType::S32);
         for d in dims.iter() {
-            scale = (scale * self.dimension_size(*d)?)?;
+            scale = (scale * self.dimensions_size(*d)?)?;
         }
         let sum = self.reduce_sum(dims, keep_dims)?;
         sum / scale.convert_element_type(et)?

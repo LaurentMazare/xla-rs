@@ -646,7 +646,7 @@ xla_op op_convert_element_type(const xla_op arg, int pr_type) {
   END_PROTECT_OP(arg)
 }
 
-xla_op op_dimension_size(const xla_op arg, int64_t dim) {
+xla_op op_dimensions_size(const xla_op arg, int64_t dim) {
   BEGIN_PROTECT_OP
   return new XlaOp(GetDimensionSize(*arg, dim));
   END_PROTECT_OP(arg)
@@ -743,6 +743,15 @@ status get_element_type(const xla_builder b, const xla_op o, int *out_element_ty
 status get_dimensions_size(const xla_builder b, const xla_op o, int *out_rank) {
   ASSIGN_OR_RETURN_STATUS(shape, b->GetShapePtr(*o));
   *out_rank = shape->dimensions_size();
+  return nullptr;
+}
+
+status get_dimensions(const xla_builder b, const xla_op o, size_t *out_dims) {
+  ASSIGN_OR_RETURN_STATUS(shape, b->GetShapePtr(*o));
+  size_t dim_size = shape->dimensions_size();
+  for (size_t i = 0; i < dim_size; ++i) {
+    out_dims[i] = shape->dimensions(i);
+  }
   return nullptr;
 }
 

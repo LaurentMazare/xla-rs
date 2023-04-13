@@ -138,7 +138,7 @@ xla_op op_slice_in_dim(const xla_op, int64_t, int64_t, int64_t, int64_t);
 xla_op op_concat_in_dim(const xla_op, const xla_op *, size_t, int64_t);
 xla_op op_gather(const xla_op, const xla_op, const int64_t*, size_t, const int64_t*, size_t, const int64_t*, size_t, const int64_t*, const int64_t*, size_t);
 xla_op op_convert_element_type(const xla_op, int);
-xla_op op_dimension_size(const xla_op, int64_t);
+xla_op op_dimensions_size(const xla_op, int64_t);
 xla_op op_reduce(const xla_op, const xla_op, const xla_computation, const int64_t*, size_t);
 xla_op op_internal_error(const xla_builder, const char*);
 xla_op op_unknown_error(const xla_builder, const char*);
@@ -156,6 +156,7 @@ void shape_free(shape);
 status get_shape(const xla_builder, const xla_op, shape*);
 status get_element_type(const xla_builder, const xla_op, int*);
 status get_dimensions_size(const xla_builder, const xla_op, int*);
+status get_dimensions(const xla_builder, const xla_op, size_t*);
 
 status build(const xla_builder, const xla_op, xla_computation*);
 status compile(const pjrt_client, const xla_computation, pjrt_loaded_executable*);
