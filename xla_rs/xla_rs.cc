@@ -842,6 +842,22 @@ literal literal_create_from_shape(int pr_type, const int64_t* dims, size_t ndims
   return new Literal(std::move(l));
 }
 
+literal literal_clone(const literal l) {
+  return new Literal(std::move(l->Clone()));
+}
+
+status literal_reshape(const literal l, const int64_t* dims, size_t ndims, literal *output) {
+  ASSIGN_OR_RETURN_STATUS(literal, l->Reshape(absl::Span<const int64_t>(dims, ndims)));
+  *output = new Literal(std::move(literal));
+  return nullptr;
+}
+
+status literal_convert(const literal l, int pr_type, literal *output) {
+  ASSIGN_OR_RETURN_STATUS(literal, l->Convert((PrimitiveType)pr_type));
+  *output = new Literal(std::move(literal));
+  return nullptr;
+}
+
 int64_t literal_element_count(const literal l) {
   return l->element_count();
 }

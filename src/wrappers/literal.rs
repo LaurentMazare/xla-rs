@@ -3,6 +3,13 @@ use crate::{c_lib, Error, Result};
 
 pub struct Literal(pub(super) c_lib::literal);
 
+impl Clone for Literal {
+    fn clone(&self) -> Self {
+        let v = unsafe { c_lib::literal_clone(self.0) };
+        Self(v)
+    }
+}
+
 impl Literal {
     pub fn create_from_shape(element_type: PrimitiveType, dims: &[usize]) -> Self {
         let dims: Vec<_> = dims.iter().map(|x| *x as i64).collect();
@@ -89,6 +96,21 @@ impl Literal {
     pub fn vec<T: NativeType>(f: &[T]) -> Self {
         let ptr = unsafe { T::create_r1(f.as_ptr(), f.len()) };
         Literal(ptr)
+    }
+
+    pub fn reshape(&self, dims: &[i64]) -> Result<Literal> {
+        let mut result: c_lib::literal = std::ptr::null_mut();
+        let status =
+            unsafe { c_lib::literal_reshape(self.0, dims.as_ptr(), dims.len(), &mut result) };
+        super::handle_status(status)?;
+        Ok(Literal(result))
+    }
+
+    pub fn convert(&self, element_type: PrimitiveType) -> Result<Literal> {
+        let mut result: c_lib::literal = std::ptr::null_mut();
+        let status = unsafe { c_lib::literal_convert(self.0, element_type as i32, &mut result) };
+        super::handle_status(status)?;
+        Ok(Literal(result))
     }
 }
 

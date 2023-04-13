@@ -166,6 +166,9 @@ status first_error(const xla_builder);
 status get_current_status(const xla_builder);
 
 literal literal_create_from_shape(int, const int64_t*, size_t);
+literal literal_clone(const literal);
+status literal_reshape(const literal, const int64_t*, size_t, literal*);
+status literal_convert(const literal, int, literal*);
 int64_t literal_element_count(const literal);
 int literal_element_type(const literal);
 void literal_shape(const literal, shape*);
