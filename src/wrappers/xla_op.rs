@@ -338,10 +338,8 @@ impl XlaOp {
         set_index_vector_dim: Option<i64>,
         slice_sizes: &[i64],
     ) -> Result<Self> {
-        let set_index_vector_dim = match set_index_vector_dim {
-            None => std::ptr::null(),
-            Some(v) => &v as *const i64,
-        };
+        let set_index_vector_dim_ptr =
+            set_index_vector_dim.as_ref().map(|p| p as *const _).unwrap_or(std::ptr::null());
         let op = unsafe {
             c_lib::op_gather(
                 self.op,
@@ -352,7 +350,7 @@ impl XlaOp {
                 collapsed_slice_dims.len(),
                 start_index_map.as_ptr(),
                 start_index_map.len(),
-                set_index_vector_dim,
+                set_index_vector_dim_ptr,
                 slice_sizes.as_ptr(),
                 slice_sizes.len(),
             )
