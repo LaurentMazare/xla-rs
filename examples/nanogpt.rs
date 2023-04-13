@@ -228,6 +228,7 @@ impl Gpt {
             x = block.forward(&x)?;
         }
         let x = self.ln_f.forward(&x)?;
+        let x = x.slice_in_dim1(t - 1, t, 1)?;
         let logits = self.lm_head.forward(&x)?;
         Ok(logits)
     }
