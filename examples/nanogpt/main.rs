@@ -1,79 +1,15 @@
 // A very simple GPT implementation based on https://github.com/karpathy/nanoGPT
 // This only contains the inference part as the xla crate does not support backpropagation.
 // No dropout as this is inference only.
-use anyhow::{Context, Result};
-use std::collections::HashMap;
+use anyhow::Result;
 
 extern crate xla;
 use xla::{Literal, XlaBuilder, XlaOp};
 
+mod var_store;
+use var_store::VarStore;
+
 const ET: xla::PrimitiveType = xla::PrimitiveType::F32;
-
-#[derive(Clone)]
-struct VarStore {
-    path: Vec<String>,
-    weights: std::rc::Rc<std::cell::RefCell<HashMap<String, Literal>>>,
-}
-
-impl VarStore {
-    fn new<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
-        let weights = xla::Literal::read_npz(path)?;
-        let weights = weights.into_iter().collect::<HashMap<_, _>>();
-        let weights = std::rc::Rc::new(std::cell::RefCell::new(weights));
-        Ok(VarStore { path: vec![], weights })
-    }
-
-    fn len(&self) -> usize {
-        self.weights.borrow().len()
-    }
-
-    fn take(&mut self, s: &str, expected_dims: &[usize]) -> Result<Literal> {
-        let path = format!("{}.{s}", self.path.join("."));
-        let literal = self
-            .weights
-            .borrow_mut()
-            .remove(&path)
-            .with_context(|| format!("cannot find {path} in VarStore"))?;
-        let shape = literal.shape()?;
-        let element_type = shape.element_type();
-        let dims = shape.dimensions();
-        if element_type != ET {
-            anyhow::bail!(
-                "unexpected element type for {}, got {:?} expected {:?}",
-                path,
-                element_type,
-                ET
-            )
-        }
-        if dims.iter().zip(expected_dims.iter()).any(|(u, v)| *u != *v as i64) {
-            anyhow::bail!(
-                "unexpected dims for {}, got {:?} expected {:?}",
-                path,
-                dims,
-                expected_dims
-            )
-        }
-        Ok(literal)
-    }
-}
-
-impl<S: ToString> std::ops::Div<S> for &VarStore {
-    type Output = VarStore;
-
-    fn div(self, rhs: S) -> VarStore {
-        let mut path = self.path.clone();
-        path.push(rhs.to_string());
-        VarStore { path, weights: self.weights.clone() }
-    }
-}
-
-impl<S: ToString> std::ops::Div<S> for VarStore {
-    type Output = VarStore;
-
-    fn div(self, rhs: S) -> VarStore {
-        &self / rhs
-    }
-}
 
 fn new_gelu(x: &XlaOp) -> Result<XlaOp> {
     let b = x.builder();
@@ -90,7 +26,7 @@ struct Embedding {
 
 impl Embedding {
     fn new(mut vs: VarStore, vocab_size: usize, n_embd: usize) -> Result<Self> {
-        let embeddings = vs.take("weight", &[vocab_size, n_embd])?;
+        let embeddings = vs.take("weight", ET, &[vocab_size, n_embd])?;
         Ok(Self { embeddings })
     }
 
@@ -109,8 +45,8 @@ struct LayerNorm {
 
 impl LayerNorm {
     fn new(mut vs: VarStore, size: usize) -> Result<Self> {
-        let scale = vs.take("weight", &[size])?;
-        let bias = vs.take("bias", &[size])?;
+        let scale = vs.take("weight", ET, &[size])?;
+        let bias = vs.take("bias", ET, &[size])?;
         Ok(Self { scale, bias, size: size as i64 })
     }
 
@@ -131,13 +67,13 @@ struct Linear {
 
 impl Linear {
     fn new(mut vs: VarStore, in_size: usize, out_size: usize) -> Result<Self> {
-        let ws = vs.take("weight", &[in_size, out_size])?;
-        let bs = vs.take("bias", &[out_size])?;
+        let ws = vs.take("weight", ET, &[in_size, out_size])?;
+        let bs = vs.take("bias", ET, &[out_size])?;
         Ok(Self { ws, bs: Some(bs), out_size })
     }
 
     fn new_no_bias(mut vs: VarStore, in_size: usize, out_size: usize) -> Result<Self> {
-        let ws = vs.take("weight", &[in_size, out_size])?;
+        let ws = vs.take("weight", ET, &[in_size, out_size])?;
         Ok(Self { ws, bs: None, out_size })
     }
 
