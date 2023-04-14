@@ -328,8 +328,8 @@ fn main() -> Result<()> {
     let gpt_exe = client.compile(&gpt)?;
     println!("compiled the executable in {:?}", start_compile.elapsed());
     let start_eval = std::time::Instant::now();
-    let input = vec![42f32; 1024 * 2];
-    let result = gpt_exe.execute_literal(&[Literal::vec(&input)])?;
+    let input = Literal::vec(&vec![42i32; 1024 * 2]).reshape(&[2, 1024])?;
+    let result = gpt_exe.execute_literal(&[input])?;
     let result = result[0][0].to_literal_sync()?;
     println!("evaluated the executable in {:?}", start_eval.elapsed());
     println!("{:?}", result.shape());
