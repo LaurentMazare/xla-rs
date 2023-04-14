@@ -168,8 +168,7 @@ impl crate::Literal {
         let mut data: Vec<u8> = vec![];
         reader.read_to_end(&mut data)?;
         let dims: Vec<_> = header.shape.iter().map(|v| *v as usize).collect();
-        // TODO: copy data
-        let literal = Literal::create_from_shape(header.descr, &dims);
+        let literal = Literal::create_from_shape_and_untyped_data(header.descr, &dims, &data)?;
         Ok(literal)
     }
 
@@ -192,8 +191,7 @@ impl crate::Literal {
             let mut data: Vec<u8> = vec![];
             reader.read_to_end(&mut data)?;
             let dims: Vec<_> = header.shape.iter().map(|v| *v as usize).collect();
-            // TODO: copy data
-            let literal = Literal::create_from_shape(header.descr, &dims);
+            let literal = Literal::create_from_shape_and_untyped_data(header.descr, &dims, &data)?;
             result.push((name, literal))
         }
         Ok(result)

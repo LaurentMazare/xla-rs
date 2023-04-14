@@ -19,6 +19,31 @@ impl Literal {
         Self(v)
     }
 
+    pub fn create_from_shape_and_untyped_data(
+        element_type: PrimitiveType,
+        dims: &[usize],
+        untyped_data: &[u8],
+    ) -> Result<Self> {
+        let dims64: Vec<_> = dims.iter().map(|x| *x as i64).collect();
+        let v = unsafe {
+            c_lib::literal_create_from_shape_and_data(
+                element_type as i32,
+                dims64.as_ptr(),
+                dims64.len(),
+                untyped_data.as_ptr() as *const libc::c_void,
+                untyped_data.len(),
+            )
+        };
+        if v.is_null() {
+            return Err(Error::CannotCreateLiteralWithData {
+                data_len_in_bytes: untyped_data.len(),
+                element_type,
+                dims: dims.to_vec(),
+            });
+        }
+        Ok(Self(v))
+    }
+
     pub fn get_first_element<T: NativeType + ElementType>(&self) -> Result<T> {
         let element_type = self.element_type()?;
         if element_type != T::PRIMITIVE_TYPE {

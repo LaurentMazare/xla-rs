@@ -46,6 +46,13 @@ pub enum Error {
     /// Integer parse error.
     #[error(transparent)]
     ParseInt(#[from] std::num::ParseIntError),
+
+    #[error("cannot create literal with shape {element_type:?} {dims:?} from bytes data with len {data_len_in_bytes}")]
+    CannotCreateLiteralWithData {
+        data_len_in_bytes: usize,
+        element_type: crate::PrimitiveType,
+        dims: Vec<usize>,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

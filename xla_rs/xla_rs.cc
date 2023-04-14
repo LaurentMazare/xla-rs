@@ -842,6 +842,16 @@ literal literal_create_from_shape(int pr_type, const int64_t* dims, size_t ndims
   return new Literal(std::move(l));
 }
 
+literal literal_create_from_shape_and_data(int pr_type, const int64_t* dims, size_t ndims, const void* data, size_t data_len) {
+  auto shape = ShapeUtil::MakeShape((PrimitiveType)pr_type, absl::Span<const int64_t>(dims, ndims));
+  Literal l = Literal::CreateFromShape(shape);
+  if (l.size_bytes() != data_len) {
+    return nullptr;
+  }
+  memcpy(l.untyped_data(), data, data_len);
+  return new Literal(std::move(l));
+}
+
 literal literal_clone(const literal l) {
   return new Literal(std::move(l->Clone()));
 }
