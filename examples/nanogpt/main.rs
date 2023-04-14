@@ -1,11 +1,16 @@
 // A very simple GPT implementation based on https://github.com/karpathy/nanoGPT
 // This only contains the inference part as the xla crate does not support backpropagation.
 // No dropout as this is inference only.
+//
+// This example requires the following tokenizer config file:
+// https://openaipublic.blob.core.windows.net/gpt-2/encodings/main/vocab.bpe
+// And the gpt2.npz weight file that can be extracted by running the get_weights.py script.
 use anyhow::Result;
 
 extern crate xla;
 use xla::{Literal, XlaBuilder, XlaOp};
 
+mod tokenizer;
 mod var_store;
 use var_store::VarStore;
 
@@ -254,6 +259,8 @@ fn gpt_computation(vs: VarStore) -> Result<xla::XlaComputation> {
 fn main() -> Result<()> {
     let client = xla::PjRtClient::cpu()?;
     println!("{} {} {}", client.platform_name(), client.platform_version(), client.device_count());
+    let tokenizer = tokenizer::Tokenizer::new("vocab.bpe")?;
+    println!("loaded tokenizer config, vocab_size: {}", tokenizer.vocab_size());
     let start_load = std::time::Instant::now();
     let vs = VarStore::new("gpt2.npz")?;
     println!("loaded {} literals in {:?}", vs.len(), start_load.elapsed());
