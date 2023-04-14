@@ -328,8 +328,7 @@ impl Tokenizer {
         if word.is_empty() {
             return Vec::new();
         }
-        let last_index = word.len() - 1;
-        word[last_index] = format!("\u{0120}{}", word[last_index]);
+        word[0] = format!("\u{0120}{}", word[0]);
         while word.len() > 1 {
             let mut current_min = None;
             let pairs = Self::get_pairs(&word);

@@ -6,15 +6,18 @@
 // https://openaipublic.blob.core.windows.net/gpt-2/encodings/main/vocab.bpe
 // And the gpt2.npz weight file that can be extracted by running the get_weights.py script.
 use anyhow::Result;
+use rand::prelude::*;
 
 extern crate xla;
-use xla::{Literal, XlaBuilder, XlaOp};
+use xla::{Literal, PjRtLoadedExecutable, PrimitiveType, XlaBuilder, XlaOp};
 
 mod tokenizer;
 mod var_store;
+use tokenizer::Tokenizer;
 use var_store::VarStore;
 
-const ET: xla::PrimitiveType = xla::PrimitiveType::F32;
+const ET: PrimitiveType = PrimitiveType::F32;
+const TEMPERATURE: f32 = 0.8f32;
 
 fn new_gelu(x: &XlaOp) -> Result<XlaOp> {
     let b = x.builder();
@@ -137,12 +140,11 @@ impl CausalSelfAttention {
         let att = (q.dot_general(&k.swap_dims(-2, -1)?, &[3], &[2], &[0, 1], &[0, 1])?
             * builder.c0(1f32 / (k_shape.last_dim().unwrap() as f32).sqrt()))?;
         let mask = builder
-            .one(xla::PrimitiveType::S32)
+            .one(PrimitiveType::S32)
             .broadcast(&[t, t])?
             .lower_triangle()?
             .reshape(&[1, 1, t, t])?;
-        let zero =
-            builder.zero(xla::PrimitiveType::S32).broadcast(&[b, self.n_head as i64, t, t])?;
+        let zero = builder.zero(PrimitiveType::S32).broadcast(&[b, self.n_head as i64, t, t])?;
         let att = masked_fill(&att, &mask.eq(&zero)?, f32::NEG_INFINITY)?;
         // TODO: Replace dot_general with matmul.
         let y = att.softmax(-1)?.dot_general(&v, &[3], &[2], &[0, 1], &[0, 1])?;
@@ -247,36 +249,63 @@ impl Gpt {
     }
 }
 
-fn gpt_computation(vs: VarStore) -> Result<xla::XlaComputation> {
+fn gpt_computation(vs: VarStore, bsize: i64) -> Result<xla::XlaComputation> {
     let b = XlaBuilder::new("gpt");
     let config = GptConfig::default();
     let gpt = Gpt::new(vs, &config)?;
-    let input = b.parameter(0, xla::PrimitiveType::S32, &[2, config.block_size as i64], "tokens");
-    let model = gpt.forward(&input)?;
-    Ok(model.build()?)
+    let input = b.parameter(0, PrimitiveType::S32, &[bsize, config.block_size as i64], "tokens");
+    let logits = gpt.forward(&input)?;
+    let prs = (logits / b.c0(TEMPERATURE))?.softmax(-1)?;
+    Ok(prs.build()?)
+}
+
+fn sample(exe: &PjRtLoadedExecutable, tokenizer: &Tokenizer, cnt: usize) -> Result<String> {
+    let mut input = vec![42i32; 1024];
+    let input_str = include_str!("get_weights.py");
+    let mut init_tokens = vec![];
+    for token in tokenizer.encode(input_str)? {
+        input.push(token as i32);
+        init_tokens.push(token);
+    }
+    println!("Init:\n{}\n----", tokenizer.decode(&init_tokens));
+    let mut rng = thread_rng();
+    let mut new_tokens = vec![];
+    for i in 1..=cnt {
+        let input_l = Literal::vec(&input[input.len().saturating_sub(1024)..]);
+        let logits = exe.execute_literal(&[input_l])?;
+        let logits = logits[0][0].to_literal_sync()?;
+        let logits_v: Vec<f32> = logits.to_vec()?;
+        let distr = rand::distributions::WeightedIndex::new(&logits_v)?;
+        let next_token = distr.sample(&mut rng);
+        println!(
+            "{i} {next_token} {:?} {:?} (sum: {})",
+            logits.shape(),
+            &logits_v[..5],
+            logits_v.iter().sum::<f32>()
+        );
+        input.push(next_token as i32);
+        new_tokens.push(next_token);
+    }
+    Ok(tokenizer.decode(&new_tokens))
 }
 
 fn main() -> Result<()> {
     let client = xla::PjRtClient::cpu()?;
     println!("{} {} {}", client.platform_name(), client.platform_version(), client.device_count());
-    let tokenizer = tokenizer::Tokenizer::new("vocab.bpe")?;
+    let tokenizer = Tokenizer::new("vocab.bpe")?;
     println!("loaded tokenizer config, vocab_size: {}", tokenizer.vocab_size());
     let start_load = std::time::Instant::now();
     let vs = VarStore::new("gpt2.npz")?;
     println!("loaded {} literals in {:?}", vs.len(), start_load.elapsed());
     let start_build = std::time::Instant::now();
-    let gpt = gpt_computation(vs)?;
+    let gpt = gpt_computation(vs, 1)?;
     println!("generated the computation in {:?}", start_build.elapsed());
     let start_compile = std::time::Instant::now();
     let gpt_exe = client.compile(&gpt)?;
     println!("compiled the executable in {:?}", start_compile.elapsed());
     let start_eval = std::time::Instant::now();
-    let input = Literal::vec(&vec![42i32; 1024 * 2]).reshape(&[2, 1024])?;
-    let result = gpt_exe.execute_literal(&[input])?;
-    let result = result[0][0].to_literal_sync()?;
-    println!("evaluated the executable in {:?}", start_eval.elapsed());
-    println!("{:?}", result.shape());
-    let result: Vec<f32> = result.to_vec()?;
-    println!("{:?}", &result[..5]);
+    let sample = sample(&gpt_exe, &tokenizer, 100)?;
+    println!("generated the sample in {:?}", start_eval.elapsed());
+    println!("----\n{sample}\n----");
     Ok(())
 }
