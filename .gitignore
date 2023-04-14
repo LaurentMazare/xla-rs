@@ -11,5 +11,7 @@ Cargo.lock
 
 *.swp
 *.swo
+*.npy
+*.npz
 
 /xla_extension/
