@@ -50,6 +50,32 @@ pub enum PrimitiveType {
     Token = 17,
 }
 
+impl PrimitiveType {
+    pub fn element_size_in_bytes(&self) -> Option<usize> {
+        match self {
+            PrimitiveType::Invalid => None,
+            PrimitiveType::Pred => None,
+            PrimitiveType::S8 => Some(1),
+            PrimitiveType::S16 => Some(2),
+            PrimitiveType::S32 => Some(4),
+            PrimitiveType::S64 => Some(8),
+            PrimitiveType::U8 => Some(1),
+            PrimitiveType::U16 => Some(2),
+            PrimitiveType::U32 => Some(4),
+            PrimitiveType::U64 => Some(8),
+            PrimitiveType::F16 => Some(2),
+            PrimitiveType::F32 => Some(4),
+            PrimitiveType::Bf16 => Some(2),
+            PrimitiveType::F64 => Some(8),
+            PrimitiveType::C64 => Some(8),
+            PrimitiveType::C128 => Some(16),
+            PrimitiveType::Tuple => None,
+            PrimitiveType::OpaqueType => None,
+            PrimitiveType::Token => None,
+        }
+    }
+}
+
 pub trait ElementType: Copy {
     const PRIMITIVE_TYPE: PrimitiveType;
     const ELEMENT_SIZE_IN_BYTES: usize;

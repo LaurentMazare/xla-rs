@@ -459,43 +459,9 @@ impl Drop for XlaOp {
     }
 }
 
-trait BorrowOpResult {
-    fn borrow(&self) -> Result<&XlaOp>;
-}
-
-impl BorrowOpResult for XlaOp {
-    fn borrow(&self) -> Result<&XlaOp> {
-        Ok(self)
-    }
-}
-
-impl BorrowOpResult for &XlaOp {
-    fn borrow(&self) -> Result<&XlaOp> {
-        Ok(self)
-    }
-}
-
-impl BorrowOpResult for Result<XlaOp> {
-    fn borrow(&self) -> Result<&XlaOp> {
-        match self {
-            Ok(v) => Ok(v),
-            Err(e) => Err(e.clone()),
-        }
-    }
-}
-
-impl BorrowOpResult for &Result<XlaOp> {
-    fn borrow(&self) -> Result<&XlaOp> {
-        match self {
-            Ok(v) => Ok(v),
-            Err(e) => Err(e.clone()),
-        }
-    }
-}
-
 macro_rules! bin_trait {
     ($trait:ident, $fn1:ident, $fn2:ident) => {
-        impl<B: BorrowOpResult> std::ops::$trait<B> for XlaOp {
+        impl<B: std::borrow::Borrow<XlaOp>> std::ops::$trait<B> for XlaOp {
             type Output = Result<XlaOp>;
 
             fn $fn1(self, rhs: B) -> Self::Output {
@@ -503,12 +469,27 @@ macro_rules! bin_trait {
             }
         }
 
-        impl<B: BorrowOpResult> std::ops::$trait<B> for &XlaOp {
+        impl<B: std::borrow::Borrow<XlaOp>> std::ops::$trait<B> for &XlaOp {
             type Output = Result<XlaOp>;
 
             fn $fn1(self, rhs: B) -> Self::Output {
-                let rhs = rhs.borrow()?;
-                self.$fn2(rhs)
+                self.$fn2(rhs.borrow())
+            }
+        }
+
+        impl<B: std::borrow::Borrow<XlaOp>> std::ops::$trait<Result<B>> for XlaOp {
+            type Output = Result<XlaOp>;
+
+            fn $fn1(self, rhs: Result<B>) -> Self::Output {
+                (&self).$fn1(rhs)
+            }
+        }
+
+        impl<B: std::borrow::Borrow<XlaOp>> std::ops::$trait<Result<B>> for &XlaOp {
+            type Output = Result<XlaOp>;
+
+            fn $fn1(self, rhs: Result<B>) -> Self::Output {
+                self.$fn2(rhs?.borrow())
             }
         }
     };

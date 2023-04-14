@@ -1,5 +1,5 @@
 /// Main library error type.
-#[derive(thiserror::Error, Debug, Clone)]
+#[derive(thiserror::Error, Debug)]
 pub enum Error {
     /// Incorrect number of elements.
     #[error("wrong element count {element_count} for dims {dims:?}")]
@@ -31,6 +31,21 @@ pub enum Error {
 
     #[error("index out of bounds {index}, rank {rank}")]
     IndexOutOfBounds { index: i64, rank: usize },
+
+    #[error("npy/npz error {0}")]
+    Npy(String),
+
+    /// I/O error.
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+
+    /// Zip file format error.
+    #[error(transparent)]
+    Zip(#[from] zip::result::ZipError),
+
+    /// Integer parse error.
+    #[error(transparent)]
+    ParseInt(#[from] std::num::ParseIntError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

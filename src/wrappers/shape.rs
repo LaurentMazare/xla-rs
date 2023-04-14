@@ -16,6 +16,10 @@ impl Shape {
         Shape { element_type, dimensions }
     }
 
+    pub fn element_type(&self) -> PrimitiveType {
+        self.element_type
+    }
+
     pub fn size(&self) -> usize {
         self.dimensions.iter().map(|d| *d as usize).product::<usize>()
     }
