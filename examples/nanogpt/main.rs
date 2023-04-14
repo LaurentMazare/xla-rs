@@ -260,14 +260,9 @@ fn gpt_computation(vs: VarStore, bsize: i64) -> Result<xla::XlaComputation> {
 }
 
 fn sample(exe: &PjRtLoadedExecutable, tokenizer: &Tokenizer, cnt: usize) -> Result<String> {
-    let mut input = vec![42i32; 1024];
-    let input_str = include_str!("get_weights.py");
-    let mut init_tokens = vec![];
-    for token in tokenizer.encode(input_str)? {
-        input.push(token as i32);
-        init_tokens.push(token);
-    }
-    println!("Init:\n{}\n----", tokenizer.decode(&init_tokens));
+    let input_str = vec!["This is some sample test to be used as initialization."; 100].join(" ");
+    let input = tokenizer.encode(&input_str)?;
+    let mut input: Vec<_> = input.into_iter().map(|d| d as i32).collect();
     let mut rng = thread_rng();
     let mut new_tokens = vec![];
     for i in 1..=cnt {

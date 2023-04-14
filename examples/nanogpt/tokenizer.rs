@@ -328,7 +328,6 @@ impl Tokenizer {
         if word.is_empty() {
             return Vec::new();
         }
-        word[0] = format!("\u{0120}{}", word[0]);
         while word.len() > 1 {
             let mut current_min = None;
             let pairs = Self::get_pairs(&word);
@@ -370,11 +369,11 @@ impl Tokenizer {
     #[allow(dead_code)]
     /// The main tokenization entry point, takes as input a string and returns the list of tokens.
     pub fn encode(&self, s: &str) -> anyhow::Result<Vec<usize>> {
-        let s = s.to_lowercase();
         let mut bpe_tokens: Vec<usize> = vec![self.start_of_text_token];
-        for token in self.re.captures_iter(&s) {
+        for token in self.re.captures_iter(s) {
             let token = token?.get(0).unwrap().as_str();
-            bpe_tokens.extend(self.bpe(token))
+            let token = token.replace(' ', "\u{0120}");
+            bpe_tokens.extend(self.bpe(&token))
         }
         bpe_tokens.push(self.end_of_text_token);
         Ok(bpe_tokens)
