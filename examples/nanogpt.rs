@@ -1,11 +1,79 @@
 // A very simple GPT implementation based on https://github.com/karpathy/nanoGPT
 // This only contains the inference part as the xla crate does not support backpropagation.
 // No dropout as this is inference only.
-use anyhow::Result;
+use anyhow::{Context, Result};
+use std::collections::HashMap;
+
 extern crate xla;
 use xla::{Literal, XlaBuilder, XlaOp};
 
 const ET: xla::PrimitiveType = xla::PrimitiveType::F32;
+
+#[derive(Clone)]
+struct VarStore {
+    path: Vec<String>,
+    weights: std::rc::Rc<std::cell::RefCell<HashMap<String, Literal>>>,
+}
+
+impl VarStore {
+    fn new<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
+        let weights = xla::Literal::read_npz(path)?;
+        let weights = weights.into_iter().collect::<HashMap<_, _>>();
+        let weights = std::rc::Rc::new(std::cell::RefCell::new(weights));
+        Ok(VarStore { path: vec![], weights })
+    }
+
+    fn len(&self) -> usize {
+        self.weights.borrow().len()
+    }
+
+    fn take(&mut self, s: &str, expected_dims: &[usize]) -> Result<Literal> {
+        let path = format!("{}.{s}", self.path.join("."));
+        let literal = self
+            .weights
+            .borrow_mut()
+            .remove(&path)
+            .with_context(|| format!("cannot find {path} in VarStore"))?;
+        let shape = literal.shape()?;
+        let element_type = shape.element_type();
+        let dims = shape.dimensions();
+        if element_type != ET {
+            anyhow::bail!(
+                "unexpected element type for {}, got {:?} expected {:?}",
+                path,
+                element_type,
+                ET
+            )
+        }
+        if dims.iter().zip(expected_dims.iter()).any(|(u, v)| *u != *v as i64) {
+            anyhow::bail!(
+                "unexpected dims for {}, got {:?} expected {:?}",
+                path,
+                dims,
+                expected_dims
+            )
+        }
+        Ok(literal)
+    }
+}
+
+impl<S: ToString> std::ops::Div<S> for &VarStore {
+    type Output = VarStore;
+
+    fn div(self, rhs: S) -> VarStore {
+        let mut path = self.path.clone();
+        path.push(rhs.to_string());
+        VarStore { path, weights: self.weights.clone() }
+    }
+}
+
+impl<S: ToString> std::ops::Div<S> for VarStore {
+    type Output = VarStore;
+
+    fn div(self, rhs: S) -> VarStore {
+        &self / rhs
+    }
+}
 
 fn new_gelu(x: &XlaOp) -> Result<XlaOp> {
     let b = x.builder();
@@ -21,10 +89,9 @@ struct Embedding {
 }
 
 impl Embedding {
-    fn new(vocab_size: usize, n_embd: usize) -> Self {
-        // TODO
-        let embeddings = Literal::create_from_shape(ET, &[vocab_size, n_embd]);
-        Self { embeddings }
+    fn new(mut vs: VarStore, vocab_size: usize, n_embd: usize) -> Result<Self> {
+        let embeddings = vs.take("weight", &[vocab_size, n_embd])?;
+        Ok(Self { embeddings })
     }
 
     fn forward(&self, indexes: &XlaOp) -> Result<XlaOp> {
@@ -41,11 +108,10 @@ struct LayerNorm {
 }
 
 impl LayerNorm {
-    fn new(size: usize) -> Self {
-        // TODO
-        let scale = Literal::create_from_shape(ET, &[size]);
-        let bias = Literal::create_from_shape(ET, &[size]);
-        Self { scale, bias, size: size as i64 }
+    fn new(mut vs: VarStore, size: usize) -> Result<Self> {
+        let scale = vs.take("weight", &[size])?;
+        let bias = vs.take("bias", &[size])?;
+        Ok(Self { scale, bias, size: size as i64 })
     }
 
     fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
@@ -64,11 +130,15 @@ struct Linear {
 }
 
 impl Linear {
-    fn new(in_size: usize, out_size: usize) -> Self {
-        // TODO
-        let ws = Literal::create_from_shape(ET, &[in_size, out_size]);
-        let bs = Literal::create_from_shape(ET, &[out_size]);
-        Self { ws, bs: Some(bs), out_size }
+    fn new(mut vs: VarStore, in_size: usize, out_size: usize) -> Result<Self> {
+        let ws = vs.take("weight", &[in_size, out_size])?;
+        let bs = vs.take("bias", &[out_size])?;
+        Ok(Self { ws, bs: Some(bs), out_size })
+    }
+
+    fn new_no_bias(mut vs: VarStore, in_size: usize, out_size: usize) -> Result<Self> {
+        let ws = vs.take("weight", &[in_size, out_size])?;
+        Ok(Self { ws, bs: None, out_size })
     }
 
     fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
@@ -102,10 +172,10 @@ struct CausalSelfAttention {
 }
 
 impl CausalSelfAttention {
-    fn new(n_head: usize, n_embd: usize) -> Self {
-        let c_attn = Linear::new(n_embd, 3 * n_embd);
-        let c_proj = Linear::new(n_embd, n_embd);
-        Self { c_attn, c_proj, n_head, n_embd }
+    fn new(vs: VarStore, n_head: usize, n_embd: usize) -> Result<Self> {
+        let c_attn = Linear::new(&vs / "c_attn", n_embd, 3 * n_embd)?;
+        let c_proj = Linear::new(&vs / "c_proj", n_embd, n_embd)?;
+        Ok(Self { c_attn, c_proj, n_head, n_embd })
     }
 
     fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
@@ -147,10 +217,10 @@ struct Mlp {
 }
 
 impl Mlp {
-    fn new(config: &GptConfig) -> Self {
-        let c_fc = Linear::new(config.n_embd, 4 * config.n_embd);
-        let c_proj = Linear::new(4 * config.n_embd, config.n_embd);
-        Self { c_fc, c_proj }
+    fn new(vs: VarStore, config: &GptConfig) -> Result<Self> {
+        let c_fc = Linear::new(&vs / "c_fc", config.n_embd, 4 * config.n_embd)?;
+        let c_proj = Linear::new(&vs / "c_proj", 4 * config.n_embd, config.n_embd)?;
+        Ok(Self { c_fc, c_proj })
     }
 
     fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
@@ -177,17 +247,17 @@ struct GptConfig {
 
 impl Default for GptConfig {
     fn default() -> Self {
-        Self { block_size: 1024, vocab_size: 50304, n_layer: 12, n_head: 12, n_embd: 768 }
+        Self { block_size: 1024, vocab_size: 50257, n_layer: 12, n_head: 12, n_embd: 768 }
     }
 }
 
 impl Block {
-    fn new(config: &GptConfig) -> Self {
-        let ln1 = LayerNorm::new(config.n_embd);
-        let attn = CausalSelfAttention::new(config.n_head, config.n_embd);
-        let ln2 = LayerNorm::new(config.n_embd);
-        let mlp = Mlp::new(config);
-        Self { ln1, attn, ln2, mlp }
+    fn new(vs: VarStore, config: &GptConfig) -> Result<Self> {
+        let ln1 = LayerNorm::new(&vs / "ln_1", config.n_embd)?;
+        let attn = CausalSelfAttention::new(&vs / "attn", config.n_head, config.n_embd)?;
+        let ln2 = LayerNorm::new(&vs / "ln_2", config.n_embd)?;
+        let mlp = Mlp::new(&vs / "mlp", config)?;
+        Ok(Self { ln1, attn, ln2, mlp })
     }
 
     fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
@@ -206,12 +276,14 @@ struct Gpt {
 }
 
 impl Gpt {
-    fn new(config: &GptConfig) -> Result<Self> {
-        let lm_head = Linear::new(config.n_embd, config.vocab_size);
-        let wte = Embedding::new(config.vocab_size, config.n_embd);
-        let wpe = Embedding::new(config.block_size, config.n_embd);
-        let blocks = (0..config.n_layer).map(|_i| Block::new(config)).collect();
-        let ln_f = LayerNorm::new(config.n_embd);
+    fn new(vs: VarStore, config: &GptConfig) -> Result<Self> {
+        let lm_head = Linear::new_no_bias(&vs / "lm_head", config.n_embd, config.vocab_size)?;
+        let wte = Embedding::new(&vs / "transformer" / "wte", config.vocab_size, config.n_embd)?;
+        let wpe = Embedding::new(&vs / "transformer" / "wpe", config.block_size, config.n_embd)?;
+        let blocks = (0..config.n_layer)
+            .map(|i| Block::new(&vs / "transformer" / "h" / i, config))
+            .collect::<Result<Vec<_>>>()?;
+        let ln_f = LayerNorm::new(&vs / "transformer" / "ln_f", config.n_embd)?;
         Ok(Self { lm_head, wte, wpe, blocks, ln_f })
     }
 
@@ -234,10 +306,10 @@ impl Gpt {
     }
 }
 
-fn gpt_computation() -> Result<xla::XlaComputation> {
+fn gpt_computation(vs: VarStore) -> Result<xla::XlaComputation> {
     let b = XlaBuilder::new("gpt");
     let config = GptConfig::default();
-    let gpt = Gpt::new(&config)?;
+    let gpt = Gpt::new(vs, &config)?;
     let input = b.parameter(0, xla::PrimitiveType::S32, &[2, config.block_size as i64], "tokens");
     let model = gpt.forward(&input)?;
     Ok(model.build()?)
@@ -246,8 +318,11 @@ fn gpt_computation() -> Result<xla::XlaComputation> {
 fn main() -> Result<()> {
     let client = xla::PjRtClient::cpu()?;
     println!("{} {} {}", client.platform_name(), client.platform_version(), client.device_count());
+    let start_load = std::time::Instant::now();
+    let vs = VarStore::new("gpt2.npz")?;
+    println!("loaded {} literals in {:?}", vs.len(), start_load.elapsed());
     let start_build = std::time::Instant::now();
-    let gpt = gpt_computation()?;
+    let gpt = gpt_computation(vs)?;
     println!("generated the computation in {:?}", start_build.elapsed());
     let start_compile = std::time::Instant::now();
     let gpt_exe = client.compile(&gpt)?;
