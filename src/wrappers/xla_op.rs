@@ -448,6 +448,59 @@ impl XlaOp {
         bias + ((self - mean)? * mul)? * scale
     }
 
+    pub fn matmul(&self, rhs: &Self) -> Result<Self> {
+        // Similar to the jax implementation but without the squeezing.
+        // https://github.com/google/jax/blob/849e47f79ac64ccba1a762804217c00a9905025b/jax/_src/numpy/lax_numpy.py#L3028
+        let lhs_shape = self.shape()?;
+        let rhs_shape = self.shape()?;
+        let lhs_dims = lhs_shape.dimensions();
+        let rhs_dims = rhs_shape.dimensions();
+        let lhs_ndims = lhs_dims.len();
+        let rhs_ndims = rhs_dims.len();
+        if lhs_ndims < 1 || rhs_ndims < 1 {
+            Err(Error::MatMulIncorrectDims {
+                lhs_dims: lhs_dims.to_vec(),
+                rhs_dims: rhs_dims.to_vec(),
+                msg: "empty dimension",
+            })?
+        }
+
+        let rhs_is_mat = rhs_ndims > 1;
+        let lhs_batch_ndims = lhs_ndims.saturating_sub(2);
+        let rhs_batch_ndims = rhs_ndims.saturating_sub(2);
+        let max_ndims = usize::max(lhs_batch_ndims, rhs_batch_ndims);
+        let mut lhs_batch_dims = vec![];
+        let mut rhs_batch_dims = vec![];
+        for idx in 0..max_ndims {
+            let lhs_idx = (idx + lhs_batch_ndims) as i64 - max_ndims as i64;
+            let rhs_idx = (idx + rhs_batch_ndims) as i64 - max_ndims as i64;
+            // Only one of lhs_idx and rhs_idx can be negative.
+            if lhs_idx < 0 && rhs_idx < 0 {
+                panic!("internal error: negative dim idxs {lhs_dims:?} {rhs_dims:?}")
+            } else if lhs_idx < 0 && rhs_idx >= 0 {
+                rhs_batch_dims.push(rhs_idx)
+            } else if lhs_idx >= 0 && rhs_idx < 0 {
+                lhs_batch_dims.push(lhs_idx)
+            } else if lhs_dims[lhs_idx as usize] == rhs_dims[rhs_idx as usize] {
+                lhs_batch_dims.push(lhs_idx);
+                rhs_batch_dims.push(rhs_idx);
+            } else {
+                Err(Error::MatMulIncorrectDims {
+                    lhs_dims: lhs_dims.to_vec(),
+                    rhs_dims: rhs_dims.to_vec(),
+                    msg: "incompatible batch dimensions",
+                })?
+            }
+        }
+        self.dot_general(
+            rhs,
+            &[lhs_ndims as i64 - 1],
+            &[rhs_ndims as i64 - 1 - i64::from(rhs_is_mat)],
+            &lhs_batch_dims,
+            &rhs_batch_dims,
+        )
+    }
+
     pub fn build(&self) -> Result<XlaComputation> {
         self.builder.build(self)
     }

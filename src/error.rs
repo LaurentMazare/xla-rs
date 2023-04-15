@@ -53,6 +53,9 @@ pub enum Error {
         element_type: crate::PrimitiveType,
         dims: Vec<usize>,
     },
+
+    #[error("invalid dimensions in matmul, lhs: {lhs_dims:?}, rhs: {rhs_dims:?}, {msg}")]
+    MatMulIncorrectDims { lhs_dims: Vec<i64>, rhs_dims: Vec<i64>, msg: &'static str },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

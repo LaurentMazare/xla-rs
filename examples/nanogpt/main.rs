@@ -136,8 +136,7 @@ impl CausalSelfAttention {
         let q = q.reshape(&target_dim)?.swap_dims(1, 2)?;
         let v = v.reshape(&target_dim)?.swap_dims(1, 2)?;
         let k_shape = k.shape()?;
-        // TODO: Replace dot_general with matmul.
-        let att = (q.dot_general(&k.swap_dims(-2, -1)?, &[3], &[2], &[0, 1], &[0, 1])?
+        let att = (q.matmul(&k.swap_dims(-2, -1)?)?
             * builder.c0(1f32 / (k_shape.last_dim().unwrap() as f32).sqrt()))?;
         let mask = builder
             .one(PrimitiveType::S32)
@@ -146,8 +145,7 @@ impl CausalSelfAttention {
             .reshape(&[1, 1, t, t])?;
         let zero = builder.zero(PrimitiveType::S32).broadcast(&[b, self.n_head as i64, t, t])?;
         let att = masked_fill(&att, &mask.eq(&zero)?, f32::NEG_INFINITY)?;
-        // TODO: Replace dot_general with matmul.
-        let y = att.softmax(-1)?.dot_general(&v, &[3], &[2], &[0, 1], &[0, 1])?;
+        let y = att.softmax(-1)?.matmul(&v)?;
         let y = y.swap_dims(1, 2)?.reshape(&[b, t, c])?;
         let y = self.c_proj.forward(&y)?;
         Ok(y)
