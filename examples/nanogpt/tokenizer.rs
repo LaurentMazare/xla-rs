@@ -264,9 +264,9 @@ const PAT: &str = r"'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+
 
 pub struct Tokenizer {
     re: fancy_regex::Regex,
-    encoder: HashMap<String, usize>,
-    decoder: HashMap<usize, String>,
-    bpe_ranks: HashMap<(String, String), usize>,
+    encoder: HashMap<Vec<u8>, usize>,
+    decoder: HashMap<usize, Vec<u8>>,
+    bpe_ranks: HashMap<(Vec<u8>, Vec<u8>), usize>,
     start_of_text_token: usize,
     end_of_text_token: usize,
 }
@@ -274,6 +274,7 @@ pub struct Tokenizer {
 impl Tokenizer {
     /// Creates a new tokenizer, this takes as input the path for the bpe rank file.
     pub fn new<T: AsRef<std::path::Path>>(path: T) -> anyhow::Result<Tokenizer> {
+        let u_to_byte = BYTES_TO_UNICODE.iter().map(|(u, v)| (*v, *u)).collect::<HashMap<_, _>>();
         let bpe_file = std::fs::File::open(path)?;
         let bpe_lines: Result<Vec<String>, _> = std::io::BufReader::new(bpe_file).lines().collect();
         let bpe_lines = bpe_lines?;
@@ -284,19 +285,25 @@ impl Tokenizer {
                 if vs.len() != 2 {
                     anyhow::bail!("expected two items got {} '{}'", vs.len(), line)
                 }
-                Ok((vs[0].to_string(), vs[1].to_string()))
+                let vs0: Vec<_> =
+                    vs[0].chars().filter_map(|u| u_to_byte.get(&u).copied()).collect();
+                let vs1: Vec<_> =
+                    vs[1].chars().filter_map(|u| u_to_byte.get(&u).copied()).collect();
+                Ok((vs0, vs1))
             })
             .collect();
         let bpe_lines = bpe_lines?;
-        let mut vocab: Vec<String> = Vec::new();
-        for (_index, elem) in BYTES_TO_UNICODE {
-            vocab.push(elem.into())
+        let mut vocab: Vec<Vec<u8>> = Vec::new();
+        for (index, _elem) in BYTES_TO_UNICODE {
+            vocab.push(vec![index])
         }
         for elem in bpe_lines.iter() {
-            vocab.push(format!("{}{}", elem.0, elem.1))
+            let mut both = elem.0.clone();
+            both.extend_from_slice(&elem.1);
+            vocab.push(both)
         }
         let end_of_text_token = vocab.len();
-        vocab.push("<|endoftext|>".to_string());
+        vocab.push("<|endoftext|>".as_bytes().to_vec());
         let encoder: HashMap<_, _> = vocab.into_iter().enumerate().map(|(i, v)| (v, i)).collect();
         let decoder: HashMap<_, _> = encoder.iter().map(|(k, v)| (*v, k.clone())).collect();
         let bpe_ranks: HashMap<_, _> =
@@ -313,7 +320,7 @@ impl Tokenizer {
         Ok(tokenizer)
     }
 
-    fn get_pairs(word: &[String]) -> HashSet<(String, String)> {
+    fn get_pairs(word: &[Vec<u8>]) -> HashSet<(Vec<u8>, Vec<u8>)> {
         let mut pairs = HashSet::new();
         for (i, v) in word.iter().enumerate() {
             if i > 0 {
@@ -323,8 +330,8 @@ impl Tokenizer {
         pairs
     }
 
-    fn bpe(&self, token: &str) -> Vec<usize> {
-        let mut word: Vec<String> = token.chars().map(|x| x.to_string()).collect();
+    fn bpe(&self, token: &[u8]) -> Vec<usize> {
+        let mut word: Vec<Vec<u8>> = token.iter().map(|&x| vec![x]).collect();
         if word.is_empty() {
             return Vec::new();
         }
@@ -354,7 +361,9 @@ impl Tokenizer {
             while index < word.len() {
                 let w = &word[index];
                 if index + 1 < word.len() && w == first && &word[index + 1] == second {
-                    new_word.push(format!("{first}{second}"));
+                    let mut first_and_second = first.clone();
+                    first_and_second.extend_from_slice(second);
+                    new_word.push(first_and_second);
                     index += 2
                 } else {
                     new_word.push(w.clone());
@@ -366,25 +375,20 @@ impl Tokenizer {
         word.iter().filter_map(|x| self.encoder.get(x)).copied().collect()
     }
 
-    #[allow(dead_code)]
     /// The main tokenization entry point, takes as input a string and returns the list of tokens.
     pub fn encode(&self, s: &str) -> anyhow::Result<Vec<usize>> {
         let mut bpe_tokens: Vec<usize> = vec![self.start_of_text_token];
-        for token in self.re.captures_iter(s) {
-            let token = token?.get(0).unwrap().as_str();
-            let token = token.replace(' ', "\u{0120}");
-            bpe_tokens.extend(self.bpe(&token))
+        for token in self.re.find_iter(s) {
+            bpe_tokens.extend(self.bpe(token?.as_str().as_bytes()))
         }
         bpe_tokens.push(self.end_of_text_token);
         Ok(bpe_tokens)
     }
 
-    #[allow(dead_code)]
     /// The inverse of the tokenization process, takes as input a list of tokens and returns a
     /// string that produces this tokenization.
     pub fn decode(&self, tokens: &[usize]) -> String {
-        let s: String = tokens.iter().map(|token| self.decoder[token].as_str()).collect();
-        s.replace('\u{0120}', " ")
+        tokens.iter().map(|token| String::from_utf8_lossy(&self.decoder[token])).collect()
     }
 
     pub fn vocab_size(&self) -> usize {

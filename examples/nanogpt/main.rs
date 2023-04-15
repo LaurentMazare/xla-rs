@@ -260,8 +260,9 @@ fn gpt_computation(vs: VarStore, bsize: i64) -> Result<xla::XlaComputation> {
 }
 
 fn sample(exe: &PjRtLoadedExecutable, tokenizer: &Tokenizer, cnt: usize) -> Result<String> {
-    let input_str = vec!["This is some sample test to be used as initialization."; 100].join(" ");
-    let input = tokenizer.encode(&input_str)?;
+    let input_str = include_str!("tokenizer.rs");
+    let mut input = tokenizer.encode(input_str)?;
+    input.pop(); // Remove the <endoftext> token.
     let mut input: Vec<_> = input.into_iter().map(|d| d as i32).collect();
     let mut rng = thread_rng();
     let mut new_tokens = vec![];
