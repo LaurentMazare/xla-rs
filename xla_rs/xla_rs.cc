@@ -23,11 +23,20 @@
   return new XlaOp(arg->builder()->ReportError(tsl::errors::Internal(e.what()))); \
 }
 
-status pjrt_client_create(pjrt_client *output) {
+status pjrt_cpu_client_create(pjrt_client *output) {
   ASSIGN_OR_RETURN_STATUS(client, xla::GetTfrtCpuClient(false));
   *output = client.release();
   return nullptr;
+}
 
+status pjrt_gpu_client_create(pjrt_client *output, double memory_fraction, bool preallocate) {
+  xla::GpuAllocatorConfig allocator = {
+    .memory_fraction = memory_fraction,
+    .preallocate = preallocate
+  };
+  ASSIGN_OR_RETURN_STATUS(client, xla::GetStreamExecutorGpuClient(false, allocator, nullptr, 0));
+  *output = client.release();
+  return nullptr;
 }
 
 int pjrt_client_device_count(pjrt_client c) {

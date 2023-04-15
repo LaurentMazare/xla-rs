@@ -11,6 +11,9 @@
 #include "tensorflow/compiler/xla/client/lib/matrix.h"
 #include "tensorflow/compiler/xla/client/xla_builder.h"
 #include "tensorflow/compiler/xla/pjrt/tfrt_cpu_pjrt_client.h"
+#include "tensorflow/compiler/xla/pjrt/gpu/gpu_helpers.h"
+#include "tensorflow/compiler/xla/pjrt/gpu/se_gpu_pjrt_client.h"
+#include "tensorflow/compiler/xla/pjrt/pjrt_stream_executor_client.h"
 #include "tensorflow/compiler/xla/pjrt/pjrt_client.h"
 #pragma GCC diagnostic pop
 using namespace xla;
@@ -39,7 +42,8 @@ typedef struct _literal *literal;
 typedef struct _xla_computation *xla_computation;
 #endif
 
-status pjrt_client_create(pjrt_client *);
+status pjrt_cpu_client_create(pjrt_client *);
+status pjrt_gpu_client_create(pjrt_client *, double, bool);
 void pjrt_client_free(pjrt_client);
 int pjrt_client_device_count(pjrt_client);
 int pjrt_client_addressable_device_count(pjrt_client);

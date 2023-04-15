@@ -18,6 +18,8 @@ use var_store::VarStore;
 
 const ET: PrimitiveType = PrimitiveType::F32;
 const TEMPERATURE: f32 = 0.8f32;
+const USE_CPU: bool = false;
+const NUM_SAMPLES: usize = 10;
 
 fn new_gelu(x: &XlaOp) -> Result<XlaOp> {
     let b = x.builder();
@@ -264,19 +266,14 @@ fn sample(exe: &PjRtLoadedExecutable, tokenizer: &Tokenizer, cnt: usize) -> Resu
     let mut input: Vec<_> = input.into_iter().map(|d| d as i32).collect();
     let mut rng = thread_rng();
     let mut new_tokens = vec![];
-    for i in 1..=cnt {
-        let input_l = Literal::vec(&input[input.len().saturating_sub(1024)..]);
+    for _i in 1..=cnt {
+        let input_l =
+            Literal::vec(&input[input.len().saturating_sub(1024)..]).reshape(&[1, 1024])?;
         let logits = exe.execute_literal(&[input_l])?;
         let logits = logits[0][0].to_literal_sync()?;
         let logits_v: Vec<f32> = logits.to_vec()?;
         let distr = rand::distributions::WeightedIndex::new(&logits_v)?;
         let next_token = distr.sample(&mut rng);
-        println!(
-            "{i} {next_token} {:?} {:?} (sum: {})",
-            logits.shape(),
-            &logits_v[..5],
-            logits_v.iter().sum::<f32>()
-        );
         input.push(next_token as i32);
         new_tokens.push(next_token);
     }
@@ -284,7 +281,7 @@ fn sample(exe: &PjRtLoadedExecutable, tokenizer: &Tokenizer, cnt: usize) -> Resu
 }
 
 fn main() -> Result<()> {
-    let client = xla::PjRtClient::cpu()?;
+    let client = if USE_CPU { xla::PjRtClient::cpu()? } else { xla::PjRtClient::gpu(0.95, false)? };
     println!("{} {} {}", client.platform_name(), client.platform_version(), client.device_count());
     let tokenizer = Tokenizer::new("vocab.bpe")?;
     println!("loaded tokenizer config, vocab_size: {}", tokenizer.vocab_size());
@@ -297,9 +294,11 @@ fn main() -> Result<()> {
     let start_compile = std::time::Instant::now();
     let gpt_exe = client.compile(&gpt)?;
     println!("compiled the executable in {:?}", start_compile.elapsed());
-    let start_eval = std::time::Instant::now();
-    let sample = sample(&gpt_exe, &tokenizer, 100)?;
-    println!("generated the sample in {:?}", start_eval.elapsed());
-    println!("----\n{sample}\n----");
+    for _i in 0..NUM_SAMPLES {
+        let start_eval = std::time::Instant::now();
+        let samples = sample(&gpt_exe, &tokenizer, 100)?;
+        println!("generated the samples in {:?}", start_eval.elapsed());
+        println!("----\n{samples}\n----");
+    }
     Ok(())
 }

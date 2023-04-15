@@ -7,7 +7,16 @@ pub struct PjRtClient(pub(self) c_lib::pjrt_client);
 impl PjRtClient {
     pub fn cpu() -> Result<Self> {
         let mut result: c_lib::pjrt_client = std::ptr::null_mut();
-        let status = unsafe { c_lib::pjrt_client_create(&mut result) };
+        let status = unsafe { c_lib::pjrt_cpu_client_create(&mut result) };
+        super::handle_status(status)?;
+        Ok(Self(result))
+    }
+
+    pub fn gpu(memory_fraction: f64, preallocate: bool) -> Result<Self> {
+        let mut result: c_lib::pjrt_client = std::ptr::null_mut();
+        let preallocate = if preallocate { 1i32 } else { 0i32 };
+        let status =
+            unsafe { c_lib::pjrt_gpu_client_create(&mut result, memory_fraction, preallocate) };
         super::handle_status(status)?;
         Ok(Self(result))
     }

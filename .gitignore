@@ -14,5 +14,5 @@ Cargo.lock
 *.npy
 *.npz
 
-/xla_extension/
+/xla_extension*/
 vocab.bpe
