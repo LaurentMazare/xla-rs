@@ -9,7 +9,7 @@ fn add_op() -> Result<()> {
     let sum = (cst42 + &cst43)?;
     let computation = sum.build()?;
     let result = client.compile(&computation)?;
-    let result = result.execute::<xla::PjRtBuffer>(&[])?;
+    let result = result.execute::<xla::Literal>(&[])?;
     let result = result[0][0].to_literal_sync()?;
     assert_eq!(result.element_count(), 2);
     assert_eq!(result.shape()?, xla::Shape::new::<f32>(vec![2]));
@@ -25,7 +25,7 @@ fn sum_op() -> Result<()> {
     let x = builder.parameter(0, f32::PRIMITIVE_TYPE, &[2], "x");
     let sum = x.reduce_sum(&[], false)?.build()?.compile(&client)?;
     let input = xla::Literal::vec(&[4.2f32, 1.337f32]);
-    let result = sum.execute_literal::<xla::Literal>(&[input])?;
+    let result = sum.execute::<xla::Literal>(&[input])?;
     let result = result[0][0].to_literal_sync()?;
     assert_eq!(result.to_vec::<f32>()?, [4.2, 1.337]);
 
@@ -33,7 +33,7 @@ fn sum_op() -> Result<()> {
     let x = builder.parameter(0, f32::PRIMITIVE_TYPE, &[-2], "x");
     let sum = x.reduce_sum(&[0], false)?.build()?.compile(&client)?;
     let input = xla::Literal::vec(&[4.2f32, 1.337f32]);
-    let result = sum.execute_literal::<xla::Literal>(&[input])?;
+    let result = sum.execute::<xla::Literal>(&[input])?;
     let result = result[0][0].to_literal_sync()?;
     assert_eq!(result.to_vec::<f32>()?, [5.5369997]);
     // Dimensions got reduced.
@@ -43,7 +43,7 @@ fn sum_op() -> Result<()> {
     let x = builder.parameter(0, f32::PRIMITIVE_TYPE, &[-2], "x");
     let sum = x.reduce_sum(&[0], true)?.build()?.compile(&client)?;
     let input = xla::Literal::vec(&[4.2f32, 1.337f32]);
-    let result = sum.execute_literal::<xla::Literal>(&[input])?;
+    let result = sum.execute::<xla::Literal>(&[input])?;
     let result = result[0][0].to_literal_sync()?;
     assert_eq!(result.to_vec::<f32>()?, [5.5369997]);
     // keep_dims = true in this case.
@@ -58,7 +58,7 @@ fn mean_op() -> Result<()> {
     let x = builder.parameter(0, f32::PRIMITIVE_TYPE, &[-2], "x");
     let sum = x.reduce_mean(&[0], false)?.build()?.compile(&client)?;
     let input = xla::Literal::vec(&[4.2f32, 1.337f32]);
-    let result = sum.execute_literal::<xla::Literal>(&[input])?;
+    let result = sum.execute::<xla::Literal>(&[input])?;
     let result = result[0][0].to_literal_sync()?;
     assert_eq!(result.to_vec::<f32>()?, [2.7684999]);
     // Dimensions got reduced.

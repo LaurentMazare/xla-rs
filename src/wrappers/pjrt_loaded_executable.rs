@@ -28,27 +28,14 @@ impl PjRtLoadedExecutable {
         }
     }
 
-    pub fn execute<P: std::borrow::Borrow<PjRtBuffer>>(
-        &self,
-        args: &[P],
-    ) -> Result<Vec<Vec<PjRtBuffer>>> {
-        let mut outputs = std::ptr::null_mut();
-        let args: Vec<_> = args.iter().map(|x| x.borrow().0).collect();
-        let status =
-            unsafe { c_lib::execute(self.0, args.as_ptr(), args.len() as i32, &mut outputs) };
-        super::handle_status(status)?;
-        Ok(Self::process_execute_outputs(outputs))
-    }
-
-    pub fn execute_literal<L: std::borrow::Borrow<Literal>>(
+    pub fn execute<L: std::borrow::Borrow<Literal>>(
         &self,
         args: &[L],
     ) -> Result<Vec<Vec<PjRtBuffer>>> {
         let mut outputs = std::ptr::null_mut();
         let args: Vec<_> = args.iter().map(|x| x.borrow().0).collect();
-        let status = unsafe {
-            c_lib::execute_literal(self.0, args.as_ptr(), args.len() as i32, &mut outputs)
-        };
+        let status =
+            unsafe { c_lib::execute(self.0, args.as_ptr(), args.len() as i32, &mut outputs) };
         super::handle_status(status)?;
         Ok(Self::process_execute_outputs(outputs))
     }

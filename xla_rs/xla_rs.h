@@ -164,8 +164,7 @@ status get_dimensions(const xla_builder, const xla_op, size_t*);
 
 status build(const xla_builder, const xla_op, xla_computation*);
 status compile(const pjrt_client, const xla_computation, pjrt_loaded_executable*);
-status execute(const pjrt_loaded_executable, const pjrt_buffer *, int, pjrt_buffer ***);
-status execute_literal(const pjrt_loaded_executable, const literal *, int, pjrt_buffer ***);
+status execute(const pjrt_loaded_executable, const literal *, int, pjrt_buffer ***);
 status first_error(const xla_builder);
 status get_current_status(const xla_builder);
 
