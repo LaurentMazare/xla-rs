@@ -86,7 +86,7 @@ impl Literal {
         }
     }
 
-    pub fn copy_raw<T: ElementType>(&self, dst: &mut [T]) -> Result<()> {
+    pub fn copy_raw_to<T: ElementType>(&self, dst: &mut [T]) -> Result<()> {
         let element_type = self.element_type()?;
         let element_count = self.element_count();
         if element_type != T::PRIMITIVE_TYPE {
@@ -96,9 +96,28 @@ impl Literal {
             Err(Error::BinaryBufferIsTooLarge { element_count, buffer_len: dst.len() })?
         }
         unsafe {
-            c_lib::literal_copy(
+            c_lib::literal_copy_to(
                 self.0,
                 dst.as_mut_ptr() as *mut libc::c_void,
+                element_count * T::ELEMENT_SIZE_IN_BYTES,
+            )
+        };
+        Ok(())
+    }
+
+    pub fn copy_raw_from<T: ElementType>(&mut self, src: &[T]) -> Result<()> {
+        let element_type = self.element_type()?;
+        let element_count = self.element_count();
+        if element_type != T::PRIMITIVE_TYPE {
+            Err(Error::ElementTypeMismatch { on_device: element_type, on_host: T::PRIMITIVE_TYPE })?
+        }
+        if src.len() > element_count {
+            Err(Error::BinaryBufferIsTooLarge { element_count, buffer_len: src.len() })?
+        }
+        unsafe {
+            c_lib::literal_copy_from(
+                self.0,
+                src.as_ptr() as *const libc::c_void,
                 element_count * T::ELEMENT_SIZE_IN_BYTES,
             )
         };
@@ -109,7 +128,7 @@ impl Literal {
         let element_count = self.element_count();
         // Maybe we should use an uninitialized vec instead?
         let mut data = vec![T::ZERO; element_count];
-        self.copy_raw(&mut data)?;
+        self.copy_raw_to(&mut data)?;
         Ok(data)
     }
 

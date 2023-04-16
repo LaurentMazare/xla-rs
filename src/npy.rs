@@ -220,7 +220,7 @@ impl crate::Literal {
             Error::Npy(format!("unsupported element type for npy {element_type:?}"))
         })?;
         let mut content = vec![0u8; numel * elt_size_in_bytes];
-        self.copy_raw(&mut content)?;
+        self.copy_raw_to(&mut content)?;
         f.write_all(&content)?;
         Ok(())
     }

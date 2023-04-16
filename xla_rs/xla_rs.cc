@@ -867,8 +867,12 @@ int literal_element_type(const literal l) {
   return l->shape().element_type();
 }
 
-void literal_copy(const literal l, void* dst, size_t size_in_bytes) {
+void literal_copy_to(const literal l, void* dst, size_t size_in_bytes) {
   std::memcpy(dst, l->untyped_data(), size_in_bytes);
+}
+
+void literal_copy_from(literal l, const void* src, size_t size_in_bytes) {
+  std::memcpy(l->untyped_data(), src, size_in_bytes);
 }
 
 void literal_free(literal l) {
