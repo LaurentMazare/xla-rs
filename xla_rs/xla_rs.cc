@@ -798,7 +798,6 @@ status execute(const pjrt_loaded_executable exe, const pjrt_buffer *inputs, int 
   ASSIGN_OR_RETURN_STATUS(
     results,
     exe->Execute({input_buffer_ptrs}, options));
-  ASSIGN_OR_RETURN_STATUS(literal, results[0][0]->ToLiteralSync());
   pjrt_buffer** out = (pjrt_buffer**)malloc((results.size() + 1) * sizeof(pjrt_buffer*));
   for (size_t i = 0; i < results.size(); ++i) {
     auto &replica_results = results[i];
@@ -829,7 +828,6 @@ status execute_literal(const pjrt_loaded_executable exe, const literal *inputs, 
   ASSIGN_OR_RETURN_STATUS(
     results,
     exe->Execute({input_buffer_ptrs}, options));
-  ASSIGN_OR_RETURN_STATUS(literal, results[0][0]->ToLiteralSync());
   pjrt_buffer** out = (pjrt_buffer**)malloc((results.size() + 1) * sizeof(pjrt_buffer*));
   for (size_t i = 0; i < results.size(); ++i) {
     auto &replica_results = results[i];
