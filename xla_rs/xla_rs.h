@@ -1,5 +1,6 @@
 #include<stdint.h>
 #include<stddef.h>
+#include<stdbool.h>
 #ifdef __cplusplus
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wuninitialized"

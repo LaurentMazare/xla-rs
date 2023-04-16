@@ -14,7 +14,6 @@ impl PjRtClient {
 
     pub fn gpu(memory_fraction: f64, preallocate: bool) -> Result<Self> {
         let mut result: c_lib::pjrt_client = std::ptr::null_mut();
-        let preallocate = if preallocate { 1i32 } else { 0i32 };
         let status =
             unsafe { c_lib::pjrt_gpu_client_create(&mut result, memory_fraction, preallocate) };
         super::handle_status(status)?;
