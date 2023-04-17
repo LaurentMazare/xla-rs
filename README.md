@@ -15,3 +15,21 @@ tar -xzvf xla_extension-x86_64-linux-gnu-cpu.tar.gz
 
 If the `xla_extension` directory is not in the main project directory, the path
 can be specified via the `XLA_EXTENSION_DIR` environment variable.
+
+## Generating some Text Samples with GPT2 
+
+One of the featured examples is GPT2. In order to run it, one should first
+download the tokenization configuration file as well as the weights before
+running the example. In order to do this, run the following commands:
+
+```bash
+# Download the vocab file.
+wget https://openaipublic.blob.core.windows.net/gpt-2/encodings/main/vocab.bpe
+
+# Extract the pre-trained weights, this requires the transformers python library to be installed.
+# This creates a npz file storing all the weights.
+python examples/nanogpt/get_weights.py
+
+# Run the example.
+cargo run --example nanogpt --release
+```
