@@ -39,13 +39,8 @@ fn env_var_rerun(name: &str) -> Option<String> {
 }
 
 fn main() {
-    // Exit early
-    if std::env::var("DOCS_RS").is_ok() {
-        return;
-    }
     let xla_dir = env_var_rerun("XLA_EXTENSION_DIR")
         .map_or_else(|| env::current_dir().unwrap().join("xla_extension"), PathBuf::from);
-    make_shared_lib(&xla_dir);
 
     println!("cargo:rerun-if-changed=xla_rs/xla_rs.h");
     println!("cargo:rerun-if-changed=xla_rs/xla_rs.cc");
@@ -57,6 +52,11 @@ fn main() {
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
     bindings.write_to_file(out_path.join("c_xla.rs")).expect("Couldn't write bindings!");
 
+    // Exit early on docs.rs as the C++ library would not be available.
+    if std::env::var("DOCS_RS").is_ok() {
+        return;
+    }
+    make_shared_lib(&xla_dir);
     // The --copy-dt-needed-entries -lstdc++ are helpful to get around some
     // "DSO missing from command line" error
     // undefined reference to symbol '_ZStlsIcSt11char_traitsIcESaIcEERSt13basic_ostreamIT_T0_ES7_RKNSt7__cxx1112basic_stringIS4_S5_T1_EE@@GLIBCXX_3.4.21'
