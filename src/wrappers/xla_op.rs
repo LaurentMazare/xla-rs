@@ -1,4 +1,10 @@
-/// For details on the semantics, see https://www.tensorflow.org/xla/operation_semantics
+//! Nodes from the computation graph.
+//!
+//! An `XlaOp` value represents a node in the computation graph, e.g. it can be the sum of two
+//! other nodes, a constant value, an input parameter, etc.
+//!
+//! For details on the semantics, see
+//! [operation_semantics](https://www.tensorflow.org/xla/operation_semantics).
 use super::{PrimitiveType, Shape, XlaBuilder, XlaComputation};
 use crate::{c_lib, Error, Result};
 
@@ -104,38 +110,48 @@ impl XlaOp {
     unary_op!(copy, c_lib::op_copy);
     unary_op!(zeros_like, c_lib::op_zeros_like);
 
+    /// A node that applies the specified Einstein summation formula to this node.
     pub fn einsum1(&self, config: &str) -> Result<Self> {
         let config = std::ffi::CString::new(config).unwrap();
         let op = unsafe { c_lib::op_einsum1(self.op, config.as_ptr()) };
         self.wrap(op)
     }
 
+    /// A node that applies the specified Einstein summation formula to this node and the other
+    /// argument node.
     pub fn einsum2(&self, rhs: &XlaOp, config: &str) -> Result<Self> {
         let config = std::ffi::CString::new(config).unwrap();
         let op = unsafe { c_lib::op_einsum2(self.op, rhs.op, config.as_ptr()) };
         self.wrap(op)
     }
 
+    /// Reshape this node to a different set of dimension sizes, the number of element between the
+    /// two different shapes has to match.
     pub fn reshape(&self, dims: &[i64]) -> Result<Self> {
         let op = unsafe { c_lib::op_reshape(self.op, dims.len(), dims.as_ptr()) };
         self.wrap(op)
     }
 
+    /// Add some broadcasting dimensions at the beginning of the current node shape.
     pub fn broadcast(&self, dims: &[i64]) -> Result<Self> {
         let op = unsafe { c_lib::op_broadcast(self.op, dims.len(), dims.as_ptr()) };
         self.wrap(op)
     }
 
+    /// Collapse the dimensions of this node into a single dimension, [xla
+    /// documentation](https://www.tensorflow.org/xla/operation_semantics#collapse).
     pub fn collapse(&self, dims: &[i64]) -> Result<Self> {
         let op = unsafe { c_lib::op_collapse(self.op, dims.len(), dims.as_ptr()) };
         self.wrap(op)
     }
 
+    /// Permute the dimension with the specified indexes.
     pub fn transpose(&self, index_perm: &[i64]) -> Result<Self> {
         let op = unsafe { c_lib::op_transpose(self.op, index_perm.len(), index_perm.as_ptr()) };
         self.wrap(op)
     }
 
+    /// Permute two dimensions, this is a specialized version of `transpose`.
     pub fn swap_dims(&self, index1: i64, index2: i64) -> Result<Self> {
         let index1 = self.normalize_index(index1)?;
         let index2 = self.normalize_index(index2)?;
@@ -146,6 +162,9 @@ impl XlaOp {
         self.transpose(&index_perm)
     }
 
+    /// Create a node that has a partial view on the data of the original node. Indexes on the
+    /// target dimension `dim` are restricted to the values between `start_index` (inclusive) and
+    /// `stop_index` (exclusive), using the associated `stride` as a step between two values.
     pub fn slice_in_dim(
         &self,
         start_index: i64,
@@ -158,15 +177,23 @@ impl XlaOp {
         self.wrap(op)
     }
 
+    /// A specialized version of `slice_in_dim` using a stride of one, so with all values with an
+    /// index between `start_index` (inclusive) and `stop_index` (exclusive).
     pub fn slice_in_dim1(&self, start_index: i64, stop_index: i64, dim: i64) -> Result<Self> {
         self.slice_in_dim(start_index, stop_index, 1, dim)
     }
 
+    /// A new node containing only values for index `index_in_dim` on the dimension `dim_index`.
+    /// The target dimension is squeezed so the resulting node has one less dimension than the
+    /// original node.
     pub fn at(&self, index_in_dim: i64, dim_index: i64) -> Result<Self> {
         let slice = self.slice_in_dim(index_in_dim, index_in_dim + 1, 1, dim_index)?;
         slice.squeeze(dim_index)
     }
 
+    /// Squeeze the dimension as the target index, i.e. if this dimension has size one remove it
+    /// for the generated node. The target dimension index can be specified as a negative value,
+    /// e.g. -1 for the last dimension.
     pub fn squeeze(&self, index: i64) -> Result<Self> {
         let index = self.normalize_index(index)?;
         let dims = self.dims()?;
@@ -179,22 +206,28 @@ impl XlaOp {
         self.reshape(&new_dims)
     }
 
+    /// Concat multiple nodes (together with the `self` node) along the target dimension.
     pub fn concat_in_dim(&self, args: &[&Self], dim: i64) -> Result<Self> {
+        let dim = self.normalize_index(dim)?;
         let args: Vec<_> = args.iter().map(|a| a.op).collect();
         let op = unsafe { c_lib::op_concat_in_dim(self.op, args.as_ptr(), args.len(), dim) };
         self.wrap(op)
     }
 
+    /// Clamp the values in the original node to be between `min` and `max`.
     pub fn clamp(&self, min: &Self, max: &Self) -> Result<Self> {
         let op = unsafe { c_lib::op_clamp(min.op, self.op, max.op) };
         self.wrap(op)
     }
 
+    /// Select values from the original tensor to be values from `on_true` if the associated
+    /// value in `self` is true, and the values from `on_false` otherwise.
     pub fn select(&self, on_true: &Self, on_false: &Self) -> Result<Self> {
         let op = unsafe { c_lib::op_select(self.op, on_true.op, on_false.op) };
         self.wrap(op)
     }
 
+    /// A node that when executed generates values using a random uniform distribution.
     pub fn rng_uniform(min: &Self, max: &Self, shape: &Shape) -> Result<Self> {
         let op = unsafe {
             c_lib::op_rng_uniform(
@@ -208,6 +241,7 @@ impl XlaOp {
         min.wrap(op)
     }
 
+    /// A node that when executed generates values using a random normal distribution.
     pub fn rng_normal(mu: &Self, sigma: &Self, shape: &Shape) -> Result<Self> {
         let op = unsafe {
             c_lib::op_rng_normal(
@@ -221,6 +255,7 @@ impl XlaOp {
         mu.wrap(op)
     }
 
+    /// Create a new node by casting the elements of the original node to a new primitive type.
     pub fn convert_element_type(&self, element_type: PrimitiveType) -> Result<Self> {
         let op = unsafe { c_lib::op_convert_element_type(self.op, element_type as i32) };
         self.wrap(op)
@@ -257,12 +292,18 @@ impl XlaOp {
         }
     }
 
+    /// A node that contains the size of the dimension with the target index as a `S32` scalar
+    /// value.
     pub fn dimensions_size(&self, index: i64) -> Result<Self> {
         let index = self.normalize_index(index)?;
         let op = unsafe { c_lib::op_dimensions_size(self.op, index) };
         self.wrap(op)
     }
 
+    /// Create a node by folding a computation acress some target dimensions. If `keep_dims` is
+    /// `true`, the resulting node has a dimension of size one for the target dimensions, when
+    /// using `false` these dimensions are squeezed so the resulting node has a rank that is the
+    /// original node rank minus the number of elements in `dims`.
     pub fn reduce(
         &self,
         init_value: Self,
@@ -281,6 +322,7 @@ impl XlaOp {
         self.builder.get_element_type(self)
     }
 
+    /// The number of dimensions for this node.
     pub fn rank(&self) -> Result<usize> {
         self.builder.get_dimensions_size(self)
     }
@@ -304,6 +346,8 @@ impl XlaOp {
         (usize, usize, usize, usize, usize)
     );
 
+    /// General dot multiplication between two nodes, specifying the dimensions that get contracted
+    /// as well as the batch dimensions.
     pub fn dot_general(
         &self,
         rhs: &XlaOp,
@@ -390,6 +434,9 @@ impl XlaOp {
         }
     }
 
+    /// A node that computes the sum across the specified dimensions, e.g. if all the dimensions
+    /// are passed as an argument the result is a scalar with the sum of all the elements in the
+    /// original node.
     pub fn reduce_sum(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
         let builder = XlaBuilder::new("Sum");
         let et = self.element_type()?;
@@ -400,6 +447,7 @@ impl XlaOp {
         self.reduce(init_value, sum, dims, keep_dims)
     }
 
+    /// A node that computes the average value across the specified dimensions.
     pub fn reduce_mean(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
         let b = &self.builder();
         let et = self.element_type()?;
@@ -411,6 +459,7 @@ impl XlaOp {
         sum / scale.convert_element_type(et)?
     }
 
+    /// A node that computes the maximum value across the specified dimensions.
     pub fn reduce_max(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
         let builder = XlaBuilder::new("Max");
         let et = self.element_type()?;
@@ -421,6 +470,7 @@ impl XlaOp {
         self.reduce(init_value, sum, dims, keep_dims)
     }
 
+    /// A node that computes the minimum value across the specified dimensions.
     pub fn reduce_min(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
         let builder = XlaBuilder::new("Min");
         let et = self.element_type()?;
@@ -438,6 +488,8 @@ impl XlaOp {
         unnormalized / sum
     }
 
+    /// Layer normalization, this normalizes values on the target dimension to be of zero mean and
+    /// standard deviation one, and then scales the result by `scale` and adds `bias`.
     pub fn layer_norm(&self, dim: i64, scale: &XlaOp, bias: &XlaOp) -> Result<Self> {
         let et = self.element_type().unwrap_or(PrimitiveType::F32);
         let eps = self.builder().c0(1e-5).convert_element_type(et)?;
@@ -448,6 +500,8 @@ impl XlaOp {
         bias + ((self - mean)? * mul)? * scale
     }
 
+    /// Matrix multiplication, this is a specialized version of `dot_general` to be used for
+    /// matrix-matrix or matrix-vector multiplications.
     pub fn matmul(&self, rhs: &Self) -> Result<Self> {
         // Similar to the jax implementation but without the squeezing.
         // https://github.com/google/jax/blob/849e47f79ac64ccba1a762804217c00a9905025b/jax/_src/numpy/lax_numpy.py#L3028
@@ -501,6 +555,7 @@ impl XlaOp {
         )
     }
 
+    /// Generate a computation which root value is this node.
     pub fn build(&self) -> Result<XlaComputation> {
         self.builder.build(self)
     }

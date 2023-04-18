@@ -1,6 +1,7 @@
 use super::{ElementType, PrimitiveType};
 use crate::Error;
 
+/// A shape specifies a primitive type as well as some array dimensions.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Shape {
     pub(super) element_type: PrimitiveType,
@@ -8,19 +9,24 @@ pub struct Shape {
 }
 
 impl Shape {
+    /// Create a new shape.
     pub fn new<E: ElementType>(dimensions: Vec<i64>) -> Shape {
         Shape { element_type: E::PRIMITIVE_TYPE, dimensions }
     }
 
+    /// Create a new shape.
     pub fn with_type(element_type: PrimitiveType, dimensions: Vec<i64>) -> Shape {
         Shape { element_type, dimensions }
     }
 
+    /// The stored primitive type.
     pub fn element_type(&self) -> PrimitiveType {
         self.element_type
     }
 
-    pub fn size(&self) -> usize {
+    /// The number of elements stored in arrays that use this shape, this is the product of sizes
+    /// across each dimension.
+    pub fn element_count(&self) -> usize {
         self.dimensions.iter().map(|d| *d as usize).product::<usize>()
     }
 

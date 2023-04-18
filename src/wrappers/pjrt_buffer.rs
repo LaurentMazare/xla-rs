@@ -1,13 +1,16 @@
+//! A view on a memory slice hosted on a device.
 use super::{ElementType, FromPrimitive, Literal, PjRtDevice, Shape};
 use crate::{c_lib, Error, Result};
 use std::marker::PhantomData;
 
+/// A buffer represents a view on a memory slice hosted on a device.
 pub struct PjRtBuffer<'a> {
     pub(super) buffer: c_lib::pjrt_buffer,
     pub(super) marker: PhantomData<&'a super::PjRtClient>,
 }
 
 impl<'a> PjRtBuffer<'a> {
+    /// Copy the buffer to a different device.
     pub fn copy_to_device(&self, device: PjRtDevice<'a>) -> Result<PjRtBuffer<'a>> {
         let mut buffer: c_lib::pjrt_buffer = std::ptr::null_mut();
         let status =
@@ -16,6 +19,7 @@ impl<'a> PjRtBuffer<'a> {
         Ok(Self { buffer, marker: PhantomData })
     }
 
+    /// Copy the buffer back to the host as a literal.
     pub fn to_literal_sync(&self) -> Result<Literal> {
         let mut result: c_lib::literal = std::ptr::null_mut();
         let status = unsafe { c_lib::pjrt_buffer_to_literal_sync(self.buffer, &mut result) };
@@ -23,6 +27,7 @@ impl<'a> PjRtBuffer<'a> {
         Ok(Literal(result))
     }
 
+    /// Retrieve the shape used by this buffer.
     pub fn on_device_shape(&self) -> Result<Shape> {
         let shape = unsafe { c_lib::pjrt_buffer_on_device_shape(self.buffer) };
         let rank = unsafe { c_lib::shape_dimensions_size(shape) };
@@ -36,6 +41,7 @@ impl<'a> PjRtBuffer<'a> {
         }
     }
 
+    /// Copy the data stored in a buffer to host memory in a blocking way.
     pub fn copy_raw_to_host_sync<T: ElementType>(
         &self,
         dst: &mut [T],
@@ -48,7 +54,7 @@ impl<'a> PjRtBuffer<'a> {
                 on_host: T::PRIMITIVE_TYPE,
             })?
         }
-        if offset + dst.len() > shape.size() {
+        if offset + dst.len() > shape.element_count() {
             Err(Error::TargetBufferIsTooLarge { offset, shape, buffer_len: dst.len() })?
         }
         let status = unsafe {

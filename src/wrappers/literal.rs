@@ -1,6 +1,7 @@
 use super::{ElementType, FromPrimitive, NativeType, PrimitiveType, Shape};
 use crate::{c_lib, Error, Result};
 
+/// A literal represent a value, typically a multi-dimensional array, stored on the host device.
 pub struct Literal(pub(super) c_lib::literal);
 
 impl Clone for Literal {
@@ -11,6 +12,7 @@ impl Clone for Literal {
 }
 
 impl Literal {
+    /// Create an unitialized literal based on some primitive type and some dimensions.
     pub fn create_from_shape(element_type: PrimitiveType, dims: &[usize]) -> Self {
         let dims: Vec<_> = dims.iter().map(|x| *x as i64).collect();
         let v = unsafe {
@@ -19,6 +21,9 @@ impl Literal {
         Self(v)
     }
 
+    /// Create an unitialized literal based on some primitive type, some dimensions, and some data.
+    /// The data is untyped, i.e. it is a sequence of bytes represented as a slice of `u8` even if
+    /// the primitive type is not `U8`.
     pub fn create_from_shape_and_untyped_data(
         element_type: PrimitiveType,
         dims: &[usize],
@@ -44,6 +49,8 @@ impl Literal {
         Ok(Self(v))
     }
 
+    /// Get the first element from a literal. This returns an error if type `T` is not the
+    /// primitive type that the literal uses.
     pub fn get_first_element<T: NativeType + ElementType>(&self) -> Result<T> {
         let element_type = self.element_type()?;
         if element_type != T::PRIMITIVE_TYPE {
@@ -56,10 +63,12 @@ impl Literal {
         Ok(v)
     }
 
+    /// The number of elements stored in the literal.
     pub fn element_count(&self) -> usize {
         unsafe { c_lib::literal_element_count(self.0) as usize }
     }
 
+    /// The primitive type used by element stored in this literal.
     pub fn element_type(&self) -> Result<PrimitiveType> {
         let element_type = unsafe { c_lib::literal_element_type(self.0) };
         match FromPrimitive::from_i32(element_type) {
@@ -68,10 +77,14 @@ impl Literal {
         }
     }
 
+    /// The literal size in bytes, this is the same as `element_count` multiplied by
+    /// `element_size_in_bytes`.
     pub fn size_bytes(&self) -> usize {
         unsafe { c_lib::literal_size_bytes(self.0) as usize }
     }
 
+    /// The [`Shape`] of the literal, this contains information about the dimensions of the
+    /// underlying array, as well as the primitive type of the array's elements.
     pub fn shape(&self) -> Result<Shape> {
         let mut out: c_lib::shape = std::ptr::null_mut();
         unsafe { c_lib::literal_shape(self.0, &mut out) };
@@ -86,6 +99,8 @@ impl Literal {
         }
     }
 
+    /// Copy the literal data to a slice. This returns an error if the primitive type used by the
+    /// literal is not `T` or if the number of elements in the slice and literal are different.
     pub fn copy_raw_to<T: ElementType>(&self, dst: &mut [T]) -> Result<()> {
         let element_type = self.element_type()?;
         let element_count = self.element_count();
@@ -105,6 +120,9 @@ impl Literal {
         Ok(())
     }
 
+    /// Copy data from a slice to the literal. This returns an error if the primitive type used
+    /// by the literal is not `T` or if number of elements in the slice and the literal are
+    /// different.
     pub fn copy_raw_from<T: ElementType>(&mut self, src: &[T]) -> Result<()> {
         let element_type = self.element_type()?;
         let element_count = self.element_count();
@@ -124,6 +142,8 @@ impl Literal {
         Ok(())
     }
 
+    /// Copy the values stored in the literal in a newly created vector. The data is flattened out
+    /// for literals with more than one dimension.
     pub fn to_vec<T: ElementType>(&self) -> Result<Vec<T>> {
         let element_count = self.element_count();
         // Maybe we should use an uninitialized vec instead?
@@ -132,16 +152,23 @@ impl Literal {
         Ok(data)
     }
 
+    /// Create a literal from a scalar value, the resulting literal has zero dimensions and stores
+    /// a single element.
     pub fn scalar<T: NativeType>(t: T) -> Self {
         let ptr = unsafe { T::create_r0(t) };
         Literal(ptr)
     }
 
+    /// Create a literal from a slice of data, the resulting literal has one dimension which size
+    /// is the same as the slice passed as argument.
     pub fn vec<T: NativeType>(f: &[T]) -> Self {
         let ptr = unsafe { T::create_r1(f.as_ptr(), f.len()) };
         Literal(ptr)
     }
 
+    /// Create a new literal containing the same data but using a different shape. This returns an
+    /// error if the number of elements in the literal is different from the product of the target
+    /// dimension sizes.
     pub fn reshape(&self, dims: &[i64]) -> Result<Literal> {
         let mut result: c_lib::literal = std::ptr::null_mut();
         let status =
@@ -150,6 +177,9 @@ impl Literal {
         Ok(Literal(result))
     }
 
+    /// Create a new literal containing the data from the original literal casted to a new
+    /// primitive type. The dimensions of the resulting literal are the same as the dimensions of
+    /// the original literal.
     pub fn convert(&self, element_type: PrimitiveType) -> Result<Literal> {
         let mut result: c_lib::literal = std::ptr::null_mut();
         let status = unsafe { c_lib::literal_convert(self.0, element_type as i32, &mut result) };

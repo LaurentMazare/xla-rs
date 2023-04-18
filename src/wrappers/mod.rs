@@ -27,6 +27,8 @@ pub(self) unsafe fn c_ptr_to_string(ptr: *const std::ffi::c_char) -> String {
     str
 }
 
+/// The primitive types supported by XLA. `S8` is a signed 1 byte integer,
+/// `U32` is an unsigned 4 bytes integer, etc.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, FromPrimitive)]
 pub enum PrimitiveType {
     Invalid = 0,
@@ -51,6 +53,7 @@ pub enum PrimitiveType {
 }
 
 impl PrimitiveType {
+    /// The size for this element type in bytes if defined.
     pub fn element_size_in_bytes(&self) -> Option<usize> {
         match self {
             PrimitiveType::Invalid => None,
@@ -83,6 +86,8 @@ pub trait ElementType: Copy {
 }
 
 #[allow(clippy::missing_safety_doc)]
+/// A type implementing the `NativeType` trait can be directly converted to constant ops or
+/// literals.
 pub trait NativeType: Copy {
     unsafe fn constant_r0(b: c_lib::xla_builder, v: Self) -> c_lib::xla_op;
     unsafe fn constant_r1(b: c_lib::xla_builder, v: *const Self, l: usize) -> c_lib::xla_op;
@@ -202,6 +207,8 @@ element_type!(i64, S64, 8);
 element_type!(f32, F32, 4);
 element_type!(f64, F64, 8);
 
+/// A computation is built from a root [`XlaOp`]. Computations are device independent and can be
+/// specialized to a given device through a compilation step.
 pub struct XlaComputation(c_lib::xla_computation);
 
 pub(self) fn handle_status(status: c_lib::status) -> Result<()> {
@@ -220,6 +227,7 @@ pub(self) fn handle_status(status: c_lib::status) -> Result<()> {
 }
 
 impl XlaComputation {
+    /// The computation name.
     pub fn name(&self) -> String {
         unsafe {
             let ptr = c_lib::xla_computation_name(self.0);
@@ -227,6 +235,7 @@ impl XlaComputation {
         }
     }
 
+    /// Compile this computation for the specified client.
     pub fn compile<'a>(&self, client: &'a PjRtClient) -> Result<PjRtLoadedExecutable<'a>> {
         client.compile(self)
     }

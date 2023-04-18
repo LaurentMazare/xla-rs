@@ -1,8 +1,31 @@
 // Adapted from https://github.com/LaurentMazare/tch-rs/blob/main/src/tensor/npy.rs
-//! Numpy support for tensors.
+//! Numpy support for literals.
 //!
-//! Format spec:
-//! https://docs.scipy.org/doc/numpy-1.14.2/neps/npy-format.html
+//! The spec for the npy format can be found in
+//! [npy-format](https://docs.scipy.org/doc/numpy-1.14.2/neps/npy-format.html).
+//! The functions from this module can be used to read literals from npy/npz files
+//! or write literals to these files. A npy file contains a single literal (unnamed)
+//! whereas a npz file can contain multiple named literals. npz files are also compressed.
+//!
+//! These two formats are easy to use in Python using the numpy library.
+//!
+//! ```python
+//! import numpy as np
+//! x = np.arange(10)
+//!
+//! # Write a npy file.
+//! np.save("test.npy", x)
+//!
+//! # Read a value from the npy file.
+//! x = np.load("test.npy")
+//!
+//! # Write multiple values to a npz file.
+//! values = { "x": x, "x_plus_one": x + 1 }
+//! np.savez("test.npz", **values)
+//!
+//! # Load multiple values from a npz file.
+//! values = np.loadz("test.npz")
+//! ```
 use crate::{Error, Literal, PrimitiveType, Result};
 use std::collections::HashMap;
 use std::fs::File;
@@ -157,7 +180,7 @@ impl Header {
 }
 
 impl crate::Literal {
-    /// Reads a npy file and return the stored tensor.
+    /// Reads a npy file and return the stored multi-dimensional array as a literal.
     pub fn read_npy<T: AsRef<Path>>(path: T) -> Result<Literal> {
         let mut reader = File::open(path.as_ref())?;
         let header = read_header(&mut reader)?;
@@ -172,7 +195,7 @@ impl crate::Literal {
         Ok(literal)
     }
 
-    /// Reads a npz file and returns some named tensors.
+    /// Reads a npz file and returns the stored multi-dimensional arrays together with their names.
     pub fn read_npz<T: AsRef<Path>>(path: T) -> Result<Vec<(String, Literal)>> {
         let zip_reader = BufReader::new(File::open(path.as_ref())?);
         let mut zip = zip::ZipArchive::new(zip_reader)?;
@@ -225,12 +248,13 @@ impl crate::Literal {
         Ok(())
     }
 
-    /// Writes a tensor in the npy format so that it can be read using python.
+    /// Writes a multi-dimensional array in the npy format.
     pub fn write_npy<T: AsRef<Path>>(&self, path: T) -> Result<()> {
         let mut f = File::create(path.as_ref())?;
         self.write(&mut f)
     }
 
+    /// Writes multiple multi-dimensional arrays using the npz format.
     pub fn write_npz<S: AsRef<str>, T: AsRef<Literal>, P: AsRef<Path>>(
         ts: &[(S, T)],
         path: P,
