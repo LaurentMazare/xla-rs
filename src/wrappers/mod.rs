@@ -227,7 +227,7 @@ impl XlaComputation {
         }
     }
 
-    pub fn compile(&self, client: &PjRtClient) -> Result<PjRtLoadedExecutable> {
+    pub fn compile<'a>(&self, client: &'a PjRtClient) -> Result<PjRtLoadedExecutable<'a>> {
         client.compile(self)
     }
 }

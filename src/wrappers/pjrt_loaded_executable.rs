@@ -1,9 +1,13 @@
 use super::{Literal, PjRtBuffer};
 use crate::{c_lib, Result};
+use std::marker::PhantomData;
 
-pub struct PjRtLoadedExecutable(pub(super) c_lib::pjrt_loaded_executable);
+pub struct PjRtLoadedExecutable<'a> {
+    pub(super) exe: c_lib::pjrt_loaded_executable,
+    pub(super) marker: PhantomData<&'a super::PjRtClient>,
+}
 
-impl PjRtLoadedExecutable {
+impl PjRtLoadedExecutable<'_> {
     fn process_execute_outputs(outputs: *mut *mut c_lib::pjrt_buffer) -> Vec<Vec<PjRtBuffer>> {
         unsafe {
             let mut vec = vec![];
@@ -35,14 +39,14 @@ impl PjRtLoadedExecutable {
         let mut outputs = std::ptr::null_mut();
         let args: Vec<_> = args.iter().map(|x| x.borrow().0).collect();
         let status =
-            unsafe { c_lib::execute(self.0, args.as_ptr(), args.len() as i32, &mut outputs) };
+            unsafe { c_lib::execute(self.exe, args.as_ptr(), args.len() as i32, &mut outputs) };
         super::handle_status(status)?;
         Ok(Self::process_execute_outputs(outputs))
     }
 }
 
-impl Drop for PjRtLoadedExecutable {
+impl Drop for PjRtLoadedExecutable<'_> {
     fn drop(&mut self) {
-        unsafe { c_lib::pjrt_loaded_executable_free(self.0) }
+        unsafe { c_lib::pjrt_loaded_executable_free(self.exe) }
     }
 }

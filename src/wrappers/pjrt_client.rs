@@ -21,10 +21,10 @@ impl PjRtClient {
     }
 
     pub fn compile(&self, c: &XlaComputation) -> Result<PjRtLoadedExecutable> {
-        let mut result: c_lib::pjrt_loaded_executable = std::ptr::null_mut();
-        let status = unsafe { c_lib::compile(self.0, c.0, &mut result) };
+        let mut exe: c_lib::pjrt_loaded_executable = std::ptr::null_mut();
+        let status = unsafe { c_lib::compile(self.0, c.0, &mut exe) };
         super::handle_status(status)?;
-        Ok(PjRtLoadedExecutable(result))
+        Ok(PjRtLoadedExecutable { exe, marker: PhantomData })
     }
 
     pub fn device_count(&self) -> usize {
