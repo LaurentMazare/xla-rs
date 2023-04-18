@@ -132,8 +132,7 @@ impl Mlp {
     }
 
     fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
-        // TODO: Add silu.
-        let x = (self.c_fc1.forward(x)? * self.c_fc2.forward(x)?)?;
+        let x = (self.c_fc1.forward(x)?.silu()? * self.c_fc2.forward(x)?)?;
         self.c_proj.forward(&x)
     }
 }

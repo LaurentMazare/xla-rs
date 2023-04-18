@@ -110,6 +110,20 @@ impl XlaOp {
     unary_op!(copy, c_lib::op_copy);
     unary_op!(zeros_like, c_lib::op_zeros_like);
 
+    /// Sigmoid activation function.
+    ///
+    /// This computes the element-wise sigmoid.
+    pub fn sigmoid(&self) -> Result<Self> {
+        self.logistic()
+    }
+
+    /// SiLU activation function.
+    ///
+    /// This computes the element-wise SiLU activation, x.sigmoid(x).
+    pub fn silu(&self) -> Result<Self> {
+        self * self.logistic()
+    }
+
     /// A node that applies the specified Einstein summation formula to this node.
     pub fn einsum1(&self, config: &str) -> Result<Self> {
         let config = std::ffi::CString::new(config).unwrap();
