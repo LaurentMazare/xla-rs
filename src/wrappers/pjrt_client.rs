@@ -20,6 +20,14 @@ impl PjRtClient {
         Ok(Self(result))
     }
 
+    pub fn tpu(max_inflight_computations: usize) -> Result<Self> {
+        let mut result: c_lib::pjrt_client = std::ptr::null_mut();
+        let status =
+            unsafe { c_lib::pjrt_tpu_client_create(&mut result, max_inflight_computations as i32) };
+        super::handle_status(status)?;
+        Ok(Self(result))
+    }
+
     pub fn compile(&self, c: &XlaComputation) -> Result<PjRtLoadedExecutable> {
         let mut exe: c_lib::pjrt_loaded_executable = std::ptr::null_mut();
         let status = unsafe { c_lib::compile(self.0, c.0, &mut exe) };

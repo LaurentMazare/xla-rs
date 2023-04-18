@@ -25,7 +25,7 @@
 
 status pjrt_cpu_client_create(pjrt_client *output) {
   ASSIGN_OR_RETURN_STATUS(client, xla::GetTfrtCpuClient(false));
-  *output = client.release();
+  *output = new std::shared_ptr(std::move(client));
   return nullptr;
 }
 
@@ -35,39 +35,45 @@ status pjrt_gpu_client_create(pjrt_client *output, double memory_fraction, bool 
     .preallocate = preallocate
   };
   ASSIGN_OR_RETURN_STATUS(client, xla::GetStreamExecutorGpuClient(false, allocator, nullptr, 0));
-  *output = client.release();
+  *output = new std::shared_ptr(std::move(client));
+  return nullptr;
+}
+
+status pjrt_tpu_client_create(pjrt_client *output, int max_inflight_computations) {
+  ASSIGN_OR_RETURN_STATUS(client, xla::GetTpuClient(max_inflight_computations));
+  *output = new std::shared_ptr(std::move(client));
   return nullptr;
 }
 
 int pjrt_client_device_count(pjrt_client c) {
-  return c->device_count();
+  return (*c)->device_count();
 }
 
 int pjrt_client_addressable_device_count(pjrt_client c) {
-  return c->addressable_device_count();
+  return (*c)->addressable_device_count();
 }
 
 void pjrt_client_devices(pjrt_client c, pjrt_device* outputs) {
   size_t index = 0;
-  for (auto device : c->devices()) {
+  for (auto device : (*c)->devices()) {
       outputs[index++] = device;
   }
 }
 
 void pjrt_client_addressable_devices(pjrt_client c, pjrt_device* outputs) {
   size_t index = 0;
-  for (auto device : c->addressable_devices()) {
+  for (auto device : (*c)->addressable_devices()) {
       outputs[index++] = device;
   }
 }
 
 char* pjrt_client_platform_name(pjrt_client c) {
   // TODO: Avoid the double allocation when converting string views.
-  return strdup(std::string(c->platform_name()).c_str());
+  return strdup(std::string((*c)->platform_name()).c_str());
 }
 
 char* pjrt_client_platform_version(pjrt_client c) {
-  return strdup(std::string(c->platform_version()).c_str());
+  return strdup(std::string((*c)->platform_version()).c_str());
 }
 
 void pjrt_client_free(pjrt_client b) {
@@ -86,8 +92,8 @@ status pjrt_buffer_from_host_buffer(
     int dsize,
     const int64_t *ds, 
     pjrt_buffer *output) {
-  PjRtDevice *device_ = device == nullptr ? client->devices()[0] : device;
-  ASSIGN_OR_RETURN_STATUS(buffer, client->BufferFromHostBuffer(
+  PjRtDevice *device_ = device == nullptr ? (*client)->devices()[0] : device;
+  ASSIGN_OR_RETURN_STATUS(buffer, (*client)->BufferFromHostBuffer(
         d,
         (PrimitiveType)pr_type,
         absl::Span<const int64_t>(ds, dsize),
@@ -101,8 +107,8 @@ status pjrt_buffer_from_host_buffer(
 }
 
 status pjrt_buffer_from_host_literal(const pjrt_client client, const pjrt_device device, const literal l, pjrt_buffer *output) {
-  PjRtDevice *d = device == nullptr ? client->devices()[0] : device;
-  ASSIGN_OR_RETURN_STATUS(buffer, client->BufferFromHostLiteral(*l, d));
+  PjRtDevice *d = device == nullptr ? (*client)->devices()[0] : device;
+  ASSIGN_OR_RETURN_STATUS(buffer, (*client)->BufferFromHostLiteral(*l, d));
   *output = buffer.release();
   return nullptr;
 }
@@ -773,7 +779,7 @@ status build(const xla_builder b, const xla_op o, xla_computation *output) {
 
 status compile(const pjrt_client client, const xla_computation computation, pjrt_loaded_executable* output) {
   CompileOptions options;
-  ASSIGN_OR_RETURN_STATUS(executable, client->Compile(*computation, options));
+  ASSIGN_OR_RETURN_STATUS(executable, (*client)->Compile(*computation, options));
   *output = executable.release();
   return nullptr;
 }

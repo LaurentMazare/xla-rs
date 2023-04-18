@@ -16,11 +16,12 @@
 #include "tensorflow/compiler/xla/pjrt/gpu/se_gpu_pjrt_client.h"
 #include "tensorflow/compiler/xla/pjrt/pjrt_stream_executor_client.h"
 #include "tensorflow/compiler/xla/pjrt/pjrt_client.h"
+#include "tensorflow/compiler/xla/pjrt/tpu_client.h"
 #pragma GCC diagnostic pop
 using namespace xla;
 
 extern "C" {
-typedef PjRtClient *pjrt_client;
+typedef std::shared_ptr<PjRtClient> *pjrt_client;
 typedef PjRtLoadedExecutable *pjrt_loaded_executable;
 typedef PjRtDevice *pjrt_device;
 typedef PjRtBuffer *pjrt_buffer;
@@ -45,6 +46,7 @@ typedef struct _xla_computation *xla_computation;
 
 status pjrt_cpu_client_create(pjrt_client *);
 status pjrt_gpu_client_create(pjrt_client *, double, bool);
+status pjrt_tpu_client_create(pjrt_client *, int);
 void pjrt_client_free(pjrt_client);
 int pjrt_client_device_count(pjrt_client);
 int pjrt_client_addressable_device_count(pjrt_client);
