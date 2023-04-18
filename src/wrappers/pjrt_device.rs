@@ -6,7 +6,7 @@ pub struct PjRtDevice<'a> {
     pub(super) marker: PhantomData<&'a super::PjRtClient>,
 }
 
-impl<'a> PjRtDevice<'a> {
+impl PjRtDevice<'_> {
     pub fn id(&self) -> usize {
         (unsafe { c_lib::pjrt_device_id(self.device) }) as usize
     }

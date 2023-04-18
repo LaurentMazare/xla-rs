@@ -1,26 +1,30 @@
 use super::{ElementType, FromPrimitive, Literal, PjRtDevice, Shape};
 use crate::{c_lib, Error, Result};
+use std::marker::PhantomData;
 
-pub struct PjRtBuffer(pub(super) c_lib::pjrt_buffer);
+pub struct PjRtBuffer<'a> {
+    pub(super) buffer: c_lib::pjrt_buffer,
+    pub(super) marker: PhantomData<&'a super::PjRtClient>,
+}
 
-impl PjRtBuffer {
-    pub fn copy_to_device(&self, device: PjRtDevice<'_>) -> Result<Self> {
-        let mut result: c_lib::pjrt_buffer = std::ptr::null_mut();
+impl<'a> PjRtBuffer<'a> {
+    pub fn copy_to_device(&self, device: PjRtDevice<'a>) -> Result<PjRtBuffer<'a>> {
+        let mut buffer: c_lib::pjrt_buffer = std::ptr::null_mut();
         let status =
-            unsafe { c_lib::pjrt_buffer_copy_to_device(self.0, device.device, &mut result) };
+            unsafe { c_lib::pjrt_buffer_copy_to_device(self.buffer, device.device, &mut buffer) };
         super::handle_status(status)?;
-        Ok(Self(result))
+        Ok(Self { buffer, marker: PhantomData })
     }
 
     pub fn to_literal_sync(&self) -> Result<Literal> {
         let mut result: c_lib::literal = std::ptr::null_mut();
-        let status = unsafe { c_lib::pjrt_buffer_to_literal_sync(self.0, &mut result) };
+        let status = unsafe { c_lib::pjrt_buffer_to_literal_sync(self.buffer, &mut result) };
         super::handle_status(status)?;
         Ok(Literal(result))
     }
 
     pub fn on_device_shape(&self) -> Result<Shape> {
-        let shape = unsafe { c_lib::pjrt_buffer_on_device_shape(self.0) };
+        let shape = unsafe { c_lib::pjrt_buffer_on_device_shape(self.buffer) };
         let rank = unsafe { c_lib::shape_dimensions_size(shape) };
         let dimensions: Vec<_> =
             (0..rank).map(|i| unsafe { c_lib::shape_dimensions(shape, i) }).collect();
@@ -49,7 +53,7 @@ impl PjRtBuffer {
         }
         let status = unsafe {
             c_lib::pjrt_buffer_copy_raw_to_host_sync(
-                self.0,
+                self.buffer,
                 dst.as_mut_ptr() as *mut libc::c_void,
                 offset,
                 dst.len() * T::ELEMENT_SIZE_IN_BYTES,
@@ -60,8 +64,8 @@ impl PjRtBuffer {
     }
 }
 
-impl Drop for PjRtBuffer {
+impl<'a> Drop for PjRtBuffer<'a> {
     fn drop(&mut self) {
-        unsafe { c_lib::pjrt_buffer_free(self.0) }
+        unsafe { c_lib::pjrt_buffer_free(self.buffer) }
     }
 }

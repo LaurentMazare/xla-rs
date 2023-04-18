@@ -69,7 +69,7 @@ impl PjRtClient {
         dims: &[usize],
         device: Option<&PjRtDevice>,
     ) -> Result<PjRtBuffer> {
-        let mut result: c_lib::pjrt_buffer = std::ptr::null_mut();
+        let mut buffer: c_lib::pjrt_buffer = std::ptr::null_mut();
         let element_count: usize = dims.iter().product();
         if element_count != dims.len() {
             Err(Error::WrongElementCount { dims: dims.to_vec(), element_count })?
@@ -84,11 +84,11 @@ impl PjRtClient {
                 T::PRIMITIVE_TYPE as i32,
                 dims.len() as i32,
                 dims.as_ptr(),
-                &mut result,
+                &mut buffer,
             )
         };
         super::handle_status(status)?;
-        Ok(PjRtBuffer(result))
+        Ok(PjRtBuffer { buffer, marker: PhantomData })
     }
 
     pub fn buffer_from_host_literal(
@@ -96,12 +96,12 @@ impl PjRtClient {
         device: Option<&PjRtDevice>,
         literal: &Literal,
     ) -> Result<PjRtBuffer> {
-        let mut result: c_lib::pjrt_buffer = std::ptr::null_mut();
+        let mut buffer: c_lib::pjrt_buffer = std::ptr::null_mut();
         let device = device.map_or(std::ptr::null_mut(), |d| d.device);
         let status =
-            unsafe { c_lib::pjrt_buffer_from_host_literal(self.0, device, literal.0, &mut result) };
+            unsafe { c_lib::pjrt_buffer_from_host_literal(self.0, device, literal.0, &mut buffer) };
         super::handle_status(status)?;
-        Ok(PjRtBuffer(result))
+        Ok(PjRtBuffer { buffer, marker: PhantomData })
     }
 }
 

@@ -7,8 +7,8 @@ pub struct PjRtLoadedExecutable<'a> {
     pub(super) marker: PhantomData<&'a super::PjRtClient>,
 }
 
-impl PjRtLoadedExecutable<'_> {
-    fn process_execute_outputs(outputs: *mut *mut c_lib::pjrt_buffer) -> Vec<Vec<PjRtBuffer>> {
+impl<'a> PjRtLoadedExecutable<'a> {
+    fn process_execute_outputs(outputs: *mut *mut c_lib::pjrt_buffer) -> Vec<Vec<PjRtBuffer<'a>>> {
         unsafe {
             let mut vec = vec![];
             loop {
@@ -18,11 +18,11 @@ impl PjRtLoadedExecutable<'_> {
                 }
                 let mut replica_vec = vec![];
                 loop {
-                    let outputs = *outputs.add(replica_vec.len());
-                    if outputs.is_null() {
+                    let buffer = *outputs.add(replica_vec.len());
+                    if buffer.is_null() {
                         break;
                     }
-                    replica_vec.push(PjRtBuffer(outputs));
+                    replica_vec.push(PjRtBuffer { buffer, marker: PhantomData });
                 }
                 libc::free(outputs as *mut libc::c_void);
                 vec.push(replica_vec);
@@ -35,7 +35,7 @@ impl PjRtLoadedExecutable<'_> {
     pub fn execute<L: std::borrow::Borrow<Literal>>(
         &self,
         args: &[L],
-    ) -> Result<Vec<Vec<PjRtBuffer>>> {
+    ) -> Result<Vec<Vec<PjRtBuffer<'a>>>> {
         let mut outputs = std::ptr::null_mut();
         let args: Vec<_> = args.iter().map(|x| x.borrow().0).collect();
         let status =
