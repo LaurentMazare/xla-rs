@@ -152,6 +152,22 @@ impl XlaOp {
         self.wrap(op)
     }
 
+    /// Add some broadcasting dimensions at arbitrary positions.
+    ///
+    /// See the [semantics](https://www.tensorflow.org/xla/operation_semantics#broadcastindim).
+    pub fn broadcast_in_dim(&self, out_dims: &[i64], broadcast_dims: &[i64]) -> Result<Self> {
+        let op = unsafe {
+            c_lib::op_broadcast_in_dim(
+                self.op,
+                out_dims.len(),
+                out_dims.as_ptr(),
+                broadcast_dims.len(),
+                broadcast_dims.as_ptr(),
+            )
+        };
+        self.wrap(op)
+    }
+
     /// Collapse the dimensions of this node into a single dimension, [xla
     /// documentation](https://www.tensorflow.org/xla/operation_semantics#collapse).
     pub fn collapse(&self, dims: &[i64]) -> Result<Self> {

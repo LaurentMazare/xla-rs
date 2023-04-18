@@ -563,6 +563,16 @@ xla_op op_broadcast(const xla_op arg, size_t dsize, const int64_t *ds) {
   END_PROTECT_OP(arg)
 }
 
+xla_op op_broadcast_in_dim(const xla_op arg, size_t out_dsize, const int64_t *out_ds, size_t broadcast_dsize, const int64_t *broadcast_ds) {
+  BEGIN_PROTECT_OP
+  return new XlaOp(BroadcastInDim(
+        *arg,
+        absl::Span<const int64_t>(out_ds, out_dsize),
+        absl::Span<const int64_t>(broadcast_ds, broadcast_dsize)
+  ));
+  END_PROTECT_OP(arg)
+}
+
 xla_op op_collapse(const xla_op arg, size_t dsize, const int64_t *ds) {
   BEGIN_PROTECT_OP
   return new XlaOp(Collapse(*arg, absl::Span<const int64_t>(ds, dsize)));

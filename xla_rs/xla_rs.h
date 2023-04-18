@@ -135,6 +135,7 @@ xla_op op_min_value(const xla_builder, int);
 xla_op op_max_value(const xla_builder, int);
 xla_op op_reshape(const xla_op, size_t, const int64_t*);
 xla_op op_broadcast(const xla_op, size_t, const int64_t*);
+xla_op op_broadcast_in_dim(const xla_op, size_t, const int64_t*, size_t, const int64_t*);
 xla_op op_collapse(const xla_op, size_t, const int64_t*);
 xla_op op_transpose(const xla_op, size_t, const int64_t*);
 xla_op op_clamp(const xla_op, const xla_op, const xla_op);
