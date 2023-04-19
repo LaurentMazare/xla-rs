@@ -9,7 +9,7 @@ extern crate xla;
 use xla::{PrimitiveType, XlaBuilder, XlaOp};
 
 mod var_store;
-use var_store::VarBuilder;
+use var_store::{VarBuilder, VarStore};
 
 const ET: PrimitiveType = PrimitiveType::F16;
 const TEMPERATURE: f32 = 0.8f32;
@@ -286,26 +286,29 @@ fn precompute_freqs_cis(config: &Config, builder: &XlaBuilder) -> Result<XlaOp> 
         .convert_element_type(ET)?)
 }
 
-fn llama_computation(bsize: i64) -> Result<xla::XlaComputation> {
+fn llama_computation(bsize: i64) -> Result<(xla::XlaComputation, VarStore)> {
     let b = XlaBuilder::new("llama");
     let mut vb = VarBuilder::new(&b);
     let config = Config::config_7b();
     let freqs_cis = precompute_freqs_cis(&config, &b)?;
     let llama = Llama::new(vb.clone(), &config)?;
-    let input = vb.var("tokens", PrimitiveType::S32, &[bsize as usize, CONTEXT_SIZE])?;
+    let input = vb.arg("tokens", PrimitiveType::S32, &[bsize as usize, CONTEXT_SIZE])?;
     let logits = llama.forward(&input, &freqs_cis)?;
     let prs = (logits / b.c0(TEMPERATURE)?.convert_element_type(ET)?)?.softmax(-1)?;
-    Ok(prs.build()?)
+    Ok((prs.build()?, vb.into_store()))
 }
 
 fn main() -> Result<()> {
     let client = if USE_CPU { xla::PjRtClient::cpu()? } else { xla::PjRtClient::gpu(0.95, false)? };
     println!("{} {} {}", client.platform_name(), client.platform_version(), client.device_count());
     let start_build = std::time::Instant::now();
-    let llama = llama_computation(1)?;
+    let (llama, mut vs) = llama_computation(1)?;
     println!("generated the computation in {:?}", start_build.elapsed());
     let start_compile = std::time::Instant::now();
     let _llama_exe = client.compile(&llama)?;
     println!("compiled the executable in {:?}", start_compile.elapsed());
+    let start_load = std::time::Instant::now();
+    vs.load_from_npz("llama.npz")?;
+    println!("loaded weights in {:?}", start_load.elapsed());
     Ok(())
 }
