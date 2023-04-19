@@ -28,11 +28,12 @@ impl VarStore {
         expected_dims: &[usize],
     ) -> Result<Literal> {
         let path = format!("{}.{s}", self.path.join("."));
-        let literal = self
-            .weights
-            .borrow_mut()
-            .remove(&path)
-            .with_context(|| format!("cannot find {path} in VarStore"))?;
+        let literal = self.weights.borrow_mut().remove(&path);
+        let literal = literal.with_context(|| {
+            let available_names: Vec<String> =
+                self.weights.borrow().keys().map(|c| c.to_owned()).collect();
+            format!("cannot find {path} in VarStore {available_names:?}")
+        })?;
         let shape = literal.shape()?;
         let element_type = shape.element_type();
         let dims = shape.dimensions();

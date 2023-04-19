@@ -67,6 +67,7 @@ struct Linear {
 }
 
 impl Linear {
+    #[allow(dead_code)]
     fn new(mut vs: VarStore, in_size: usize, out_size: usize) -> Result<Self> {
         let ws = vs.take("weight", ET, &[in_size, out_size])?;
         let bs = vs.take("bias", ET, &[out_size])?;
@@ -101,7 +102,7 @@ struct RmsNorm {
 
 impl RmsNorm {
     fn new(mut vs: VarStore, size: usize) -> Result<Self> {
-        let scale = vs.take("weight", ET, &[size])?;
+        let scale = vs.take("scale", ET, &[size])?;
         Ok(Self { scale, size: size as i64 })
     }
 
@@ -153,8 +154,8 @@ struct CausalSelfAttention {
 
 impl CausalSelfAttention {
     fn new(vs: VarStore, n_head: usize, n_embd: usize) -> Result<Self> {
-        let c_attn = Linear::new(&vs / "c_attn", n_embd, 3 * n_embd)?;
-        let c_proj = Linear::new(&vs / "c_proj", n_embd, n_embd)?;
+        let c_attn = Linear::new_no_bias(&vs / "c_attn", n_embd, 3 * n_embd)?;
+        let c_proj = Linear::new_no_bias(&vs / "c_proj", n_embd, n_embd)?;
         Ok(Self { c_attn, c_proj, n_head, n_embd })
     }
 
