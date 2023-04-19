@@ -144,17 +144,35 @@ fn masked_fill<T: xla::NativeType>(on_false: &XlaOp, mask: &XlaOp, on_true: T) -
     Ok(m)
 }
 
-struct CausalSelfAttention {
+struct CausalSelfAttention<'a> {
+    freqs_cis: &'a Literal,
     c_attn: Linear,
     c_proj: Linear,
     n_head: usize,
     n_embd: usize,
 }
-impl CausalSelfAttention {
-    fn new(vs: VarStore, n_head: usize, n_embd: usize) -> Result<Self> {
+
+impl<'a> CausalSelfAttention<'a> {
+    fn new(vs: VarStore, freqs_cis: &'a Literal, n_head: usize, n_embd: usize) -> Result<Self> {
         let c_attn = Linear::new(&vs / "c_attn", n_embd, 3 * n_embd)?;
         let c_proj = Linear::new(&vs / "c_proj", n_embd, n_embd)?;
-        Ok(Self { c_attn, c_proj, n_head, n_embd })
+        Ok(Self { c_attn, c_proj, freqs_cis, n_head, n_embd })
+    }
+
+    fn apply_rotary_emb(&self, x: &XlaOp) -> Result<XlaOp> {
+        let mut dims: Vec<_> = x.dims()?.into_iter().map(|c| c as i64).collect();
+        let v = dims.pop().unwrap();
+        dims.push(v / 2);
+        dims.push(2);
+        let x = x.reshape(&dims)?;
+        let re_x = x.slice_in_dim1(0, 1, -1)?;
+        let im_x = x.slice_in_dim1(1, 2, -1)?;
+        let freqs_cis = x.builder().constant_literal(self.freqs_cis);
+        let re_f = freqs_cis.slice_in_dim1(0, 1, -1)?;
+        let im_f = freqs_cis.slice_in_dim1(1, 2, -1)?;
+        let re = ((&re_x * &re_f)? - (&im_x * &im_f)?)?;
+        let im = ((&re_x * &im_f)? + (&im_x * &re_f)?)?;
+        Ok(re.concat_in_dim(&[&im], -1)?)
     }
 
     fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
@@ -170,8 +188,8 @@ impl CausalSelfAttention {
         let k = k.reshape(&target_dim)?.swap_dims(1, 2)?;
         let q = q.reshape(&target_dim)?.swap_dims(1, 2)?;
         let v = v.reshape(&target_dim)?.swap_dims(1, 2)?;
-        // TODO: Apply rope to q and k
-        //
+        let q = self.apply_rotary_emb(&q)?;
+        let k = self.apply_rotary_emb(&k)?;
         let k_shape = k.shape()?;
         let att = (q.matmul(&k.swap_dims(-2, -1)?)?
             * builder.c0(1f32 / (k_shape.last_dim().unwrap() as f32).sqrt()))?;
@@ -189,17 +207,17 @@ impl CausalSelfAttention {
     }
 }
 
-struct Block {
+struct Block<'a> {
     rms_1: RmsNorm,
-    attn: CausalSelfAttention,
+    attn: CausalSelfAttention<'a>,
     rms_2: RmsNorm,
     mlp: Mlp,
 }
 
-impl Block {
-    fn new(vs: VarStore, config: &Config) -> Result<Self> {
+impl<'a> Block<'a> {
+    fn new(vs: VarStore, config: &Config, freqs_cis: &'a Literal) -> Result<Self> {
         let rms_1 = RmsNorm::new(&vs / "rms_1", config.n_embd)?;
-        let attn = CausalSelfAttention::new(&vs / "attn", config.n_head, config.n_embd)?;
+        let attn = CausalSelfAttention::new(&vs / "attn", freqs_cis, config.n_head, config.n_embd)?;
         let rms_2 = RmsNorm::new(&vs / "rms_2", config.n_embd)?;
         let mlp = Mlp::new(&vs / "mlp", config.n_embd)?;
         Ok(Self { rms_1, attn, rms_2, mlp })
@@ -212,19 +230,19 @@ impl Block {
     }
 }
 
-struct Llama {
+struct Llama<'a> {
     wte: Embedding,
-    blocks: Vec<Block>,
+    blocks: Vec<Block<'a>>,
     ln_f: RmsNorm,
     lm_head: Linear,
 }
 
-impl Llama {
-    fn new(vs: VarStore, config: &Config) -> Result<Self> {
+impl<'a> Llama<'a> {
+    fn new(vs: VarStore, config: &Config, freqs_cis: &'a Literal) -> Result<Self> {
         let lm_head = Linear::new_no_bias(&vs / "lm_head", config.n_embd, config.vocab_size)?;
         let wte = Embedding::new(&vs / "transformer" / "wte", config.vocab_size, config.n_embd)?;
         let blocks = (0..config.n_layer)
-            .map(|i| Block::new(&vs / "transformer" / "h" / i, config))
+            .map(|i| Block::new(&vs / "transformer" / "h" / i, config, freqs_cis))
             .collect::<Result<Vec<_>>>()?;
         let ln_f = RmsNorm::new(&vs / "transformer" / "ln_f", config.n_embd)?;
         Ok(Self { wte, blocks, ln_f, lm_head })
@@ -243,10 +261,32 @@ impl Llama {
     }
 }
 
+fn precompute_freqs_cis(config: &Config) -> Result<Literal> {
+    let seq_len = config.block_size;
+    let n_elem = config.n_embd / config.n_head;
+    let theta: Vec<_> =
+        (0..n_elem).step_by(2).map(|i| 1f32 / 10000f32.powf(i as f32 / n_elem as f32)).collect();
+    let arange: Vec<_> = (0..seq_len).map(|c| c as f32).collect();
+    let b = XlaBuilder::new("precompute-freq-cis");
+    let theta = b.c1::<f32>(&theta);
+    let arange = b.c1::<f32>(&arange);
+    let idx_theta = theta.dot_general(&arange, &[], &[], &[], &[])?;
+    let idx_theta_cos = idx_theta.cos()?;
+    let idx_theta_sin = idx_theta.sin()?;
+    let shape = [1, seq_len as i64, 1, n_elem as i64 / 2, 2];
+    let comp = idx_theta_cos.concat_in_dim(&[&idx_theta_sin], -1)?.reshape(&shape)?.build()?;
+    let client = xla::PjRtClient::cpu()?;
+    let exe = client.compile(&comp)?;
+    let lit = exe.execute::<Literal>(&[])?[0][0].to_literal_sync()?;
+    println!("Generated the rotary embedding cache {:?}", lit.shape());
+    Ok(lit)
+}
+
 fn llama_computation(vs: VarStore, bsize: i64) -> Result<xla::XlaComputation> {
     let b = XlaBuilder::new("llama");
     let config = Config::config_7b();
-    let llama = Llama::new(vs, &config)?;
+    let freqs_cis = precompute_freqs_cis(&config)?;
+    let llama = Llama::new(vs, &config, &freqs_cis)?;
     let input = b.parameter(0, PrimitiveType::S32, &[bsize, config.block_size as i64], "tokens");
     let logits = llama.forward(&input)?;
     let prs = (logits / b.c0(TEMPERATURE))?.softmax(-1)?;
