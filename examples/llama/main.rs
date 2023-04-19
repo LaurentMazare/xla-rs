@@ -13,6 +13,7 @@ use var_store::VarStore;
 
 const ET: PrimitiveType = PrimitiveType::F16;
 const TEMPERATURE: f32 = 0.8f32;
+const CONTEXT_SIZE: usize = 512;
 const USE_CPU: bool = true;
 
 #[allow(dead_code)]
@@ -271,7 +272,7 @@ impl Llama {
 }
 
 fn precompute_freqs_cis(config: &Config, builder: &XlaBuilder) -> Result<XlaOp> {
-    let seq_len = config.block_size;
+    let seq_len = CONTEXT_SIZE;
     let n_elem = config.n_embd / config.n_head;
     let theta: Vec<_> =
         (0..n_elem).step_by(2).map(|i| 1f32 / 10000f32.powf(i as f32 / n_elem as f32)).collect();
@@ -293,7 +294,7 @@ fn llama_computation(vs: VarStore, bsize: i64) -> Result<xla::XlaComputation> {
     let config = Config::config_7b();
     let freqs_cis = precompute_freqs_cis(&config, &b)?;
     let llama = Llama::new(vs, &config)?;
-    let input = b.parameter(0, PrimitiveType::S32, &[bsize, config.block_size as i64], "tokens");
+    let input = b.parameter(0, PrimitiveType::S32, &[bsize, CONTEXT_SIZE as i64], "tokens");
     let logits = llama.forward(&input, &freqs_cis)?;
     let prs = (logits / b.c0(TEMPERATURE).convert_element_type(ET)?)?.softmax(-1)?;
     Ok(prs.build()?)
