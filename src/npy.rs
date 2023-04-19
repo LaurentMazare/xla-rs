@@ -220,6 +220,30 @@ impl crate::Literal {
         Ok(result)
     }
 
+    /// Reads a npz file and returns the stored multi-dimensional arrays for some specified names.
+    pub fn read_npz_by_name<T: AsRef<Path>>(path: T, names: &[&str]) -> Result<Vec<Literal>> {
+        let zip_reader = BufReader::new(File::open(path.as_ref())?);
+        let mut zip = zip::ZipArchive::new(zip_reader)?;
+        let mut result = vec![];
+        for name in names.iter() {
+            let mut reader = match zip.by_name(&format!("{name}{NPY_SUFFIX}")) {
+                Ok(reader) => reader,
+                Err(_) => Err(Error::Npy(format!("no array for {name} in {:?}", path.as_ref())))?,
+            };
+            let header = read_header(&mut reader)?;
+            let header = Header::parse(&header)?;
+            if header.fortran_order {
+                return Err(Error::Npy("fortran order not supported".to_string()));
+            }
+            let mut data: Vec<u8> = vec![];
+            reader.read_to_end(&mut data)?;
+            let dims: Vec<_> = header.shape.iter().map(|v| *v as usize).collect();
+            let literal = Literal::create_from_shape_and_untyped_data(header.descr, &dims, &data)?;
+            result.push(literal)
+        }
+        Ok(result)
+    }
+
     fn write<T: Write>(&self, f: &mut T) -> Result<()> {
         f.write_all(NPY_MAGIC_STRING)?;
         f.write_all(&[1u8, 0u8])?;
