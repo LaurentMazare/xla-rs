@@ -13,7 +13,7 @@ use var_store::VarStore;
 
 const ET: PrimitiveType = PrimitiveType::F32;
 const TEMPERATURE: f32 = 0.8f32;
-const USE_CPU: bool = false;
+const USE_CPU: bool = true;
 
 #[allow(dead_code)]
 struct Config {
@@ -171,7 +171,14 @@ impl CausalSelfAttention {
         let im_f = freqs_cis.slice_in_dim1(1, 2, -1)?;
         let re = ((&re_x * &re_f)? - (&im_x * &im_f)?)?;
         let im = ((&re_x * &im_f)? + (&im_x * &re_f)?)?;
-        Ok(re.concat_in_dim(&[&im], -1)?)
+        let rope = re.concat_in_dim(&[&im], -1)?;
+        // TODO: Add the flatten op.
+        let mut dims: Vec<_> = rope.dims()?.into_iter().map(|c| c as i64).collect();
+        let v1 = dims.pop().unwrap();
+        let v2 = dims.pop().unwrap();
+        dims.push(v1 * v2);
+        let rope = rope.reshape(&dims)?;
+        Ok(rope)
     }
 
     fn forward(&self, x: &XlaOp, freqs_cis: &XlaOp) -> Result<XlaOp> {
@@ -271,7 +278,7 @@ fn precompute_freqs_cis(config: &Config, builder: &XlaBuilder) -> Result<XlaOp> 
     let idx_theta = theta.dot_general(&arange, &[], &[], &[], &[])?;
     let idx_theta_cos = idx_theta.cos()?;
     let idx_theta_sin = idx_theta.sin()?;
-    let shape = [1, seq_len as i64, 1, n_elem as i64 / 2, 2];
+    let shape = [1, 1, seq_len as i64, n_elem as i64 / 2, 2];
     Ok(idx_theta_cos.concat_in_dim(&[&idx_theta_sin], -1)?.reshape(&shape)?)
 }
 
