@@ -133,6 +133,32 @@ impl XlaBuilder {
         XlaOp { op, builder: self.clone() }
     }
 
+    /// A constant node with the specified shape that holds increasing values starting from 0 along
+    /// the iota dimension.
+    pub fn iota(
+        &self,
+        element_type: super::PrimitiveType,
+        dims: &[i64],
+        iota_dimension: i64,
+    ) -> XlaOp {
+        let op = unsafe {
+            c_lib::op_iota(
+                self.ptr(),
+                element_type as i32,
+                dims.len(),
+                dims.as_ptr(),
+                iota_dimension,
+            )
+        };
+        XlaOp { op, builder: self.clone() }
+    }
+
+    /// A constant node for a unidimensional array of increasing values starting from 0.
+    pub fn iota1(&self, element_type: super::PrimitiveType, size: usize) -> XlaOp {
+        let op = unsafe { c_lib::op_iota1(self.ptr(), element_type as i32, size) };
+        XlaOp { op, builder: self.clone() }
+    }
+
     /// An error node, using the 'internal error' error type.
     pub fn internal_error(&self, msg: &str) -> XlaOp {
         let msg = std::ffi::CString::new(msg).unwrap();

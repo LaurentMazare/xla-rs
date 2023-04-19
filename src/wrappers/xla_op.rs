@@ -1,6 +1,6 @@
 //! Nodes from the computation graph.
 //!
-//! An `XlaOp` value represents a node in the computation graph, e.g. it can be the sum of two
+//! An `XlaOp` value represents a node/operand in the computation graph, e.g. it can be the sum of two
 //! other nodes, a constant value, an input parameter, etc.
 //!
 //! For details on the semantics, see

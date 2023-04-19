@@ -151,6 +151,8 @@ xla_op op_reduce(const xla_op, const xla_op, const xla_computation, const int64_
 xla_op op_internal_error(const xla_builder, const char*);
 xla_op op_unknown_error(const xla_builder, const char*);
 xla_op op_invalid_argument_error(const xla_builder, const char*);
+xla_op op_iota1(const xla_builder, int, size_t);
+xla_op op_iota(const xla_builder, int, size_t, const int64_t*, int64_t);
 xla_builder op_builder(const xla_op);
 
 int xla_op_valid(const xla_op);

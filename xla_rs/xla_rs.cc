@@ -725,6 +725,22 @@ xla_op op_max_value(const xla_builder b, int pr_type) {
   END_PROTECT_OP_B(b)
 }
 
+xla_op op_iota1(const xla_builder b, int pr_type, size_t sz) {
+  BEGIN_PROTECT_OP
+  return new XlaOp(Iota(b, (PrimitiveType)pr_type, (int64_t)sz));
+  END_PROTECT_OP_B(b)
+}
+
+xla_op op_iota(const xla_builder b, int pr_type, size_t dsize, const int64_t* ds, int64_t increasing_dim) {
+  BEGIN_PROTECT_OP
+  auto shape = ShapeUtil::MakeShape(
+      (PrimitiveType)pr_type,
+      absl::Span<const long int>(ds, dsize)
+  );
+  return new XlaOp(Iota(b, shape, increasing_dim));
+  END_PROTECT_OP_B(b)
+}
+
 xla_builder op_builder(const xla_op arg) {
   return arg->builder();
 }
