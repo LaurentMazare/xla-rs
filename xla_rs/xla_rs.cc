@@ -851,6 +851,29 @@ status execute(const pjrt_loaded_executable exe, const literal *inputs, int ninp
   return nullptr;
 }
 
+status execute_b(const pjrt_loaded_executable exe, const pjrt_buffer *inputs, int ninputs, pjrt_buffer ***outputs) {
+  auto client = exe->client();
+  ExecuteOptions options;
+  options.strict_shape_checking = false;
+  std::vector<PjRtBuffer*> input_buffer_ptrs(inputs, inputs + ninputs);
+  ASSIGN_OR_RETURN_STATUS(
+    results,
+    exe->Execute({input_buffer_ptrs}, options));
+  pjrt_buffer** out = (pjrt_buffer**)malloc((results.size() + 1) * sizeof(pjrt_buffer*));
+  for (size_t i = 0; i < results.size(); ++i) {
+    auto &replica_results = results[i];
+    pjrt_buffer* per_replica_outputs = (pjrt_buffer*)malloc((replica_results.size() + 1) * sizeof(pjrt_buffer));
+    for (size_t j = 0; j < replica_results.size(); ++j) {
+      per_replica_outputs[j] = replica_results[j].release();
+    }
+    per_replica_outputs[replica_results.size()] = nullptr;
+    out[i] = per_replica_outputs;
+  }
+  out[results.size()] = nullptr;
+  *outputs = out;
+  return nullptr;
+}
+
 literal literal_create_from_shape(int pr_type, const int64_t* dims, size_t ndims) {
   auto shape = ShapeUtil::MakeShape((PrimitiveType)pr_type, absl::Span<const int64_t>(dims, ndims));
   Literal l = Literal::CreateFromShape(shape);
