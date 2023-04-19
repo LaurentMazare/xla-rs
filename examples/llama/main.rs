@@ -11,7 +11,7 @@ use xla::{Literal, PrimitiveType, XlaBuilder, XlaOp};
 mod var_store;
 use var_store::VarStore;
 
-const ET: PrimitiveType = PrimitiveType::F32;
+const ET: PrimitiveType = PrimitiveType::F16;
 const TEMPERATURE: f32 = 0.8f32;
 const USE_CPU: bool = true;
 
@@ -140,7 +140,8 @@ impl Mlp {
 
 fn masked_fill<T: xla::NativeType>(on_false: &XlaOp, mask: &XlaOp, on_true: T) -> Result<XlaOp> {
     let shape = mask.shape()?;
-    let on_true = mask.builder().c0(on_true).broadcast(shape.dimensions())?;
+    let on_true =
+        mask.builder().c0(on_true).convert_element_type(ET)?.broadcast(shape.dimensions())?;
     let m = mask.select(&on_true, on_false)?;
     Ok(m)
 }
@@ -198,7 +199,9 @@ impl CausalSelfAttention {
         let k = self.apply_rotary_emb(&k, freqs_cis)?;
         let k_shape = k.shape()?;
         let att = (q.matmul(&k.swap_dims(-2, -1)?)?
-            * builder.c0(1f32 / (k_shape.last_dim().unwrap() as f32).sqrt()))?;
+            * builder
+                .c0(1f32 / (k_shape.last_dim().unwrap() as f32).sqrt())
+                .convert_element_type(ET)?)?;
         let mask = builder
             .one(PrimitiveType::S32)
             .broadcast(&[t, t])?
@@ -279,7 +282,10 @@ fn precompute_freqs_cis(config: &Config, builder: &XlaBuilder) -> Result<XlaOp> 
     let idx_theta_cos = idx_theta.cos()?;
     let idx_theta_sin = idx_theta.sin()?;
     let shape = [1, 1, seq_len as i64, n_elem as i64 / 2, 2];
-    Ok(idx_theta_cos.concat_in_dim(&[&idx_theta_sin], -1)?.reshape(&shape)?)
+    Ok(idx_theta_cos
+        .concat_in_dim(&[&idx_theta_sin], -1)?
+        .reshape(&shape)?
+        .convert_element_type(ET)?)
 }
 
 fn llama_computation(vs: VarStore, bsize: i64) -> Result<xla::XlaComputation> {
@@ -289,7 +295,7 @@ fn llama_computation(vs: VarStore, bsize: i64) -> Result<xla::XlaComputation> {
     let llama = Llama::new(vs, &config)?;
     let input = b.parameter(0, PrimitiveType::S32, &[bsize, config.block_size as i64], "tokens");
     let logits = llama.forward(&input, &freqs_cis)?;
-    let prs = (logits / b.c0(TEMPERATURE))?.softmax(-1)?;
+    let prs = (logits / b.c0(TEMPERATURE).convert_element_type(ET)?)?.softmax(-1)?;
     Ok(prs.build()?)
 }
 
