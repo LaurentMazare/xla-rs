@@ -4,8 +4,8 @@ use xla::{ElementType, Result};
 fn add_op() -> Result<()> {
     let client = xla::PjRtClient::cpu()?;
     let builder = xla::XlaBuilder::new("test");
-    let cst42 = builder.constant_r0(42f32);
-    let cst43 = builder.constant_r1c(43f32, 2);
+    let cst42 = builder.constant_r0(42f32)?;
+    let cst43 = builder.constant_r1c(43f32, 2)?;
     let sum = (cst42 + &cst43)?;
     let computation = sum.build()?;
     let result = client.compile(&computation)?;
@@ -22,7 +22,7 @@ fn add_op() -> Result<()> {
 fn sum_op() -> Result<()> {
     let client = xla::PjRtClient::cpu()?;
     let builder = xla::XlaBuilder::new("test");
-    let x = builder.parameter(0, f32::PRIMITIVE_TYPE, &[2], "x");
+    let x = builder.parameter(0, f32::PRIMITIVE_TYPE, &[2], "x")?;
     let sum = x.reduce_sum(&[], false)?.build()?.compile(&client)?;
     let input = xla::Literal::vec(&[4.2f32, 1.337f32]);
     let result = sum.execute::<xla::Literal>(&[input])?;
@@ -30,7 +30,7 @@ fn sum_op() -> Result<()> {
     assert_eq!(result.to_vec::<f32>()?, [4.2, 1.337]);
 
     let builder = xla::XlaBuilder::new("test");
-    let x = builder.parameter(0, f32::PRIMITIVE_TYPE, &[-2], "x");
+    let x = builder.parameter(0, f32::PRIMITIVE_TYPE, &[-2], "x")?;
     let sum = x.reduce_sum(&[0], false)?.build()?.compile(&client)?;
     let input = xla::Literal::vec(&[4.2f32, 1.337f32]);
     let result = sum.execute::<xla::Literal>(&[input])?;
@@ -40,7 +40,7 @@ fn sum_op() -> Result<()> {
     assert_eq!(result.shape()?.dimensions(), []);
 
     let builder = xla::XlaBuilder::new("test");
-    let x = builder.parameter(0, f32::PRIMITIVE_TYPE, &[-2], "x");
+    let x = builder.parameter(0, f32::PRIMITIVE_TYPE, &[-2], "x")?;
     let sum = x.reduce_sum(&[0], true)?.build()?.compile(&client)?;
     let input = xla::Literal::vec(&[4.2f32, 1.337f32]);
     let result = sum.execute::<xla::Literal>(&[input])?;
@@ -55,7 +55,7 @@ fn sum_op() -> Result<()> {
 fn mean_op() -> Result<()> {
     let client = xla::PjRtClient::cpu()?;
     let builder = xla::XlaBuilder::new("test");
-    let x = builder.parameter(0, f32::PRIMITIVE_TYPE, &[-2], "x");
+    let x = builder.parameter(0, f32::PRIMITIVE_TYPE, &[-2], "x")?;
     let sum = x.reduce_mean(&[0], false)?.build()?.compile(&client)?;
     let input = xla::Literal::vec(&[4.2f32, 1.337f32]);
     let result = sum.execute::<xla::Literal>(&[input])?;

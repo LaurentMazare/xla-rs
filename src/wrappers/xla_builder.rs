@@ -48,21 +48,26 @@ impl XlaBuilder {
     }
 
     /// Create a node with a constant value defined by the specified literal.
-    pub fn constant_literal(&self, literal: &Literal) -> XlaOp {
+    pub fn constant_literal(&self, literal: &Literal) -> Result<XlaOp> {
         let op = unsafe { c_lib::constant_literal(self.ptr(), literal.0) };
-        XlaOp { op, builder: self.clone() }
+        self.wrap(op)
     }
 
     /// Create a node with a constant scalar value using the type of the element that is passed as
     /// argument.
-    pub fn constant_r0<T: NativeType>(&self, f: T) -> XlaOp {
+    pub fn constant_r0<T: NativeType>(&self, f: T) -> Result<XlaOp> {
         let op = unsafe { T::constant_r0(self.ptr(), f) };
-        XlaOp { op, builder: self.clone() }
+        self.wrap(op)
     }
 
     /// A shorter notation for `constant_r0`.
-    pub fn c0<T: NativeType>(&self, f: T) -> XlaOp {
+    pub fn c0<T: NativeType>(&self, f: T) -> Result<XlaOp> {
         self.constant_r0(f)
+    }
+
+    pub fn wrap(&self, op: c_lib::xla_op) -> Result<XlaOp> {
+        self.get_current_status()?;
+        Ok(XlaOp { op, builder: self.clone() })
     }
 
     /// Create an input node with the specified type and dimensions. A literal has to be passed for
@@ -75,7 +80,7 @@ impl XlaBuilder {
         element_type: PrimitiveType,
         dims: &[i64],
         name: &str,
-    ) -> XlaOp {
+    ) -> Result<XlaOp> {
         let op = unsafe {
             c_lib::parameter(
                 self.ptr(),
@@ -86,51 +91,56 @@ impl XlaBuilder {
                 name.as_ptr() as *const libc::c_char,
             )
         };
-        XlaOp { op, builder: self.clone() }
+        self.wrap(op)
     }
 
-    pub fn parameter_with_shape(&self, parameter_number: i64, shape: &Shape, name: &str) -> XlaOp {
+    pub fn parameter_with_shape(
+        &self,
+        parameter_number: i64,
+        shape: &Shape,
+        name: &str,
+    ) -> Result<XlaOp> {
         self.parameter(parameter_number, shape.element_type, &shape.dimensions, name)
     }
 
-    pub fn constant_r1c<T: NativeType>(&self, f: T, len: usize) -> XlaOp {
+    pub fn constant_r1c<T: NativeType>(&self, f: T, len: usize) -> Result<XlaOp> {
         let op = unsafe { T::constant_r1c(self.ptr(), f, len) };
-        XlaOp { op, builder: self.clone() }
+        self.wrap(op)
     }
 
     /// A one dimension constant node based on some slice stored on the host.
-    pub fn constant_r1<T: NativeType>(&self, f: &[T]) -> XlaOp {
+    pub fn constant_r1<T: NativeType>(&self, f: &[T]) -> Result<XlaOp> {
         let op = unsafe { T::constant_r1(self.ptr(), f.as_ptr(), f.len()) };
-        XlaOp { op, builder: self.clone() }
+        self.wrap(op)
     }
 
     /// Shorthand function for `constant_r1`.
-    pub fn c1<T: NativeType>(&self, f: &[T]) -> XlaOp {
+    pub fn c1<T: NativeType>(&self, f: &[T]) -> Result<XlaOp> {
         self.constant_r1(f)
     }
 
     /// A scalar node with the zero value for the associated type.
-    pub fn zero(&self, element_type: super::PrimitiveType) -> XlaOp {
+    pub fn zero(&self, element_type: super::PrimitiveType) -> Result<XlaOp> {
         let op = unsafe { c_lib::op_zero(self.ptr(), element_type as i32) };
-        XlaOp { op, builder: self.clone() }
+        self.wrap(op)
     }
 
     /// A scalar node with the one value for the associated type.
-    pub fn one(&self, element_type: super::PrimitiveType) -> XlaOp {
+    pub fn one(&self, element_type: super::PrimitiveType) -> Result<XlaOp> {
         let op = unsafe { c_lib::op_one(self.ptr(), element_type as i32) };
-        XlaOp { op, builder: self.clone() }
+        self.wrap(op)
     }
 
     /// A scalar node with the minimum value for the associated type.
-    pub fn min_value(&self, element_type: super::PrimitiveType) -> XlaOp {
+    pub fn min_value(&self, element_type: super::PrimitiveType) -> Result<XlaOp> {
         let op = unsafe { c_lib::op_min_value(self.ptr(), element_type as i32) };
-        XlaOp { op, builder: self.clone() }
+        self.wrap(op)
     }
 
     /// A scalar node with the maximum value for the associated type.
-    pub fn max_value(&self, element_type: super::PrimitiveType) -> XlaOp {
+    pub fn max_value(&self, element_type: super::PrimitiveType) -> Result<XlaOp> {
         let op = unsafe { c_lib::op_max_value(self.ptr(), element_type as i32) };
-        XlaOp { op, builder: self.clone() }
+        self.wrap(op)
     }
 
     /// A constant node with the specified shape that holds increasing values starting from 0 along
@@ -140,7 +150,7 @@ impl XlaBuilder {
         element_type: super::PrimitiveType,
         dims: &[i64],
         iota_dimension: i64,
-    ) -> XlaOp {
+    ) -> Result<XlaOp> {
         let op = unsafe {
             c_lib::op_iota(
                 self.ptr(),
@@ -150,13 +160,13 @@ impl XlaBuilder {
                 iota_dimension,
             )
         };
-        XlaOp { op, builder: self.clone() }
+        self.wrap(op)
     }
 
     /// A constant node for a unidimensional array of increasing values starting from 0.
-    pub fn iota1(&self, element_type: super::PrimitiveType, size: usize) -> XlaOp {
+    pub fn iota1(&self, element_type: super::PrimitiveType, size: usize) -> Result<XlaOp> {
         let op = unsafe { c_lib::op_iota1(self.ptr(), element_type as i32, size) };
-        XlaOp { op, builder: self.clone() }
+        self.wrap(op)
     }
 
     /// An error node, using the 'internal error' error type.

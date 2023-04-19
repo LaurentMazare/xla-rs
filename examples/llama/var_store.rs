@@ -1,76 +1,54 @@
-use anyhow::{Context, Result};
-use std::collections::HashMap;
+use xla::{PrimitiveType, Result, XlaOp};
 
-use xla::{Literal, PrimitiveType};
-
-#[derive(Clone)]
-pub struct VarStore {
-    path: Vec<String>,
-    weights: std::rc::Rc<std::cell::RefCell<HashMap<String, Literal>>>,
+#[allow(dead_code)]
+struct NamedVar {
+    path: String,
+    element_type: PrimitiveType,
+    dims: Vec<usize>,
 }
 
-impl VarStore {
-    pub fn new<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
-        let weights = xla::Literal::read_npz(path)?;
-        let weights = weights.into_iter().collect::<HashMap<_, _>>();
-        let weights = std::rc::Rc::new(std::cell::RefCell::new(weights));
-        Ok(VarStore { path: vec![], weights })
+#[derive(Clone)]
+pub struct VarBuilder {
+    path: Vec<String>,
+    vars: std::rc::Rc<std::cell::RefCell<Vec<NamedVar>>>,
+    builder: xla::XlaBuilder,
+}
+
+impl VarBuilder {
+    pub fn new(builder: &xla::XlaBuilder) -> Self {
+        let vars = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        Self { builder: builder.clone(), path: vec![], vars }
     }
 
     pub fn len(&self) -> usize {
-        self.weights.borrow().len()
+        self.vars.borrow().len()
     }
 
-    pub fn take(
-        &mut self,
-        s: &str,
-        expected_type: PrimitiveType,
-        expected_dims: &[usize],
-    ) -> Result<Literal> {
+    pub fn var(&mut self, s: &str, element_type: PrimitiveType, dims: &[usize]) -> Result<XlaOp> {
         let path = format!("{}.{s}", self.path.join("."));
-        let literal = self.weights.borrow_mut().remove(&path);
-        let literal = literal.with_context(|| {
-            let available_names: Vec<String> =
-                self.weights.borrow().keys().map(|c| c.to_owned()).collect();
-            format!("cannot find {path} in VarStore {available_names:?}")
-        })?;
-        let shape = literal.shape()?;
-        let element_type = shape.element_type();
-        let dims = shape.dimensions();
-        if element_type != expected_type {
-            anyhow::bail!(
-                "unexpected element type for {}, got {:?} expected {:?}",
-                path,
-                element_type,
-                expected_type
-            )
-        }
-        if dims.iter().zip(expected_dims.iter()).any(|(u, v)| *u != *v as i64) {
-            anyhow::bail!(
-                "unexpected dims for {}, got {:?} expected {:?}",
-                path,
-                dims,
-                expected_dims
-            )
-        }
-        Ok(literal)
+        let mut vars = self.vars.borrow_mut();
+        let dims64 = dims.iter().map(|c| *c as i64).collect::<Vec<_>>();
+        let id = vars.len();
+        let parameter = self.builder.parameter(id as i64, element_type, &dims64, &path);
+        vars.push(NamedVar { path, element_type, dims: dims.to_vec() });
+        parameter
     }
 }
 
-impl<S: ToString> std::ops::Div<S> for &VarStore {
-    type Output = VarStore;
+impl<S: ToString> std::ops::Div<S> for &VarBuilder {
+    type Output = VarBuilder;
 
-    fn div(self, rhs: S) -> VarStore {
+    fn div(self, rhs: S) -> VarBuilder {
         let mut path = self.path.clone();
         path.push(rhs.to_string());
-        VarStore { path, weights: self.weights.clone() }
+        VarBuilder { path, vars: self.vars.clone(), builder: self.builder.clone() }
     }
 }
 
-impl<S: ToString> std::ops::Div<S> for VarStore {
-    type Output = VarStore;
+impl<S: ToString> std::ops::Div<S> for VarBuilder {
+    type Output = VarBuilder;
 
-    fn div(self, rhs: S) -> VarStore {
+    fn div(self, rhs: S) -> VarBuilder {
         &self / rhs
     }
 }

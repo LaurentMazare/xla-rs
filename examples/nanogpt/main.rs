@@ -23,10 +23,10 @@ const NUM_SAMPLES: usize = 10;
 
 fn new_gelu(x: &XlaOp) -> Result<XlaOp> {
     let b = x.builder();
-    let sqrt_two_over_pi = b.c0((2f32 / std::f32::consts::PI).sqrt());
+    let sqrt_two_over_pi = b.c0((2f32 / std::f32::consts::PI).sqrt())?;
     // 0.5 * x * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) * (x + 0.044715 * torch.pow(x, 3.0))))
-    let v = (sqrt_two_over_pi * ((b.c0(0.044715f32) * x.pow(&b.c0(3f32))?)? + x)?)?;
-    let res = ((b.c0(0.5f32) * x)? * (v.tanh()? + b.c0(1f32))?)?;
+    let v = (sqrt_two_over_pi * ((b.c0(0.044715f32)? * x.pow(&b.c0(3f32)?)?)? + x)?)?;
+    let res = ((b.c0(0.5f32)? * x)? * (v.tanh()? + b.c0(1f32)?)?)?;
     Ok(res)
 }
 
@@ -41,7 +41,7 @@ impl Embedding {
     }
 
     fn forward(&self, indexes: &XlaOp) -> Result<XlaOp> {
-        let embeddings = indexes.builder().constant_literal(&self.embeddings);
+        let embeddings = indexes.builder().constant_literal(&self.embeddings)?;
         let features = embeddings.take(indexes, 0)?;
         Ok(features)
     }
@@ -62,8 +62,8 @@ impl LayerNorm {
 
     fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
         let b = x.builder();
-        let scale = b.constant_literal(&self.scale).reshape(&[1, 1, self.size])?;
-        let bias = b.constant_literal(&self.bias).reshape(&[1, 1, self.size])?;
+        let scale = b.constant_literal(&self.scale)?.reshape(&[1, 1, self.size])?;
+        let bias = b.constant_literal(&self.bias)?.reshape(&[1, 1, self.size])?;
         let x_norm = x.layer_norm(-1, &scale, &bias)?;
         Ok(x_norm)
     }
@@ -90,12 +90,12 @@ impl Linear {
     fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
         let b = x.builder();
         let x_rank = x.rank()?;
-        let ws = b.constant_literal(&self.ws);
+        let ws = b.constant_literal(&self.ws)?;
         let x = x.dot_general(&ws, &[x_rank as i64 - 1], &[0], &[], &[])?;
         let y = match &self.bs {
             None => x,
             Some(bs) => {
-                let bs = b.constant_literal(bs).reshape(&[1, 1, self.out_size as i64])?;
+                let bs = b.constant_literal(bs)?.reshape(&[1, 1, self.out_size as i64])?;
                 (x + bs)?
             }
         };
@@ -105,7 +105,7 @@ impl Linear {
 
 fn masked_fill<T: xla::NativeType>(on_false: &XlaOp, mask: &XlaOp, on_true: T) -> Result<XlaOp> {
     let shape = mask.shape()?;
-    let on_true = mask.builder().c0(on_true).broadcast(shape.dimensions())?;
+    let on_true = mask.builder().c0(on_true)?.broadcast(shape.dimensions())?;
     let m = mask.select(&on_true, on_false)?;
     Ok(m)
 }
@@ -141,11 +141,11 @@ impl CausalSelfAttention {
         let att = (q.matmul(&k.swap_dims(-2, -1)?)?
             * builder.c0(1f32 / (k_shape.last_dim().unwrap() as f32).sqrt()))?;
         let mask = builder
-            .one(PrimitiveType::S32)
+            .one(PrimitiveType::S32)?
             .broadcast(&[t, t])?
             .lower_triangle()?
             .reshape(&[1, 1, t, t])?;
-        let zero = builder.zero(PrimitiveType::S32).broadcast(&[b, self.n_head as i64, t, t])?;
+        let zero = builder.zero(PrimitiveType::S32)?.broadcast(&[b, self.n_head as i64, t, t])?;
         let att = masked_fill(&att, &mask.eq(&zero)?, f32::NEG_INFINITY)?;
         let y = att.softmax(-1)?.matmul(&v)?;
         let y = y.swap_dims(1, 2)?.reshape(&[b, t, c])?;
@@ -234,7 +234,7 @@ impl Gpt {
         let builder = x.builder();
         let t = x.dim2()?.1 as i64;
         let arange: Vec<_> = (0..t).collect();
-        let pos = builder.c1(&arange).reshape(&[1, t])?;
+        let pos = builder.c1(&arange)?.reshape(&[1, t])?;
 
         let tok_emb = self.wte.forward(x)?;
         let pos_emb = self.wpe.forward(&pos)?;
@@ -253,7 +253,7 @@ fn gpt_computation(vs: VarStore, bsize: i64) -> Result<xla::XlaComputation> {
     let b = XlaBuilder::new("gpt");
     let config = GptConfig::default();
     let gpt = Gpt::new(vs, &config)?;
-    let input = b.parameter(0, PrimitiveType::S32, &[bsize, config.block_size as i64], "tokens");
+    let input = b.parameter(0, PrimitiveType::S32, &[bsize, config.block_size as i64], "tokens")?;
     let logits = gpt.forward(&input)?;
     let prs = (logits / b.c0(TEMPERATURE))?.softmax(-1)?;
     Ok(prs.build()?)

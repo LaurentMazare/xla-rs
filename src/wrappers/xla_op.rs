@@ -470,10 +470,10 @@ impl XlaOp {
     pub fn reduce_sum(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
         let builder = XlaBuilder::new("Sum");
         let et = self.element_type()?;
-        let x = builder.parameter(0, et, &[], "x");
-        let y = builder.parameter(1, et, &[], "y");
+        let x = builder.parameter(0, et, &[], "x")?;
+        let y = builder.parameter(1, et, &[], "y")?;
         let sum = x.add_(&y)?.build()?;
-        let init_value = self.builder.zero(et);
+        let init_value = self.builder.zero(et)?;
         self.reduce(init_value, sum, dims, keep_dims)
     }
 
@@ -481,7 +481,7 @@ impl XlaOp {
     pub fn reduce_mean(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
         let b = &self.builder();
         let et = self.element_type()?;
-        let mut scale = b.one(PrimitiveType::S32);
+        let mut scale = b.one(PrimitiveType::S32)?;
         for d in dims.iter() {
             scale = (scale * self.dimensions_size(*d)?)?;
         }
@@ -493,10 +493,10 @@ impl XlaOp {
     pub fn reduce_max(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
         let builder = XlaBuilder::new("Max");
         let et = self.element_type()?;
-        let x = builder.parameter(0, et, &[], "x");
-        let y = builder.parameter(1, et, &[], "y");
+        let x = builder.parameter(0, et, &[], "x")?;
+        let y = builder.parameter(1, et, &[], "y")?;
         let sum = x.max(&y)?.build()?;
-        let init_value = self.builder.min_value(et);
+        let init_value = self.builder.min_value(et)?;
         self.reduce(init_value, sum, dims, keep_dims)
     }
 
@@ -504,10 +504,10 @@ impl XlaOp {
     pub fn reduce_min(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
         let builder = XlaBuilder::new("Min");
         let et = self.element_type()?;
-        let x = builder.parameter(0, et, &[], "x");
-        let y = builder.parameter(1, et, &[], "y");
+        let x = builder.parameter(0, et, &[], "x")?;
+        let y = builder.parameter(1, et, &[], "y")?;
         let sum = x.min(&y)?.build()?;
-        let init_value = self.builder.max_value(et);
+        let init_value = self.builder.max_value(et)?;
         self.reduce(init_value, sum, dims, keep_dims)
     }
 
@@ -522,7 +522,7 @@ impl XlaOp {
     /// standard deviation one, and then scales the result by `scale` and adds `bias`.
     pub fn layer_norm(&self, dim: i64, scale: &XlaOp, bias: &XlaOp) -> Result<Self> {
         let et = self.element_type().unwrap_or(PrimitiveType::F32);
-        let eps = self.builder().c0(1e-5).convert_element_type(et)?;
+        let eps = self.builder().c0(1e-5)?.convert_element_type(et)?;
         let mean = self.reduce_mean(&[dim], true)?;
         let mean2 = (self * self)?.reduce_mean(&[dim], true)?;
         let var = (mean2 - (&mean * &mean)?)?;
