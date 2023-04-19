@@ -1,22 +1,26 @@
 //! A view on a memory slice hosted on a device.
 use super::{ElementType, FromPrimitive, Literal, PjRtDevice, Shape};
 use crate::{c_lib, Error, Result};
-use std::marker::PhantomData;
 
 /// A buffer represents a view on a memory slice hosted on a device.
-pub struct PjRtBuffer<'a> {
+pub struct PjRtBuffer {
     pub(super) buffer: c_lib::pjrt_buffer,
-    pub(super) marker: PhantomData<&'a super::PjRtClient>,
+    pub(super) client: super::PjRtClient,
 }
 
-impl<'a> PjRtBuffer<'a> {
+impl PjRtBuffer {
+    /// The client that owns this buffer.
+    pub fn client(&self) -> &super::PjRtClient {
+        &self.client
+    }
+
     /// Copy the buffer to a different device.
-    pub fn copy_to_device(&self, device: PjRtDevice<'a>) -> Result<PjRtBuffer<'a>> {
+    pub fn copy_to_device(&self, device: PjRtDevice) -> Result<PjRtBuffer> {
         let mut buffer: c_lib::pjrt_buffer = std::ptr::null_mut();
         let status =
             unsafe { c_lib::pjrt_buffer_copy_to_device(self.buffer, device.device, &mut buffer) };
         super::handle_status(status)?;
-        Ok(Self { buffer, marker: PhantomData })
+        Ok(Self { buffer, client: self.client.clone() })
     }
 
     /// Copy the buffer back to the host as a literal.
@@ -70,7 +74,7 @@ impl<'a> PjRtBuffer<'a> {
     }
 }
 
-impl<'a> Drop for PjRtBuffer<'a> {
+impl Drop for PjRtBuffer {
     fn drop(&mut self) {
         unsafe { c_lib::pjrt_buffer_free(self.buffer) }
     }
