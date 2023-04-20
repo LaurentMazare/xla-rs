@@ -1,4 +1,4 @@
-use xla::{PrimitiveType, Result, XlaOp};
+use xla::{FromRawBytes, PrimitiveType, Result, XlaOp};
 
 #[allow(dead_code)]
 #[derive(Clone)]
@@ -86,7 +86,7 @@ impl VarStore {
             .iter()
             .filter_map(|n| if n.is_arg { None } else { Some(n.path.as_str()) })
             .collect();
-        xla::Literal::read_npz_by_name(path, &names)?;
+        xla::Literal::read_npz_by_name(path, &(), &names)?;
         Ok(())
     }
 }

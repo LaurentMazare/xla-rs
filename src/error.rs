@@ -18,6 +18,9 @@ pub enum Error {
     #[error("element type mismatch, on-device: {on_device:?}, on-host: {on_host:?}")]
     ElementTypeMismatch { on_device: crate::PrimitiveType, on_host: crate::PrimitiveType },
 
+    #[error("unsupported element type for {op}: {ty:?}")]
+    UnsupportedElementType { ty: crate::PrimitiveType, op: &'static str },
+
     #[error(
         "target buffer is too large, offset {offset}, shape {shape:?}, buffer_len: {buffer_len}"
     )]

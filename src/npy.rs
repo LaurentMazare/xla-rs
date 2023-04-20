@@ -179,9 +179,17 @@ impl Header {
     }
 }
 
-impl crate::Literal {
+pub trait FromRawBytes: Sized {
+    type Context;
+    fn from_raw_bytes(
+        h: &Self::Context,
+        ty: PrimitiveType,
+        dims: &[usize],
+        bytes: &[u8],
+    ) -> Result<Self>;
+
     /// Reads a npy file and return the stored multi-dimensional array as a literal.
-    pub fn read_npy<T: AsRef<Path>>(path: T) -> Result<Literal> {
+    fn read_npy<T: AsRef<Path>>(path: T, c: &Self::Context) -> Result<Self> {
         let mut reader = File::open(path.as_ref())?;
         let header = read_header(&mut reader)?;
         let header = Header::parse(&header)?;
@@ -191,12 +199,11 @@ impl crate::Literal {
         let mut data: Vec<u8> = vec![];
         reader.read_to_end(&mut data)?;
         let dims: Vec<_> = header.shape.iter().map(|v| *v as usize).collect();
-        let literal = Literal::create_from_shape_and_untyped_data(header.descr, &dims, &data)?;
-        Ok(literal)
+        Self::from_raw_bytes(c, header.descr, &dims, &data)
     }
 
     /// Reads a npz file and returns the stored multi-dimensional arrays together with their names.
-    pub fn read_npz<T: AsRef<Path>>(path: T) -> Result<Vec<(String, Literal)>> {
+    fn read_npz<T: AsRef<Path>>(path: T, c: &Self::Context) -> Result<Vec<(String, Self)>> {
         let zip_reader = BufReader::new(File::open(path.as_ref())?);
         let mut zip = zip::ZipArchive::new(zip_reader)?;
         let mut result = vec![];
@@ -214,14 +221,18 @@ impl crate::Literal {
             let mut data: Vec<u8> = vec![];
             reader.read_to_end(&mut data)?;
             let dims: Vec<_> = header.shape.iter().map(|v| *v as usize).collect();
-            let literal = Literal::create_from_shape_and_untyped_data(header.descr, &dims, &data)?;
-            result.push((name, literal))
+            let s = Self::from_raw_bytes(c, header.descr, &dims, &data)?;
+            result.push((name, s))
         }
         Ok(result)
     }
 
     /// Reads a npz file and returns the stored multi-dimensional arrays for some specified names.
-    pub fn read_npz_by_name<T: AsRef<Path>>(path: T, names: &[&str]) -> Result<Vec<Literal>> {
+    fn read_npz_by_name<T: AsRef<Path>>(
+        path: T,
+        c: &Self::Context,
+        names: &[&str],
+    ) -> Result<Vec<Self>> {
         let zip_reader = BufReader::new(File::open(path.as_ref())?);
         let mut zip = zip::ZipArchive::new(zip_reader)?;
         let mut result = vec![];
@@ -238,12 +249,40 @@ impl crate::Literal {
             let mut data: Vec<u8> = vec![];
             reader.read_to_end(&mut data)?;
             let dims: Vec<_> = header.shape.iter().map(|v| *v as usize).collect();
-            let literal = Literal::create_from_shape_and_untyped_data(header.descr, &dims, &data)?;
-            result.push(literal)
+            let s = Self::from_raw_bytes(c, header.descr, &dims, &data)?;
+            result.push(s)
         }
         Ok(result)
     }
+}
 
+impl FromRawBytes for crate::Literal {
+    type Context = ();
+
+    fn from_raw_bytes(
+        _: &Self::Context,
+        ty: PrimitiveType,
+        dims: &[usize],
+        bytes: &[u8],
+    ) -> Result<Self> {
+        Self::create_from_shape_and_untyped_data(ty, dims, bytes)
+    }
+}
+
+impl FromRawBytes for crate::PjRtBuffer {
+    type Context = crate::PjRtClient;
+
+    fn from_raw_bytes(
+        client: &Self::Context,
+        ty: PrimitiveType,
+        dims: &[usize],
+        bytes: &[u8],
+    ) -> Result<Self> {
+        client.buffer_from_host_raw_bytes(ty, bytes, dims, None)
+    }
+}
+
+impl crate::Literal {
     fn write<T: Write>(&self, f: &mut T) -> Result<()> {
         f.write_all(NPY_MAGIC_STRING)?;
         f.write_all(&[1u8, 0u8])?;

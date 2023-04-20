@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 
-use xla::{Literal, PrimitiveType};
+use xla::{FromRawBytes, Literal, PrimitiveType};
 
 #[derive(Clone)]
 pub struct VarStore {
@@ -11,7 +11,7 @@ pub struct VarStore {
 
 impl VarStore {
     pub fn new<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
-        let weights = xla::Literal::read_npz(path)?;
+        let weights = xla::Literal::read_npz(path, &())?;
         let weights = weights.into_iter().collect::<HashMap<_, _>>();
         let weights = std::rc::Rc::new(std::cell::RefCell::new(weights));
         Ok(VarStore { path: vec![], weights })

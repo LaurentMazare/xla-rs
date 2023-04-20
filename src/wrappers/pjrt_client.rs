@@ -129,6 +129,43 @@ impl PjRtClient {
 
     /// Transfer some data from the host to a `PjRtBuffer` stored on the target device. If the
     /// device is not specified, the default device is used.
+    /// The source data is passed as a slice of raw bytes, as well as the dimensions. The
+    /// dimensions have to match the number of bytes in the source data, otherwise an error
+    /// is returned.
+    pub fn buffer_from_host_raw_bytes(
+        &self,
+        ty: super::PrimitiveType,
+        data: &[u8],
+        dims: &[usize],
+        device: Option<&PjRtDevice>,
+    ) -> Result<PjRtBuffer> {
+        let mut buffer: c_lib::pjrt_buffer = std::ptr::null_mut();
+        let element_count: usize = dims.iter().product();
+        let element_size_in_bytes = ty
+            .element_size_in_bytes()
+            .ok_or(Error::UnsupportedElementType { ty, op: "buffer_from_bytes" })?;
+        if element_count * element_size_in_bytes != dims.len() {
+            Err(Error::WrongElementCount { dims: dims.to_vec(), element_count })?
+        }
+        let device = device.map_or(std::ptr::null_mut(), |d| d.device);
+        let dims: Vec<_> = dims.iter().map(|d| *d as i64).collect();
+        let status = unsafe {
+            c_lib::pjrt_buffer_from_host_buffer(
+                self.ptr(),
+                device,
+                data.as_ptr() as *const libc::c_void,
+                ty as i32,
+                dims.len() as i32,
+                dims.as_ptr(),
+                &mut buffer,
+            )
+        };
+        super::handle_status(status)?;
+        Ok(PjRtBuffer { buffer, client: self.clone() })
+    }
+
+    /// Transfer some data from the host to a `PjRtBuffer` stored on the target device. If the
+    /// device is not specified, the default device is used.
     /// The source data is passed as a literal.
     pub fn buffer_from_host_literal(
         &self,

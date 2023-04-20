@@ -38,4 +38,5 @@ mod error;
 mod npy;
 mod wrappers;
 pub use error::{Error, Result};
+pub use npy::FromRawBytes;
 pub use wrappers::*;
