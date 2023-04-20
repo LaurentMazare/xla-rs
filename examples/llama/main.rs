@@ -15,9 +15,10 @@ use xla::{PrimitiveType, XlaBuilder, XlaOp};
 mod var_store;
 use var_store::{VarBuilder, VarStore};
 
-const ET: PrimitiveType = PrimitiveType::F16;
+const ET: PrimitiveType = PrimitiveType::F32;
+const F16: PrimitiveType = PrimitiveType::F16;
 const TEMPERATURE: f32 = 1f32;
-const CONTEXT_SIZE: usize = 6;
+const CONTEXT_SIZE: usize = 512;
 const USE_CPU: bool = true;
 const START_PROMPT: &str = r"
 EDWARD:
@@ -105,7 +106,7 @@ struct Embedding {
 
 impl Embedding {
     fn new(mut vb: VarBuilder, vocab_size: usize, n_embd: usize) -> Result<Self> {
-        let embeddings = vb.var("weight", ET, &[vocab_size, n_embd])?;
+        let embeddings = vb.var("weight", F16, &[vocab_size, n_embd])?.convert_element_type(ET)?;
         Ok(Self { embeddings })
     }
 
@@ -124,13 +125,13 @@ struct Linear {
 impl Linear {
     #[allow(dead_code)]
     fn new(mut vb: VarBuilder, in_size: usize, out_size: usize) -> Result<Self> {
-        let ws = vb.var("weight", ET, &[in_size, out_size])?;
-        let bs = vb.var("bias", ET, &[out_size])?;
+        let ws = vb.var("weight", F16, &[in_size, out_size])?.convert_element_type(ET)?;
+        let bs = vb.var("bias", F16, &[out_size])?.convert_element_type(ET)?;
         Ok(Self { ws, bs: Some(bs), out_size })
     }
 
     fn new_no_bias(mut vb: VarBuilder, in_size: usize, out_size: usize) -> Result<Self> {
-        let ws = vb.var("weight", ET, &[in_size, out_size])?;
+        let ws = vb.var("weight", F16, &[in_size, out_size])?.convert_element_type(ET)?;
         Ok(Self { ws, bs: None, out_size })
     }
 
@@ -155,7 +156,7 @@ struct RmsNorm {
 
 impl RmsNorm {
     fn new(mut vb: VarBuilder, size: usize) -> Result<Self> {
-        let scale = vb.var("scale", ET, &[size])?;
+        let scale = vb.var("scale", F16, &[size])?.convert_element_type(ET)?;
         Ok(Self { scale, size: size as i64 })
     }
 
@@ -346,8 +347,7 @@ fn llama_computation(bsize: i64) -> Result<(xla::XlaComputation, VarStore)> {
     let llama = Llama::new(vb.clone(), &config)?;
     let input = vb.arg("tokens", PrimitiveType::U32, &[bsize as usize, CONTEXT_SIZE])?;
     let logits = llama.forward(&input, &freqs_cis)?;
-    let prs = (logits / b.c0(TEMPERATURE)?.convert_element_type(ET)?)?.softmax(-1)?;
-    let prs = prs.convert_element_type(PrimitiveType::F32)?;
+    let prs = (logits / b.c0(TEMPERATURE)?)?.softmax(-1)?;
     Ok((prs.build()?, vb.into_store()))
 }
 
@@ -355,8 +355,8 @@ fn main() -> Result<()> {
     // TODO: The tokenizers library seems pretty large, investigate replacing it with a smaller
     // dependency.
     let tokenizer = tokenizers::Tokenizer::from_file("llama-tokenizer.json").unwrap();
-    // let mut tokens = tokenizer.encode(START_PROMPT, false).unwrap().get_ids().to_vec();
-    let mut tokens = vec![1u32, 15043, 29892, 590, 1024, 338];
+    let mut tokens = tokenizer.encode(START_PROMPT, false).unwrap().get_ids().to_vec();
+    // let mut tokens = vec![1u32, 15043, 29892, 590, 1024, 338];
     let client = if USE_CPU { xla::PjRtClient::cpu()? } else { xla::PjRtClient::gpu(0.95, false)? };
     println!("{} {} {}", client.platform_name(), client.platform_version(), client.device_count());
     let start_build = std::time::Instant::now();
