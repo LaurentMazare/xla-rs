@@ -35,9 +35,9 @@ def convert_state_dict(state_dict: Dict[str, torch.Tensor], dtype: torch.dtype =
                 get_and_remove(f"layers.{layer_idx}.attention.wv.weight"),
             )
         ))
-        converted[f"transformer.h.{layer_idx}.attn.c_proj.weight"] = get_and_remove(
+        converted[f"transformer.h.{layer_idx}.attn.c_proj.weight"] = tr(get_and_remove(
             f"layers.{layer_idx}.attention.wo.weight"
-            )
+            ))
         # mlp
         converted[f"transformer.h.{layer_idx}.mlp.c_fc1.weight"] = get_and_remove(
             f"layers.{layer_idx}.feed_forward.w1.weight", transpose=True,
