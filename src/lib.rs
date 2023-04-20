@@ -40,3 +40,26 @@ mod wrappers;
 pub use error::{Error, Result};
 pub use npy::FromRawBytes;
 pub use wrappers::*;
+
+#[derive(Debug, Copy, Clone)]
+pub enum TfLogLevel {
+    Info,
+    Warning,
+    Error,
+    Fatal,
+}
+
+impl TfLogLevel {
+    fn as_env_variable_str(&self) -> &'static str {
+        match self {
+            Self::Info => "0",
+            Self::Warning => "1",
+            Self::Error => "2",
+            Self::Fatal => "3",
+        }
+    }
+}
+
+pub fn set_tf_min_log_level(log_level: TfLogLevel) {
+    std::env::set_var("TF_CPP_MIN_LOG_LEVEL", log_level.as_env_variable_str())
+}
