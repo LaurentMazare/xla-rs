@@ -16,8 +16,8 @@ mod var_store;
 use var_store::{VarBuilder, VarStore};
 
 const ET: PrimitiveType = PrimitiveType::F16;
-const TEMPERATURE: f32 = 0.8f32;
-const CONTEXT_SIZE: usize = 512;
+const TEMPERATURE: f32 = 1f32;
+const CONTEXT_SIZE: usize = 6;
 const USE_CPU: bool = true;
 const START_PROMPT: &str = r"
 EDWARD:
@@ -331,14 +331,11 @@ fn precompute_freqs_cis(config: &Config, builder: &XlaBuilder) -> Result<XlaOp> 
     let arange: Vec<_> = (0..seq_len).map(|c| c as f32).collect();
     let theta = builder.c1::<f32>(&theta)?;
     let arange = builder.c1::<f32>(&arange)?;
-    let idx_theta = theta.dot_general(&arange, &[], &[], &[], &[])?;
-    let idx_theta_cos = idx_theta.cos()?;
-    let idx_theta_sin = idx_theta.sin()?;
-    let shape = [1, 1, seq_len as i64, n_elem as i64 / 2, 2];
-    Ok(idx_theta_cos
-        .concat_in_dim(&[&idx_theta_sin], -1)?
-        .reshape(&shape)?
-        .convert_element_type(ET)?)
+    let idx_theta = arange.dot_general(&theta, &[], &[], &[], &[])?;
+    let shape = [1, 1, seq_len as i64, n_elem as i64 / 2, 1];
+    let idx_theta_cos = idx_theta.cos()?.reshape(&shape)?;
+    let idx_theta_sin = idx_theta.sin()?.reshape(&shape)?;
+    Ok(idx_theta_cos.concat_in_dim(&[&idx_theta_sin], -1)?.convert_element_type(ET)?)
 }
 
 fn llama_computation(bsize: i64) -> Result<(xla::XlaComputation, VarStore)> {
@@ -358,7 +355,8 @@ fn main() -> Result<()> {
     // TODO: The tokenizers library seems pretty large, investigate replacing it with a smaller
     // dependency.
     let tokenizer = tokenizers::Tokenizer::from_file("llama-tokenizer.json").unwrap();
-    let mut tokens = { tokenizer.encode(START_PROMPT, false).unwrap().get_ids().to_vec() };
+    // let mut tokens = tokenizer.encode(START_PROMPT, false).unwrap().get_ids().to_vec();
+    let mut tokens = vec![1u32, 15043, 29892, 590, 1024, 338];
     let client = if USE_CPU { xla::PjRtClient::cpu()? } else { xla::PjRtClient::gpu(0.95, false)? };
     println!("{} {} {}", client.platform_name(), client.platform_version(), client.device_count());
     let start_build = std::time::Instant::now();
