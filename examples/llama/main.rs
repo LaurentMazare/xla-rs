@@ -305,10 +305,14 @@ fn main() -> Result<()> {
     let (llama, mut vs) = llama_computation(1)?;
     println!("generated the computation in {:?}", start_build.elapsed());
     let start_compile = std::time::Instant::now();
-    let _llama_exe = client.compile(&llama)?;
+    let llama_exe = client.compile(&llama)?;
     println!("compiled the executable in {:?}", start_compile.elapsed());
     let start_load = std::time::Instant::now();
-    vs.load_from_npz("llama.npz")?;
+    let buffers = vs.load_from_npz("llama.npz", &client)?;
     println!("loaded weights in {:?}", start_load.elapsed());
+    for index in 0..100 {
+        println!("{}", index + 1);
+        let _results = llama_exe.execute_b(&buffers)?;
+    }
     Ok(())
 }

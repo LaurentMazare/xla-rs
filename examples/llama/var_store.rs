@@ -1,10 +1,10 @@
-use xla::{FromRawBytes, PrimitiveType, Result, XlaOp};
+use xla::{FromRawBytes, PjRtBuffer, PjRtClient, PrimitiveType, Result, XlaOp};
 
 #[allow(dead_code)]
 #[derive(Clone)]
 struct NamedVar {
     path: String,
-    et: PrimitiveType,
+    ty: PrimitiveType,
     dims: Vec<usize>,
     is_arg: bool,
 }
@@ -34,7 +34,7 @@ impl VarBuilder {
     pub fn var_(
         &mut self,
         s: &str,
-        et: PrimitiveType,
+        ty: PrimitiveType,
         dims: &[usize],
         is_arg: bool,
     ) -> Result<XlaOp> {
@@ -42,17 +42,17 @@ impl VarBuilder {
         let mut vars = self.vars.borrow_mut();
         let dims64 = dims.iter().map(|c| *c as i64).collect::<Vec<_>>();
         let id = vars.len();
-        let parameter = self.builder.parameter(id as i64, et, &dims64, &path);
-        vars.push(NamedVar { path, et, dims: dims.to_vec(), is_arg });
+        let parameter = self.builder.parameter(id as i64, ty, &dims64, &path);
+        vars.push(NamedVar { path, ty, dims: dims.to_vec(), is_arg });
         parameter
     }
 
-    pub fn var(&mut self, s: &str, et: PrimitiveType, dims: &[usize]) -> Result<XlaOp> {
-        self.var_(s, et, dims, false)
+    pub fn var(&mut self, s: &str, ty: PrimitiveType, dims: &[usize]) -> Result<XlaOp> {
+        self.var_(s, ty, dims, false)
     }
 
-    pub fn arg(&mut self, s: &str, et: PrimitiveType, dims: &[usize]) -> Result<XlaOp> {
-        self.var_(s, et, dims, true)
+    pub fn arg(&mut self, s: &str, ty: PrimitiveType, dims: &[usize]) -> Result<XlaOp> {
+        self.var_(s, ty, dims, true)
     }
 
     pub fn into_store(self) -> VarStore {
@@ -80,13 +80,33 @@ impl<S: ToString> std::ops::Div<S> for VarBuilder {
 }
 
 impl VarStore {
-    pub fn load_from_npz<P: AsRef<std::path::Path>>(&mut self, path: P) -> Result<()> {
+    pub fn load_from_npz<P: AsRef<std::path::Path>>(
+        &mut self,
+        path: P,
+        c: &PjRtClient,
+    ) -> Result<Vec<PjRtBuffer>> {
         let names: Vec<_> = self
             .vars
             .iter()
             .filter_map(|n| if n.is_arg { None } else { Some(n.path.as_str()) })
             .collect();
-        xla::Literal::read_npz_by_name(path, &(), &names)?;
-        Ok(())
+        let mut weight_buffers = PjRtBuffer::read_npz_by_name(path, c, &names)?;
+        let mut buffers = vec![];
+        for var in self.vars.iter() {
+            let buffer = if var.is_arg {
+                let ty = var.ty;
+                let element_count: usize = var.dims.iter().product();
+                let element_size_in_bytes = ty
+                    .element_size_in_bytes()
+                    .ok_or(xla::Error::UnsupportedElementType { ty, op: "buffer_from_bytes" })?;
+                let data = vec![0u8; element_count * element_size_in_bytes];
+                c.buffer_from_host_raw_bytes(ty, &data, &var.dims, None)?
+            } else {
+                // meh
+                weight_buffers.remove(0)
+            };
+            buffers.push(buffer)
+        }
+        Ok(buffers)
     }
 }

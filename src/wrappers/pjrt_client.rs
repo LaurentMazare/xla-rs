@@ -107,7 +107,7 @@ impl PjRtClient {
     ) -> Result<PjRtBuffer> {
         let mut buffer: c_lib::pjrt_buffer = std::ptr::null_mut();
         let element_count: usize = dims.iter().product();
-        if element_count != dims.len() {
+        if element_count != data.len() {
             Err(Error::WrongElementCount { dims: dims.to_vec(), element_count })?
         }
         let device = device.map_or(std::ptr::null_mut(), |d| d.device);
@@ -144,7 +144,7 @@ impl PjRtClient {
         let element_size_in_bytes = ty
             .element_size_in_bytes()
             .ok_or(Error::UnsupportedElementType { ty, op: "buffer_from_bytes" })?;
-        if element_count * element_size_in_bytes != dims.len() {
+        if element_count * element_size_in_bytes != data.len() {
             Err(Error::WrongElementCount { dims: dims.to_vec(), element_count })?
         }
         let device = device.map_or(std::ptr::null_mut(), |d| d.device);
