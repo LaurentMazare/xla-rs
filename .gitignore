@@ -16,3 +16,5 @@ Cargo.lock
 
 /xla_extension*/
 vocab.bpe
+llama-tokenizer.model
+llama-tokenizer.json

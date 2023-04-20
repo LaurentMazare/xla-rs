@@ -80,6 +80,14 @@ impl<S: ToString> std::ops::Div<S> for VarBuilder {
 }
 
 impl VarStore {
+    pub fn arg_indexes(&self) -> Vec<usize> {
+        self.vars
+            .iter()
+            .enumerate()
+            .filter_map(|(i, n)| if n.is_arg { Some(i) } else { None })
+            .collect()
+    }
+
     pub fn load_from_npz<P: AsRef<std::path::Path>>(
         &mut self,
         path: P,

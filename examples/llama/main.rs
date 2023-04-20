@@ -3,7 +3,11 @@
 //
 // This is based on nanoGPT in a similar way to:
 // https://github.com/Lightning-AI/lit-llama/blob/main/lit_llama/model.py
+//
+// The tokenizer config can be retrieved from:
+// https://huggingface.co/hf-internal-testing/llama-tokenizer/blob/main/tokenizer.json
 use anyhow::Result;
+use rand::prelude::*;
 
 extern crate xla;
 use xla::{PrimitiveType, XlaBuilder, XlaOp};
@@ -15,6 +19,57 @@ const ET: PrimitiveType = PrimitiveType::F16;
 const TEMPERATURE: f32 = 0.8f32;
 const CONTEXT_SIZE: usize = 512;
 const USE_CPU: bool = true;
+const START_PROMPT: &str = r"
+EDWARD:
+I wonder how our princely father 'scaped,
+Or whether he be 'scaped away or no
+From Clifford's and Northumberland's pursuit:
+Had he been ta'en, we should have heard the news;
+Had he been slain, we should have heard the news;
+Or had he 'scaped, methinks we should have heard
+The happy tidings of his good escape.
+How fares my brother? why is he so sad?
+
+RICHARD:
+I cannot joy, until I be resolved
+Where our right valiant father is become.
+I saw him in the battle range about;
+And watch'd him how he singled Clifford forth.
+Methought he bore him in the thickest troop
+As doth a lion in a herd of neat;
+Or as a bear, encompass'd round with dogs,
+Who having pinch'd a few and made them cry,
+The rest stand all aloof, and bark at him.
+So fared our father with his enemies;
+So fled his enemies my warlike father:
+Methinks, 'tis prize enough to be his son.
+See how the morning opes her golden gates,
+And takes her farewell of the glorious sun!
+How well resembles it the prime of youth,
+Trimm'd like a younker prancing to his love!
+
+EDWARD:
+Dazzle mine eyes, or do I see three suns?
+
+RICHARD:
+Three glorious suns, each one a perfect sun;
+Not separated with the racking clouds,
+But sever'd in a pale clear-shining sky.
+See, see! they join, embrace, and seem to kiss,
+As if they vow'd some league inviolable:
+Now are they but one lamp, one light, one sun.
+In this the heaven figures some event.
+
+EDWARD:
+'Tis wondrous strange, the like yet never heard of.
+I think it cites us, brother, to the field,
+That we, the sons of brave Plantagenet,
+Each one already blazing by our meeds,
+Should notwithstanding join our lights together
+And over-shine the earth as this the world.
+Whate'er it bodes, henceforward will I bear
+Upon my target three fair-shining suns.
+";
 
 #[allow(dead_code)]
 struct Config {
@@ -292,13 +347,18 @@ fn llama_computation(bsize: i64) -> Result<(xla::XlaComputation, VarStore)> {
     let config = Config::config_7b();
     let freqs_cis = precompute_freqs_cis(&config, &b)?;
     let llama = Llama::new(vb.clone(), &config)?;
-    let input = vb.arg("tokens", PrimitiveType::S32, &[bsize as usize, CONTEXT_SIZE])?;
+    let input = vb.arg("tokens", PrimitiveType::U32, &[bsize as usize, CONTEXT_SIZE])?;
     let logits = llama.forward(&input, &freqs_cis)?;
     let prs = (logits / b.c0(TEMPERATURE)?.convert_element_type(ET)?)?.softmax(-1)?;
+    let prs = prs.convert_element_type(PrimitiveType::F32)?;
     Ok((prs.build()?, vb.into_store()))
 }
 
 fn main() -> Result<()> {
+    // TODO: The tokenizers library seems pretty large, investigate replacing it with a smaller
+    // dependency.
+    let tokenizer = tokenizers::Tokenizer::from_file("llama-tokenizer.json").unwrap();
+    let mut tokens = { tokenizer.encode(START_PROMPT, false).unwrap().get_ids().to_vec() };
     let client = if USE_CPU { xla::PjRtClient::cpu()? } else { xla::PjRtClient::gpu(0.95, false)? };
     println!("{} {} {}", client.platform_name(), client.platform_version(), client.device_count());
     let start_build = std::time::Instant::now();
@@ -308,11 +368,21 @@ fn main() -> Result<()> {
     let llama_exe = client.compile(&llama)?;
     println!("compiled the executable in {:?}", start_compile.elapsed());
     let start_load = std::time::Instant::now();
-    let buffers = vs.load_from_npz("llama.npz", &client)?;
-    println!("loaded weights in {:?}", start_load.elapsed());
+    let mut buffers = vs.load_from_npz("llama.npz", &client)?;
+    let arg_index = vs.arg_indexes()[0];
+    println!("loaded weights in {:?} ({arg_index})", start_load.elapsed());
+    let mut rng = thread_rng();
     for index in 0..100 {
-        println!("{}", index + 1);
-        let _results = llama_exe.execute_b(&buffers)?;
+        println!("{} {}", index + 1, tokens.len());
+        let ctxt = &tokens[tokens.len().saturating_sub(CONTEXT_SIZE)..];
+        buffers[arg_index] = client.buffer_from_host_buffer(ctxt, &[1, CONTEXT_SIZE], None)?;
+        let logits = llama_exe.execute_b(&buffers)?;
+        let logits = logits[0][0].to_literal_sync()?;
+        let logits_v: Vec<f32> = logits.to_vec()?;
+        let distr = rand::distributions::WeightedIndex::new(&logits_v)?;
+        let next_token = distr.sample(&mut rng) as u32;
+        tokens.push(next_token);
+        println!("token: {} '{}'", next_token, tokenizer.decode(vec![next_token], true).unwrap());
     }
     Ok(())
 }
