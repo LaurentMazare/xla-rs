@@ -16,6 +16,27 @@ tar -xzvf xla_extension-x86_64-linux-gnu-cpu.tar.gz
 If the `xla_extension` directory is not in the main project directory, the path
 can be specified via the `XLA_EXTENSION_DIR` environment variable.
 
+## Generating some Text Samples with LLaMA
+
+The [LLaMA large language model](https://github.com/facebookresearch/llama) can
+be used to generate text. The model weights are only available after completing
+some form and once downloaded can be converted to a format this crate can use.
+One of the featured examples is GPT2. In order to run it, one should first
+download the tokenization configuration file as well as the weights before
+running the example. In order to do this, run the following commands:
+
+```bash
+# Download the tokenizer config.
+wget https://huggingface.co/hf-internal-testing/llama-tokenizer/blob/main/tokenizer.json -O llama-tokenizer.json
+
+# Extract the pre-trained weights, this requires the transformers python library to be installed.
+# This creates a npz file storing all the weights.
+python examples/llama/convert_checkpoint.py ..../LLaMA/7B/consolidated.00.pth
+
+# Run the example.
+cargo run --example llama --release
+```
+
 ## Generating some Text Samples with GPT2 
 
 One of the featured examples is GPT2. In order to run it, one should first
