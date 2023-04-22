@@ -94,10 +94,11 @@ impl Literal {
         let dimensions: Vec<_> =
             (0..rank).map(|i| unsafe { c_lib::shape_dimensions(out, i) }).collect();
         let ty = unsafe { c_lib::shape_element_type(out) };
+        let tuple_shapes_size = unsafe { c_lib::shape_tuple_shapes_size(out) };
         unsafe { c_lib::shape_free(out) };
         match FromPrimitive::from_i32(ty) {
             None => Err(Error::UnexpectedElementType(ty)),
-            Some(ty) => Ok(Shape { ty, dimensions }),
+            Some(ty) => Ok(Shape { ty, dimensions, tuple_shapes_size }),
         }
     }
 
@@ -187,6 +188,19 @@ impl Literal {
         let status = unsafe { c_lib::literal_convert(self.0, ty as i32, &mut result) };
         super::handle_status(status)?;
         Ok(Literal(result))
+    }
+
+    /// When the input is a tuple, return a vector of its elements. This replaces the original
+    /// value by an empty tuple, no copy is performed.
+    pub fn decompose_tuple(&mut self) -> Result<Vec<Literal>> {
+        match self.shape()?.tuple_size() {
+            None => Ok(vec![]),
+            Some(tuple_len) => {
+                let mut outputs = vec![std::ptr::null_mut::<c_lib::_literal>(); tuple_len];
+                unsafe { c_lib::literal_decompose_tuple(self.0, outputs.as_mut_ptr(), tuple_len) };
+                Ok(outputs.into_iter().map(Literal).collect())
+            }
+        }
     }
 }
 

@@ -934,6 +934,13 @@ void literal_shape(const literal l, shape *out_shape) {
   *out_shape = new Shape(l->shape());
 }
 
+void literal_decompose_tuple(literal l, literal* outputs, size_t noutputs) {
+  auto tuple = l->DecomposeTuple();
+  for (int i = 0; i < std::min(noutputs, tuple.size()); ++i) {
+      outputs[i] = new Literal(std::move(tuple[i]));
+  }
+}
+
 int literal_element_type(const literal l) {
   return l->shape().element_type();
 }

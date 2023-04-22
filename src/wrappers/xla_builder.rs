@@ -202,10 +202,11 @@ impl XlaBuilder {
         let dimensions: Vec<_> =
             (0..rank).map(|i| unsafe { c_lib::shape_dimensions(out, i) }).collect();
         let ty = unsafe { c_lib::shape_element_type(out) };
+        let tuple_shapes_size = unsafe { c_lib::shape_tuple_shapes_size(out) };
         unsafe { c_lib::shape_free(out) };
         match FromPrimitive::from_i32(ty) {
             None => Err(Error::UnexpectedElementType(ty)),
-            Some(ty) => Ok(Shape { ty, dimensions }),
+            Some(ty) => Ok(Shape { ty, dimensions, tuple_shapes_size }),
         }
     }
 

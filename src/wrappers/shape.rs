@@ -6,17 +6,23 @@ use crate::Error;
 pub struct Shape {
     pub(super) ty: PrimitiveType,
     pub(super) dimensions: Vec<i64>,
+    pub(super) tuple_shapes_size: usize,
 }
 
 impl Shape {
     /// Create a new shape.
     pub fn new<E: ElementType>(dimensions: Vec<i64>) -> Shape {
-        Shape { ty: E::PRIMITIVE_TYPE, dimensions }
+        Shape { ty: E::PRIMITIVE_TYPE, dimensions, tuple_shapes_size: 0 }
     }
 
     /// Create a new shape.
     pub fn with_type(ty: PrimitiveType, dimensions: Vec<i64>) -> Shape {
-        Shape { ty, dimensions }
+        Shape { ty, dimensions, tuple_shapes_size: 0 }
+    }
+
+    /// Create a new tuple shape.
+    pub fn tuple(size: usize) -> Shape {
+        Shape { ty: PrimitiveType::Tuple, dimensions: vec![], tuple_shapes_size: size }
     }
 
     /// The stored primitive type.
@@ -45,6 +51,18 @@ impl Shape {
 
     pub fn last_dim(&self) -> Option<i64> {
         self.dimensions.last().copied()
+    }
+
+    pub fn is_tuple(&self) -> bool {
+        self.ty == PrimitiveType::Tuple
+    }
+
+    pub fn tuple_size(&self) -> Option<usize> {
+        if self.ty == PrimitiveType::Tuple {
+            Some(self.tuple_shapes_size)
+        } else {
+            None
+        }
     }
 }
 

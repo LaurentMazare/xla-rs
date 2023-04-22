@@ -185,6 +185,7 @@ status literal_convert(const literal, int, literal*);
 int64_t literal_element_count(const literal);
 int literal_element_type(const literal);
 void literal_shape(const literal, shape*);
+void literal_decompose_tuple(literal, literal*, size_t);
 int64_t literal_size_bytes(const literal);
 void literal_copy_to(const literal, void*, size_t);
 void literal_copy_from(literal, const void*, size_t);

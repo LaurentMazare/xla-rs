@@ -38,10 +38,11 @@ impl PjRtBuffer {
         let dimensions: Vec<_> =
             (0..rank).map(|i| unsafe { c_lib::shape_dimensions(shape, i) }).collect();
         let ty = unsafe { c_lib::shape_element_type(shape) };
+        let tuple_shapes_size = unsafe { c_lib::shape_tuple_shapes_size(shape) };
         unsafe { c_lib::shape_free(shape) };
         match FromPrimitive::from_i32(ty) {
             None => Err(Error::UnexpectedElementType(ty)),
-            Some(ty) => Ok(Shape { ty, dimensions }),
+            Some(ty) => Ok(Shape { ty, dimensions, tuple_shapes_size }),
         }
     }
 
