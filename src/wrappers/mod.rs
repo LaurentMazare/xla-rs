@@ -206,6 +206,16 @@ impl ElementType for F16 {
     const ZERO: Self = Self;
 }
 
+// Dummy BF16 type.
+#[derive(Copy, Clone, Debug)]
+pub struct Bf16;
+
+impl ElementType for Bf16 {
+    const PRIMITIVE_TYPE: PrimitiveType = PrimitiveType::Bf16;
+    const ELEMENT_SIZE_IN_BYTES: usize = 2;
+    const ZERO: Self = Self;
+}
+
 element_type!(u8, U8, 1);
 element_type!(u16, U16, 2);
 element_type!(u32, U32, 4);

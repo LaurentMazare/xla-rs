@@ -342,7 +342,11 @@ fn precompute_freqs_cis(config: &Config, builder: &XlaBuilder) -> Result<XlaOp> 
 
 fn llama_computation(bsize: i64) -> Result<(xla::XlaComputation, VarStore)> {
     let b = XlaBuilder::new("llama");
-    let mut vb = VarBuilder::new::<xla::F16, f32>(&b);
+    let mut vb = if USE_CPU {
+        VarBuilder::new::<xla::F16, f32>(&b)
+    } else {
+        VarBuilder::new::<xla::F16, xla::Bf16>(&b)
+    };
     let config = Config::config_7b();
     let freqs_cis = precompute_freqs_cis(&config, &b)?;
     let llama = Llama::new(vb.clone(), &config)?;
