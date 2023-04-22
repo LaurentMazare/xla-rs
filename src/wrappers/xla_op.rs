@@ -237,10 +237,20 @@ impl XlaOp {
     }
 
     /// Concat multiple nodes (together with the `self` node) along the target dimension.
-    pub fn concat_in_dim(&self, args: &[&Self], dim: i64) -> Result<Self> {
+    pub fn concat_in_dim<B: std::borrow::Borrow<XlaOp>>(
+        &self,
+        args: &[B],
+        dim: i64,
+    ) -> Result<Self> {
         let dim = self.normalize_index(dim)?;
-        let args: Vec<_> = args.iter().map(|a| a.op).collect();
+        let args: Vec<_> = args.iter().map(|a| a.borrow().op).collect();
         let op = unsafe { c_lib::op_concat_in_dim(self.op, args.as_ptr(), args.len(), dim) };
+        self.wrap(op)
+    }
+
+    /// Index into tuples.
+    pub fn get_tuple_element(&self, index: i64) -> Result<Self> {
+        let op = unsafe { c_lib::op_get_tuple_element(self.op, index) };
         self.wrap(op)
     }
 

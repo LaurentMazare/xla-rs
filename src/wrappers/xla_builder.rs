@@ -233,6 +233,13 @@ impl XlaBuilder {
         handle_status(status)?;
         Ok(dsize as usize)
     }
+
+    /// Build a tuple from multiple operands.
+    pub fn tuple<B: std::borrow::Borrow<XlaOp>>(&self, args: &[B]) -> Result<XlaOp> {
+        let args: Vec<_> = args.iter().map(|a| a.borrow().op).collect();
+        let op = unsafe { c_lib::op_tuple(self.ptr(), args.as_ptr(), args.len()) };
+        self.wrap(op)
+    }
 }
 
 impl Drop for XlaBuilderInternal {
