@@ -196,6 +196,16 @@ macro_rules! element_type {
     };
 }
 
+// Dummy F16 type.
+#[derive(Copy, Clone, Debug)]
+pub struct F16;
+
+impl ElementType for F16 {
+    const PRIMITIVE_TYPE: PrimitiveType = PrimitiveType::F16;
+    const ELEMENT_SIZE_IN_BYTES: usize = 2;
+    const ZERO: Self = Self;
+}
+
 element_type!(u8, U8, 1);
 element_type!(u16, U16, 2);
 element_type!(u32, U32, 4);

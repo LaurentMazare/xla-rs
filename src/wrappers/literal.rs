@@ -13,11 +13,9 @@ impl Clone for Literal {
 
 impl Literal {
     /// Create an unitialized literal based on some primitive type and some dimensions.
-    pub fn create_from_shape(element_type: PrimitiveType, dims: &[usize]) -> Self {
+    pub fn create_from_shape(ty: PrimitiveType, dims: &[usize]) -> Self {
         let dims: Vec<_> = dims.iter().map(|x| *x as i64).collect();
-        let v = unsafe {
-            c_lib::literal_create_from_shape(element_type as i32, dims.as_ptr(), dims.len())
-        };
+        let v = unsafe { c_lib::literal_create_from_shape(ty as i32, dims.as_ptr(), dims.len()) };
         Self(v)
     }
 
@@ -25,14 +23,14 @@ impl Literal {
     /// The data is untyped, i.e. it is a sequence of bytes represented as a slice of `u8` even if
     /// the primitive type is not `U8`.
     pub fn create_from_shape_and_untyped_data(
-        element_type: PrimitiveType,
+        ty: PrimitiveType,
         dims: &[usize],
         untyped_data: &[u8],
     ) -> Result<Self> {
         let dims64: Vec<_> = dims.iter().map(|x| *x as i64).collect();
         let v = unsafe {
             c_lib::literal_create_from_shape_and_data(
-                element_type as i32,
+                ty as i32,
                 dims64.as_ptr(),
                 dims64.len(),
                 untyped_data.as_ptr() as *const libc::c_void,
@@ -42,7 +40,7 @@ impl Literal {
         if v.is_null() {
             return Err(Error::CannotCreateLiteralWithData {
                 data_len_in_bytes: untyped_data.len(),
-                element_type,
+                ty,
                 dims: dims.to_vec(),
             });
         }
@@ -52,9 +50,9 @@ impl Literal {
     /// Get the first element from a literal. This returns an error if type `T` is not the
     /// primitive type that the literal uses.
     pub fn get_first_element<T: NativeType + ElementType>(&self) -> Result<T> {
-        let element_type = self.element_type()?;
-        if element_type != T::PRIMITIVE_TYPE {
-            Err(Error::ElementTypeMismatch { on_device: element_type, on_host: T::PRIMITIVE_TYPE })?
+        let ty = self.ty()?;
+        if ty != T::PRIMITIVE_TYPE {
+            Err(Error::ElementTypeMismatch { on_device: ty, on_host: T::PRIMITIVE_TYPE })?
         }
         if self.element_count() == 0 {
             Err(Error::EmptyLiteral)?
@@ -70,11 +68,15 @@ impl Literal {
 
     /// The primitive type used by element stored in this literal.
     pub fn element_type(&self) -> Result<PrimitiveType> {
-        let element_type = unsafe { c_lib::literal_element_type(self.0) };
-        match FromPrimitive::from_i32(element_type) {
-            None => Err(Error::UnexpectedElementType(element_type)),
-            Some(element_type) => Ok(element_type),
+        let ty = unsafe { c_lib::literal_element_type(self.0) };
+        match FromPrimitive::from_i32(ty) {
+            None => Err(Error::UnexpectedElementType(ty)),
+            Some(ty) => Ok(ty),
         }
+    }
+    /// The primitive type used by element stored in this literal, shortcut for `element_type`.
+    pub fn ty(&self) -> Result<PrimitiveType> {
+        self.element_type()
     }
 
     /// The literal size in bytes, this is the same as `element_count` multiplied by
@@ -91,21 +93,21 @@ impl Literal {
         let rank = unsafe { c_lib::shape_dimensions_size(out) };
         let dimensions: Vec<_> =
             (0..rank).map(|i| unsafe { c_lib::shape_dimensions(out, i) }).collect();
-        let element_type = unsafe { c_lib::shape_element_type(out) };
+        let ty = unsafe { c_lib::shape_element_type(out) };
         unsafe { c_lib::shape_free(out) };
-        match FromPrimitive::from_i32(element_type) {
-            None => Err(Error::UnexpectedElementType(element_type)),
-            Some(element_type) => Ok(Shape { element_type, dimensions }),
+        match FromPrimitive::from_i32(ty) {
+            None => Err(Error::UnexpectedElementType(ty)),
+            Some(ty) => Ok(Shape { ty, dimensions }),
         }
     }
 
     /// Copy the literal data to a slice. This returns an error if the primitive type used by the
     /// literal is not `T` or if the number of elements in the slice and literal are different.
     pub fn copy_raw_to<T: ElementType>(&self, dst: &mut [T]) -> Result<()> {
-        let element_type = self.element_type()?;
+        let ty = self.ty()?;
         let element_count = self.element_count();
-        if element_type != T::PRIMITIVE_TYPE {
-            Err(Error::ElementTypeMismatch { on_device: element_type, on_host: T::PRIMITIVE_TYPE })?
+        if ty != T::PRIMITIVE_TYPE {
+            Err(Error::ElementTypeMismatch { on_device: ty, on_host: T::PRIMITIVE_TYPE })?
         }
         if dst.len() > element_count {
             Err(Error::BinaryBufferIsTooLarge { element_count, buffer_len: dst.len() })?
@@ -124,10 +126,10 @@ impl Literal {
     /// by the literal is not `T` or if number of elements in the slice and the literal are
     /// different.
     pub fn copy_raw_from<T: ElementType>(&mut self, src: &[T]) -> Result<()> {
-        let element_type = self.element_type()?;
+        let ty = self.ty()?;
         let element_count = self.element_count();
-        if element_type != T::PRIMITIVE_TYPE {
-            Err(Error::ElementTypeMismatch { on_device: element_type, on_host: T::PRIMITIVE_TYPE })?
+        if ty != T::PRIMITIVE_TYPE {
+            Err(Error::ElementTypeMismatch { on_device: ty, on_host: T::PRIMITIVE_TYPE })?
         }
         if src.len() > element_count {
             Err(Error::BinaryBufferIsTooLarge { element_count, buffer_len: src.len() })?
@@ -180,9 +182,9 @@ impl Literal {
     /// Create a new literal containing the data from the original literal casted to a new
     /// primitive type. The dimensions of the resulting literal are the same as the dimensions of
     /// the original literal.
-    pub fn convert(&self, element_type: PrimitiveType) -> Result<Literal> {
+    pub fn convert(&self, ty: PrimitiveType) -> Result<Literal> {
         let mut result: c_lib::literal = std::ptr::null_mut();
-        let status = unsafe { c_lib::literal_convert(self.0, element_type as i32, &mut result) };
+        let status = unsafe { c_lib::literal_convert(self.0, ty as i32, &mut result) };
         super::handle_status(status)?;
         Ok(Literal(result))
     }

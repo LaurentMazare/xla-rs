@@ -1,4 +1,4 @@
-use xla::{FromRawBytes, PjRtBuffer, PjRtClient, PrimitiveType, Result, XlaOp};
+use xla::{ElementType, FromRawBytes, PjRtBuffer, PjRtClient, PrimitiveType, Result, XlaOp};
 
 #[allow(dead_code)]
 #[derive(Clone)]
@@ -14,6 +14,8 @@ pub struct VarBuilder {
     path: Vec<String>,
     vars: std::rc::Rc<std::cell::RefCell<Vec<NamedVar>>>,
     builder: xla::XlaBuilder,
+    default_buffer_type_for_var: PrimitiveType,
+    default_op_type_for_var: PrimitiveType,
 }
 
 #[allow(dead_code)]
@@ -22,9 +24,15 @@ pub struct VarStore {
 }
 
 impl VarBuilder {
-    pub fn new(builder: &xla::XlaBuilder) -> Self {
+    pub fn new<B: ElementType, O: ElementType>(builder: &xla::XlaBuilder) -> Self {
         let vars = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
-        Self { builder: builder.clone(), path: vec![], vars }
+        Self {
+            builder: builder.clone(),
+            path: vec![],
+            vars,
+            default_buffer_type_for_var: B::PRIMITIVE_TYPE,
+            default_op_type_for_var: O::PRIMITIVE_TYPE,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -47,8 +55,9 @@ impl VarBuilder {
         parameter
     }
 
-    pub fn var(&mut self, s: &str, ty: PrimitiveType, dims: &[usize]) -> Result<XlaOp> {
-        self.var_(s, ty, dims, false)
+    pub fn var(&mut self, s: &str, dims: &[usize]) -> Result<XlaOp> {
+        let v = self.var_(s, self.default_buffer_type_for_var, dims, false)?;
+        v.convert(self.default_op_type_for_var)
     }
 
     pub fn arg(&mut self, s: &str, ty: PrimitiveType, dims: &[usize]) -> Result<XlaOp> {
@@ -67,7 +76,13 @@ impl<S: ToString> std::ops::Div<S> for &VarBuilder {
     fn div(self, rhs: S) -> VarBuilder {
         let mut path = self.path.clone();
         path.push(rhs.to_string());
-        VarBuilder { path, vars: self.vars.clone(), builder: self.builder.clone() }
+        VarBuilder {
+            path,
+            vars: self.vars.clone(),
+            builder: self.builder.clone(),
+            default_op_type_for_var: self.default_op_type_for_var,
+            default_buffer_type_for_var: self.default_buffer_type_for_var,
+        }
     }
 }
 

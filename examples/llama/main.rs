@@ -6,6 +6,9 @@
 //
 // The tokenizer config can be retrieved from:
 // https://huggingface.co/hf-internal-testing/llama-tokenizer/blob/main/tokenizer.json
+//
+// In order to convert the llama weights to a .npz file, run:
+// python examples/llama/convert_checkpoint.py ..../LLaMA/7B/consolidated.00.pth
 use anyhow::Result;
 use rand::prelude::*;
 
@@ -15,8 +18,6 @@ use xla::{PrimitiveType, XlaBuilder, XlaOp};
 mod var_store;
 use var_store::{VarBuilder, VarStore};
 
-const ET: PrimitiveType = PrimitiveType::F32;
-const F16: PrimitiveType = PrimitiveType::F16;
 const TEMPERATURE: f32 = 1f32;
 const CONTEXT_SIZE: usize = 512;
 const USE_CPU: bool = true;
@@ -106,7 +107,7 @@ struct Embedding {
 
 impl Embedding {
     fn new(mut vb: VarBuilder, vocab_size: usize, n_embd: usize) -> Result<Self> {
-        let embeddings = vb.var("weight", F16, &[vocab_size, n_embd])?.convert_element_type(ET)?;
+        let embeddings = vb.var("weight", &[vocab_size, n_embd])?;
         Ok(Self { embeddings })
     }
 
@@ -125,13 +126,13 @@ struct Linear {
 impl Linear {
     #[allow(dead_code)]
     fn new(mut vb: VarBuilder, in_size: usize, out_size: usize) -> Result<Self> {
-        let ws = vb.var("weight", F16, &[in_size, out_size])?.convert_element_type(ET)?;
-        let bs = vb.var("bias", F16, &[out_size])?.convert_element_type(ET)?;
+        let ws = vb.var("weight", &[in_size, out_size])?;
+        let bs = vb.var("bias", &[out_size])?;
         Ok(Self { ws, bs: Some(bs), out_size })
     }
 
     fn new_no_bias(mut vb: VarBuilder, in_size: usize, out_size: usize) -> Result<Self> {
-        let ws = vb.var("weight", F16, &[in_size, out_size])?.convert_element_type(ET)?;
+        let ws = vb.var("weight", &[in_size, out_size])?;
         Ok(Self { ws, bs: None, out_size })
     }
 
@@ -156,13 +157,13 @@ struct RmsNorm {
 
 impl RmsNorm {
     fn new(mut vb: VarBuilder, size: usize) -> Result<Self> {
-        let scale = vb.var("scale", F16, &[size])?.convert_element_type(ET)?;
+        let scale = vb.var("scale", &[size])?;
         Ok(Self { scale, size: size as i64 })
     }
 
     fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
         let builder = x.builder();
-        let eps = builder.c0(1e-5)?.convert_element_type(ET)?;
+        let eps = builder.c0(1e-5)?.convert(x.ty()?)?;
         let norm_x = (x * x)?.reduce_mean(&[-1], true)?;
         let x_normed = (x * (norm_x + eps)?.rsqrt()?)?;
         let scale = self.scale.reshape(&[1, 1, self.size])?;
@@ -195,7 +196,7 @@ impl Mlp {
 fn masked_fill<T: xla::NativeType>(on_false: &XlaOp, mask: &XlaOp, on_true: T) -> Result<XlaOp> {
     let shape = mask.shape()?;
     let on_true =
-        mask.builder().c0(on_true)?.convert_element_type(ET)?.broadcast(shape.dimensions())?;
+        mask.builder().c0(on_true)?.convert(on_false.ty()?)?.broadcast(shape.dimensions())?;
     let m = mask.select(&on_true, on_false)?;
     Ok(m)
 }
@@ -238,6 +239,8 @@ impl CausalSelfAttention {
 
     fn forward(&self, x: &XlaOp, freqs_cis: &XlaOp) -> Result<XlaOp> {
         let builder = x.builder();
+        let ty = x.ty()?;
+        let freqs_cis = freqs_cis.convert(ty)?;
         let (b, t, c) = x.dim3()?;
         let (b, t, c) = (b as i64, t as i64, c as i64);
         let qkv = self.c_attn.forward(x)?;
@@ -249,13 +252,11 @@ impl CausalSelfAttention {
         let k = k.reshape(&target_dim)?.swap_dims(1, 2)?;
         let q = q.reshape(&target_dim)?.swap_dims(1, 2)?;
         let v = v.reshape(&target_dim)?.swap_dims(1, 2)?;
-        let q = self.apply_rotary_emb(&q, freqs_cis)?;
-        let k = self.apply_rotary_emb(&k, freqs_cis)?;
+        let q = self.apply_rotary_emb(&q, &freqs_cis)?;
+        let k = self.apply_rotary_emb(&k, &freqs_cis)?;
         let k_shape = k.shape()?;
         let att = (q.matmul(&k.swap_dims(-2, -1)?)?
-            * builder
-                .c0(1f32 / (k_shape.last_dim().unwrap() as f32).sqrt())?
-                .convert_element_type(ET)?)?;
+            * builder.c0(1f32 / (k_shape.last_dim().unwrap() as f32).sqrt())?.convert(ty)?)?;
         let mask = builder
             .one(PrimitiveType::S32)?
             .broadcast(&[t, t])?
@@ -336,12 +337,12 @@ fn precompute_freqs_cis(config: &Config, builder: &XlaBuilder) -> Result<XlaOp> 
     let shape = [1, 1, seq_len as i64, n_elem as i64 / 2, 1];
     let idx_theta_cos = idx_theta.cos()?.reshape(&shape)?;
     let idx_theta_sin = idx_theta.sin()?.reshape(&shape)?;
-    Ok(idx_theta_cos.concat_in_dim(&[&idx_theta_sin], -1)?.convert_element_type(ET)?)
+    Ok(idx_theta_cos.concat_in_dim(&[&idx_theta_sin], -1)?)
 }
 
 fn llama_computation(bsize: i64) -> Result<(xla::XlaComputation, VarStore)> {
     let b = XlaBuilder::new("llama");
-    let mut vb = VarBuilder::new(&b);
+    let mut vb = VarBuilder::new::<xla::F16, f32>(&b);
     let config = Config::config_7b();
     let freqs_cis = precompute_freqs_cis(&config, &b)?;
     let llama = Llama::new(vb.clone(), &config)?;

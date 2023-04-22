@@ -16,7 +16,7 @@ mod var_store;
 use tokenizer::Tokenizer;
 use var_store::VarStore;
 
-const ET: PrimitiveType = PrimitiveType::F32;
+const TY: PrimitiveType = PrimitiveType::F32;
 const TEMPERATURE: f32 = 0.8f32;
 const USE_CPU: bool = false;
 const NUM_SAMPLES: usize = 10;
@@ -36,7 +36,7 @@ struct Embedding {
 
 impl Embedding {
     fn new(mut vs: VarStore, vocab_size: usize, n_embd: usize) -> Result<Self> {
-        let embeddings = vs.take("weight", ET, &[vocab_size, n_embd])?;
+        let embeddings = vs.take("weight", TY, &[vocab_size, n_embd])?;
         Ok(Self { embeddings })
     }
 
@@ -55,8 +55,8 @@ struct LayerNorm {
 
 impl LayerNorm {
     fn new(mut vs: VarStore, size: usize) -> Result<Self> {
-        let scale = vs.take("weight", ET, &[size])?;
-        let bias = vs.take("bias", ET, &[size])?;
+        let scale = vs.take("weight", TY, &[size])?;
+        let bias = vs.take("bias", TY, &[size])?;
         Ok(Self { scale, bias, size: size as i64 })
     }
 
@@ -77,13 +77,13 @@ struct Linear {
 
 impl Linear {
     fn new(mut vs: VarStore, in_size: usize, out_size: usize) -> Result<Self> {
-        let ws = vs.take("weight", ET, &[in_size, out_size])?;
-        let bs = vs.take("bias", ET, &[out_size])?;
+        let ws = vs.take("weight", TY, &[in_size, out_size])?;
+        let bs = vs.take("bias", TY, &[out_size])?;
         Ok(Self { ws, bs: Some(bs), out_size })
     }
 
     fn new_no_bias(mut vs: VarStore, in_size: usize, out_size: usize) -> Result<Self> {
-        let ws = vs.take("weight", ET, &[in_size, out_size])?;
+        let ws = vs.take("weight", TY, &[in_size, out_size])?;
         Ok(Self { ws, bs: None, out_size })
     }
 

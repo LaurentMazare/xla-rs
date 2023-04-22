@@ -37,11 +37,11 @@ impl PjRtBuffer {
         let rank = unsafe { c_lib::shape_dimensions_size(shape) };
         let dimensions: Vec<_> =
             (0..rank).map(|i| unsafe { c_lib::shape_dimensions(shape, i) }).collect();
-        let element_type = unsafe { c_lib::shape_element_type(shape) };
+        let ty = unsafe { c_lib::shape_element_type(shape) };
         unsafe { c_lib::shape_free(shape) };
-        match FromPrimitive::from_i32(element_type) {
-            None => Err(Error::UnexpectedElementType(element_type)),
-            Some(element_type) => Ok(Shape { element_type, dimensions }),
+        match FromPrimitive::from_i32(ty) {
+            None => Err(Error::UnexpectedElementType(ty)),
+            Some(ty) => Ok(Shape { ty, dimensions }),
         }
     }
 
@@ -52,11 +52,8 @@ impl PjRtBuffer {
         offset: usize,
     ) -> Result<()> {
         let shape = self.on_device_shape()?;
-        if shape.element_type != T::PRIMITIVE_TYPE {
-            Err(Error::ElementTypeMismatch {
-                on_device: shape.element_type,
-                on_host: T::PRIMITIVE_TYPE,
-            })?
+        if shape.ty != T::PRIMITIVE_TYPE {
+            Err(Error::ElementTypeMismatch { on_device: shape.ty, on_host: T::PRIMITIVE_TYPE })?
         }
         if offset + dst.len() > shape.element_count() {
             Err(Error::TargetBufferIsTooLarge { offset, shape, buffer_len: dst.len() })?

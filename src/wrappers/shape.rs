@@ -4,24 +4,29 @@ use crate::Error;
 /// A shape specifies a primitive type as well as some array dimensions.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Shape {
-    pub(super) element_type: PrimitiveType,
+    pub(super) ty: PrimitiveType,
     pub(super) dimensions: Vec<i64>,
 }
 
 impl Shape {
     /// Create a new shape.
     pub fn new<E: ElementType>(dimensions: Vec<i64>) -> Shape {
-        Shape { element_type: E::PRIMITIVE_TYPE, dimensions }
+        Shape { ty: E::PRIMITIVE_TYPE, dimensions }
     }
 
     /// Create a new shape.
-    pub fn with_type(element_type: PrimitiveType, dimensions: Vec<i64>) -> Shape {
-        Shape { element_type, dimensions }
+    pub fn with_type(ty: PrimitiveType, dimensions: Vec<i64>) -> Shape {
+        Shape { ty, dimensions }
     }
 
     /// The stored primitive type.
     pub fn element_type(&self) -> PrimitiveType {
-        self.element_type
+        self.ty
+    }
+
+    /// The stored primitive type, shortcut for `element_type`.
+    pub fn ty(&self) -> PrimitiveType {
+        self.ty
     }
 
     /// The number of elements stored in arrays that use this shape, this is the product of sizes

@@ -77,7 +77,7 @@ impl XlaBuilder {
     pub fn parameter(
         &self,
         parameter_number: i64,
-        element_type: PrimitiveType,
+        ty: PrimitiveType,
         dims: &[i64],
         name: &str,
     ) -> Result<XlaOp> {
@@ -85,7 +85,7 @@ impl XlaBuilder {
             c_lib::parameter(
                 self.ptr(),
                 parameter_number,
-                element_type as i32,
+                ty as i32,
                 dims.len() as i32,
                 dims.as_ptr(),
                 name.as_ptr() as *const libc::c_char,
@@ -100,7 +100,7 @@ impl XlaBuilder {
         shape: &Shape,
         name: &str,
     ) -> Result<XlaOp> {
-        self.parameter(parameter_number, shape.element_type, &shape.dimensions, name)
+        self.parameter(parameter_number, shape.ty, &shape.dimensions, name)
     }
 
     pub fn constant_r1c<T: NativeType>(&self, f: T, len: usize) -> Result<XlaOp> {
@@ -120,26 +120,26 @@ impl XlaBuilder {
     }
 
     /// A scalar node with the zero value for the associated type.
-    pub fn zero(&self, element_type: super::PrimitiveType) -> Result<XlaOp> {
-        let op = unsafe { c_lib::op_zero(self.ptr(), element_type as i32) };
+    pub fn zero(&self, ty: super::PrimitiveType) -> Result<XlaOp> {
+        let op = unsafe { c_lib::op_zero(self.ptr(), ty as i32) };
         self.wrap(op)
     }
 
     /// A scalar node with the one value for the associated type.
-    pub fn one(&self, element_type: super::PrimitiveType) -> Result<XlaOp> {
-        let op = unsafe { c_lib::op_one(self.ptr(), element_type as i32) };
+    pub fn one(&self, ty: super::PrimitiveType) -> Result<XlaOp> {
+        let op = unsafe { c_lib::op_one(self.ptr(), ty as i32) };
         self.wrap(op)
     }
 
     /// A scalar node with the minimum value for the associated type.
-    pub fn min_value(&self, element_type: super::PrimitiveType) -> Result<XlaOp> {
-        let op = unsafe { c_lib::op_min_value(self.ptr(), element_type as i32) };
+    pub fn min_value(&self, ty: super::PrimitiveType) -> Result<XlaOp> {
+        let op = unsafe { c_lib::op_min_value(self.ptr(), ty as i32) };
         self.wrap(op)
     }
 
     /// A scalar node with the maximum value for the associated type.
-    pub fn max_value(&self, element_type: super::PrimitiveType) -> Result<XlaOp> {
-        let op = unsafe { c_lib::op_max_value(self.ptr(), element_type as i32) };
+    pub fn max_value(&self, ty: super::PrimitiveType) -> Result<XlaOp> {
+        let op = unsafe { c_lib::op_max_value(self.ptr(), ty as i32) };
         self.wrap(op)
     }
 
@@ -147,25 +147,19 @@ impl XlaBuilder {
     /// the iota dimension.
     pub fn iota(
         &self,
-        element_type: super::PrimitiveType,
+        ty: super::PrimitiveType,
         dims: &[i64],
         iota_dimension: i64,
     ) -> Result<XlaOp> {
         let op = unsafe {
-            c_lib::op_iota(
-                self.ptr(),
-                element_type as i32,
-                dims.len(),
-                dims.as_ptr(),
-                iota_dimension,
-            )
+            c_lib::op_iota(self.ptr(), ty as i32, dims.len(), dims.as_ptr(), iota_dimension)
         };
         self.wrap(op)
     }
 
     /// A constant node for a unidimensional array of increasing values starting from 0.
-    pub fn iota1(&self, element_type: super::PrimitiveType, size: usize) -> Result<XlaOp> {
-        let op = unsafe { c_lib::op_iota1(self.ptr(), element_type as i32, size) };
+    pub fn iota1(&self, ty: super::PrimitiveType, size: usize) -> Result<XlaOp> {
+        let op = unsafe { c_lib::op_iota1(self.ptr(), ty as i32, size) };
         self.wrap(op)
     }
 
@@ -207,11 +201,11 @@ impl XlaBuilder {
         let rank = unsafe { c_lib::shape_dimensions_size(out) };
         let dimensions: Vec<_> =
             (0..rank).map(|i| unsafe { c_lib::shape_dimensions(out, i) }).collect();
-        let element_type = unsafe { c_lib::shape_element_type(out) };
+        let ty = unsafe { c_lib::shape_element_type(out) };
         unsafe { c_lib::shape_free(out) };
-        match FromPrimitive::from_i32(element_type) {
-            None => Err(Error::UnexpectedElementType(element_type)),
-            Some(element_type) => Ok(Shape { element_type, dimensions }),
+        match FromPrimitive::from_i32(ty) {
+            None => Err(Error::UnexpectedElementType(ty)),
+            Some(ty) => Ok(Shape { ty, dimensions }),
         }
     }
 
@@ -226,10 +220,10 @@ impl XlaBuilder {
 
     /// The element type associated with this op.
     pub fn get_element_type(&self, op: &XlaOp) -> Result<super::PrimitiveType> {
-        let mut element_type = 0i32;
-        let status = unsafe { c_lib::get_element_type(self.ptr(), op.op, &mut element_type) };
+        let mut ty = 0i32;
+        let status = unsafe { c_lib::get_element_type(self.ptr(), op.op, &mut ty) };
         handle_status(status)?;
-        FromPrimitive::from_i32(element_type).ok_or(Error::UnexpectedElementType(element_type))
+        FromPrimitive::from_i32(ty).ok_or(Error::UnexpectedElementType(ty))
     }
 
     /// The number of dimensions (a.k.a the rank) associated with this op.

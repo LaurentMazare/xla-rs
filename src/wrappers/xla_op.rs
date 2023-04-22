@@ -263,7 +263,7 @@ impl XlaOp {
             c_lib::op_rng_uniform(
                 min.op,
                 max.op,
-                shape.element_type as i32,
+                shape.ty as i32,
                 shape.dimensions.len() as i32,
                 shape.dimensions.as_ptr(),
             )
@@ -277,7 +277,7 @@ impl XlaOp {
             c_lib::op_rng_normal(
                 mu.op,
                 sigma.op,
-                shape.element_type as i32,
+                shape.ty as i32,
                 shape.dimensions.len() as i32,
                 shape.dimensions.as_ptr(),
             )
@@ -286,8 +286,8 @@ impl XlaOp {
     }
 
     /// Create a new node by casting the elements of the original node to a new primitive type.
-    pub fn convert_element_type(&self, element_type: PrimitiveType) -> Result<Self> {
-        let op = unsafe { c_lib::op_convert_element_type(self.op, element_type as i32) };
+    pub fn convert(&self, ty: PrimitiveType) -> Result<Self> {
+        let op = unsafe { c_lib::op_convert_element_type(self.op, ty as i32) };
         self.wrap(op)
     }
 
@@ -348,8 +348,14 @@ impl XlaOp {
         self.maybe_keep_dims(op, &dims, keep_dims)
     }
 
+    /// The kind of elements that are computed by this operand.
     pub fn element_type(&self) -> Result<PrimitiveType> {
         self.builder.get_element_type(self)
+    }
+
+    /// The kind of elements that are computed by this operand, shortcut for `element_type`.
+    pub fn ty(&self) -> Result<PrimitiveType> {
+        self.element_type()
     }
 
     /// The number of dimensions for this node.
@@ -469,45 +475,45 @@ impl XlaOp {
     /// original node.
     pub fn reduce_sum(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
         let builder = XlaBuilder::new("Sum");
-        let et = self.element_type()?;
-        let x = builder.parameter(0, et, &[], "x")?;
-        let y = builder.parameter(1, et, &[], "y")?;
+        let ty = self.element_type()?;
+        let x = builder.parameter(0, ty, &[], "x")?;
+        let y = builder.parameter(1, ty, &[], "y")?;
         let sum = x.add_(&y)?.build()?;
-        let init_value = self.builder.zero(et)?;
+        let init_value = self.builder.zero(ty)?;
         self.reduce(init_value, sum, dims, keep_dims)
     }
 
     /// A node that computes the average value across the specified dimensions.
     pub fn reduce_mean(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
         let b = &self.builder();
-        let et = self.element_type()?;
+        let ty = self.element_type()?;
         let mut scale = b.one(PrimitiveType::S32)?;
         for d in dims.iter() {
             scale = (scale * self.dimensions_size(*d)?)?;
         }
         let sum = self.reduce_sum(dims, keep_dims)?;
-        sum / scale.convert_element_type(et)?
+        sum / scale.convert(ty)?
     }
 
     /// A node that computes the maximum value across the specified dimensions.
     pub fn reduce_max(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
         let builder = XlaBuilder::new("Max");
-        let et = self.element_type()?;
-        let x = builder.parameter(0, et, &[], "x")?;
-        let y = builder.parameter(1, et, &[], "y")?;
+        let ty = self.element_type()?;
+        let x = builder.parameter(0, ty, &[], "x")?;
+        let y = builder.parameter(1, ty, &[], "y")?;
         let sum = x.max(&y)?.build()?;
-        let init_value = self.builder.min_value(et)?;
+        let init_value = self.builder.min_value(ty)?;
         self.reduce(init_value, sum, dims, keep_dims)
     }
 
     /// A node that computes the minimum value across the specified dimensions.
     pub fn reduce_min(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
         let builder = XlaBuilder::new("Min");
-        let et = self.element_type()?;
-        let x = builder.parameter(0, et, &[], "x")?;
-        let y = builder.parameter(1, et, &[], "y")?;
+        let ty = self.element_type()?;
+        let x = builder.parameter(0, ty, &[], "x")?;
+        let y = builder.parameter(1, ty, &[], "y")?;
         let sum = x.min(&y)?.build()?;
-        let init_value = self.builder.max_value(et)?;
+        let init_value = self.builder.max_value(ty)?;
         self.reduce(init_value, sum, dims, keep_dims)
     }
 
@@ -521,8 +527,8 @@ impl XlaOp {
     /// Layer normalization, this normalizes values on the target dimension to be of zero mean and
     /// standard deviation one, and then scales the result by `scale` and adds `bias`.
     pub fn layer_norm(&self, dim: i64, scale: &XlaOp, bias: &XlaOp) -> Result<Self> {
-        let et = self.element_type().unwrap_or(PrimitiveType::F32);
-        let eps = self.builder().c0(1e-5)?.convert_element_type(et)?;
+        let ty = self.element_type().unwrap_or(PrimitiveType::F32);
+        let eps = self.builder().c0(1e-5)?.convert(ty)?;
         let mean = self.reduce_mean(&[dim], true)?;
         let mean2 = (self * self)?.reduce_mean(&[dim], true)?;
         let var = (mean2 - (&mean * &mean)?)?;
