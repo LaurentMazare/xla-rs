@@ -10,6 +10,7 @@
 // In order to convert the llama weights to a .npz file, run:
 // python examples/llama/convert_checkpoint.py ..../LLaMA/7B/consolidated.00.pth
 use anyhow::Result;
+use clap::Parser;
 use rand::prelude::*;
 
 extern crate xla;
@@ -20,9 +21,7 @@ use sentencepiece::Tokenizer;
 mod var_store;
 use var_store::{VarBuilder, VarStore};
 
-const TEMPERATURE: f32 = 1f32;
 const CONTEXT_SIZE: usize = 512;
-const USE_CPU: bool = true;
 const START_PROMPT: &str = r"
 EDWARD:
 I wonder how our princely father 'scaped,
@@ -342,9 +341,9 @@ fn precompute_freqs_cis(config: &Config, builder: &XlaBuilder) -> Result<XlaOp> 
     Ok(idx_theta_cos.concat_in_dim(&[&idx_theta_sin], -1)?)
 }
 
-fn llama_computation(bsize: i64) -> Result<(xla::XlaComputation, VarStore)> {
+fn llama_computation(args: &Args, bsize: i64) -> Result<(xla::XlaComputation, VarStore)> {
     let b = XlaBuilder::new("llama");
-    let mut vb = if USE_CPU {
+    let mut vb = if args.cpu {
         VarBuilder::new::<xla::F16, f32>(&b)
     } else {
         VarBuilder::new::<xla::F16, xla::Bf16>(&b)
@@ -354,18 +353,36 @@ fn llama_computation(bsize: i64) -> Result<(xla::XlaComputation, VarStore)> {
     let llama = Llama::new(vb.clone(), &config)?;
     let input = vb.arg("tokens", PrimitiveType::U32, &[bsize as usize, CONTEXT_SIZE])?;
     let logits = llama.forward(&input, &freqs_cis)?.convert(PrimitiveType::F32)?;
-    let prs = (logits / b.c0(TEMPERATURE)?)?.softmax(-1)?;
+    let prs = (logits / b.c0(args.temperature)?)?.softmax(-1)?;
     Ok((prs.build()?, vb.into_store()))
 }
 
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Run on CPU rather than on GPU.
+    #[arg(long)]
+    cpu: bool,
+
+    /// The temperature used to generate samples.
+    #[arg(long, default_value_t = 1.0)]
+    temperature: f32,
+
+    /// The length of the sample to generate (in tokens).
+    #[arg(long, default_value_t = 100)]
+    sample_len: usize,
+}
+
 fn main() -> Result<()> {
+    let args = Args::parse();
     let tokenizer = Tokenizer::from_file("llama-tokenizer.json")?;
     let mut tokens = tokenizer.encode(START_PROMPT)?;
     let mut new_tokens = vec![];
-    let client = if USE_CPU { xla::PjRtClient::cpu()? } else { xla::PjRtClient::gpu(0.95, false)? };
+    let client =
+        if args.cpu { xla::PjRtClient::cpu()? } else { xla::PjRtClient::gpu(0.95, false)? };
     println!("{} {} {}", client.platform_name(), client.platform_version(), client.device_count());
     let start_build = std::time::Instant::now();
-    let (llama, mut vs) = llama_computation(1)?;
+    let (llama, mut vs) = llama_computation(&args, 1)?;
     println!("generated the computation in {:?}", start_build.elapsed());
     let start_compile = std::time::Instant::now();
     let llama_exe = client.compile(&llama)?;
@@ -375,7 +392,7 @@ fn main() -> Result<()> {
     let arg_index = vs.arg_indexes()[0];
     println!("loaded weights in {:?} ({arg_index})", start_load.elapsed());
     let mut rng = thread_rng();
-    for index in 0..100 {
+    for index in 0..args.sample_len {
         let ctxt: Vec<_> =
             tokens[tokens.len().saturating_sub(CONTEXT_SIZE)..].iter().map(|c| *c as u32).collect();
         buffers[arg_index] = client.buffer_from_host_buffer(&ctxt, &[1, CONTEXT_SIZE], None)?;
