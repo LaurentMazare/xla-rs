@@ -27,7 +27,7 @@ running the example. In order to do this, run the following commands:
 
 ```bash
 # Download the tokenizer config.
-wget https://huggingface.co/hf-internal-testing/llama-tokenizer/blob/main/tokenizer.json -O llama-tokenizer.json
+wget https://huggingface.co/hf-internal-testing/llama-tokenizer/raw/main/tokenizer.json -O llama-tokenizer.json
 
 # Extract the pre-trained weights, this requires the transformers python library to be installed.
 # This creates a npz file storing all the weights.

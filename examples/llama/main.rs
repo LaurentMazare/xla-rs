@@ -351,7 +351,7 @@ fn llama_computation(bsize: i64) -> Result<(xla::XlaComputation, VarStore)> {
     let freqs_cis = precompute_freqs_cis(&config, &b)?;
     let llama = Llama::new(vb.clone(), &config)?;
     let input = vb.arg("tokens", PrimitiveType::U32, &[bsize as usize, CONTEXT_SIZE])?;
-    let logits = llama.forward(&input, &freqs_cis)?;
+    let logits = llama.forward(&input, &freqs_cis)?.convert(PrimitiveType::F32)?;
     let prs = (logits / b.c0(TEMPERATURE)?)?.softmax(-1)?;
     Ok((prs.build()?, vb.into_store()))
 }
