@@ -15,6 +15,8 @@ use rand::prelude::*;
 extern crate xla;
 use xla::{PrimitiveType, XlaBuilder, XlaOp};
 
+mod sentencepiece;
+use sentencepiece::Tokenizer;
 mod var_store;
 use var_store::{VarBuilder, VarStore};
 
@@ -357,11 +359,9 @@ fn llama_computation(bsize: i64) -> Result<(xla::XlaComputation, VarStore)> {
 }
 
 fn main() -> Result<()> {
-    // TODO: The tokenizers library seems pretty large, investigate replacing it with a smaller
-    // dependency.
-    let tokenizer = tokenizers::Tokenizer::from_file("llama-tokenizer.json").unwrap();
-    let mut tokens = tokenizer.encode(START_PROMPT, false).unwrap().get_ids().to_vec();
-    // let mut tokens = vec![1u32, 15043, 29892, 590, 1024, 338];
+    let tokenizer = Tokenizer::from_file("llama-tokenizer.json")?;
+    let mut tokens = tokenizer.encode(START_PROMPT)?;
+    let mut new_tokens = vec![];
     let client = if USE_CPU { xla::PjRtClient::cpu()? } else { xla::PjRtClient::gpu(0.95, false)? };
     println!("{} {} {}", client.platform_name(), client.platform_version(), client.device_count());
     let start_build = std::time::Instant::now();
@@ -376,16 +376,18 @@ fn main() -> Result<()> {
     println!("loaded weights in {:?} ({arg_index})", start_load.elapsed());
     let mut rng = thread_rng();
     for index in 0..100 {
-        println!("{} {}", index + 1, tokens.len());
-        let ctxt = &tokens[tokens.len().saturating_sub(CONTEXT_SIZE)..];
-        buffers[arg_index] = client.buffer_from_host_buffer(ctxt, &[1, CONTEXT_SIZE], None)?;
+        let ctxt: Vec<_> =
+            tokens[tokens.len().saturating_sub(CONTEXT_SIZE)..].iter().map(|c| *c as u32).collect();
+        buffers[arg_index] = client.buffer_from_host_buffer(&ctxt, &[1, CONTEXT_SIZE], None)?;
         let logits = llama_exe.execute_b(&buffers)?;
         let logits = logits[0][0].to_literal_sync()?;
         let logits_v: Vec<f32> = logits.to_vec()?;
         let distr = rand::distributions::WeightedIndex::new(&logits_v)?;
-        let next_token = distr.sample(&mut rng) as u32;
+        let next_token = distr.sample(&mut rng);
         tokens.push(next_token);
-        println!("token: {} '{}'", next_token, tokenizer.decode(vec![next_token], true).unwrap());
+        new_tokens.push(next_token);
+        println!("{} token: {} '{}'", index + 1, next_token, tokenizer.decode(&[next_token]));
     }
+    println!("----\n{}\n----", tokenizer.decode(&new_tokens));
     Ok(())
 }
