@@ -20,9 +20,9 @@ can be specified via the `XLA_EXTENSION_DIR` environment variable.
 
 The [LLaMA large language model](https://github.com/facebookresearch/llama) can
 be used to generate text. The model weights are only available after completing
-some form and once downloaded can be converted to a format this crate can use.
-This requires a GPU with 16GB of memory or 32GB of memory when running on cpu
-(using the -cpu flag).
+[this form](https://forms.gle/jk851eBVbX1m5TAv5) and once downloaded can be
+converted to a format this crate can use.  This requires a GPU with 16GB of
+memory or 32GB of memory when running on cpu (using the -cpu flag).
 
 ```bash
 # Download the tokenizer config.
