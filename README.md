@@ -21,9 +21,8 @@ can be specified via the `XLA_EXTENSION_DIR` environment variable.
 The [LLaMA large language model](https://github.com/facebookresearch/llama) can
 be used to generate text. The model weights are only available after completing
 some form and once downloaded can be converted to a format this crate can use.
-One of the featured examples is GPT2. In order to run it, one should first
-download the tokenization configuration file as well as the weights before
-running the example. In order to do this, run the following commands:
+This requires a GPU with 16GB of memory or 32GB of memory when running on cpu
+(using the -cpu flag).
 
 ```bash
 # Download the tokenizer config.
