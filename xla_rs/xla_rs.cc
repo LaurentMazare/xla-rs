@@ -200,7 +200,7 @@ xla_op constant_literal(const xla_builder b, const literal l) {
 FOR_EACH_NATIVE_TYPE(CONST_OP_R01)
 #undef CONST_OP_R01
 
-xla_op parameter(const xla_builder b, int64_t id, int pr_type, int dsize, const long int *ds, const char *name) {
+xla_op parameter(const xla_builder b, int64_t id, int pr_type, int dsize, const int64_t *ds, const char *name) {
   BEGIN_PROTECT_OP
   bool has_negative_dim = false;
   for (int i = 0; i < dsize; ++i) {
@@ -222,9 +222,9 @@ xla_op parameter(const xla_builder b, int64_t id, int pr_type, int dsize, const 
         dynamic.push_back(false);
       }
     }
-    shape = ShapeUtil::MakeShape((PrimitiveType)pr_type, absl::Span<const long int>(bounds.data(), bounds.size()), dynamic);
+    shape = ShapeUtil::MakeShape((PrimitiveType)pr_type, absl::Span<const int64_t>(bounds.data(), bounds.size()), dynamic);
   } else {
-    shape = ShapeUtil::MakeShape((PrimitiveType)pr_type, absl::Span<const long int>(ds, dsize));
+    shape = ShapeUtil::MakeShape((PrimitiveType)pr_type, absl::Span<const int64_t>(ds, dsize));
   }
   return new XlaOp(Parameter(b, id, shape, std::string(name)));
   END_PROTECT_OP_B(b)
@@ -601,7 +601,7 @@ xla_op op_rng_uniform(const xla_op arg1, const xla_op arg2, int pr_type, int dsi
   BEGIN_PROTECT_OP
   auto shape = ShapeUtil::MakeShape(
       (PrimitiveType)pr_type,
-      absl::Span<const long int>(ds, dsize)
+      absl::Span<const int64_t>(ds, dsize)
   );
   return new XlaOp(RngUniform(*arg1, *arg2, shape));
   END_PROTECT_OP(arg1)
@@ -611,7 +611,7 @@ xla_op op_rng_normal(const xla_op arg1, const xla_op arg2, int pr_type, int dsiz
   BEGIN_PROTECT_OP
   auto shape = ShapeUtil::MakeShape(
       (PrimitiveType)pr_type,
-      absl::Span<const long int>(ds, dsize)
+      absl::Span<const int64_t>(ds, dsize)
   );
   return new XlaOp(RngNormal(*arg1, *arg2, shape));
   END_PROTECT_OP(arg1)
@@ -751,7 +751,7 @@ xla_op op_iota(const xla_builder b, int pr_type, size_t dsize, const int64_t* ds
   BEGIN_PROTECT_OP
   auto shape = ShapeUtil::MakeShape(
       (PrimitiveType)pr_type,
-      absl::Span<const long int>(ds, dsize)
+      absl::Span<const int64_t>(ds, dsize)
   );
   return new XlaOp(Iota(b, shape, increasing_dim));
   END_PROTECT_OP_B(b)

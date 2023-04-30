@@ -76,7 +76,7 @@ xla_builder xla_builder_create(const char*);
 void xla_builder_free(xla_builder);
 
 xla_op constant_literal(const xla_builder, const literal);
-xla_op parameter(const xla_builder, int64_t, int, int, const long int *, const char*);
+xla_op parameter(const xla_builder, int64_t, int, int, const int64_t *, const char*);
 
 // Ops
 xla_op op_add(const xla_op, const xla_op);
