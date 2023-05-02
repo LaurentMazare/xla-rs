@@ -11,6 +11,7 @@
 #include "tensorflow/compiler/xla/client/lib/constants.h"
 #include "tensorflow/compiler/xla/client/lib/matrix.h"
 #include "tensorflow/compiler/xla/client/xla_builder.h"
+#include "tensorflow/compiler/xla/service/hlo_parser.h"
 #include "tensorflow/compiler/xla/pjrt/tfrt_cpu_pjrt_client.h"
 #include "tensorflow/compiler/xla/pjrt/gpu/gpu_helpers.h"
 #include "tensorflow/compiler/xla/pjrt/gpu/se_gpu_pjrt_client.h"
@@ -31,6 +32,7 @@ typedef Status *status;
 typedef Shape *shape;
 typedef Literal *literal;
 typedef XlaComputation *xla_computation;
+typedef HloModuleProto *hlo_module_proto;
 #else
 typedef struct _pjrt_client *pjrt_client;
 typedef struct _pjrt_loaded_executable *pjrt_loaded_executable;
@@ -42,6 +44,7 @@ typedef struct _status *status;
 typedef struct _shape *shape;
 typedef struct _literal *literal;
 typedef struct _xla_computation *xla_computation;
+typedef struct _hlo_module_proto *hlo_module_proto;
 #endif
 
 status pjrt_cpu_client_create(pjrt_client *);
@@ -191,7 +194,13 @@ int64_t literal_size_bytes(const literal);
 void literal_copy_to(const literal, void*, size_t);
 void literal_copy_from(literal, const void*, size_t);
 void literal_free(literal);
+
+status hlo_module_proto_parse_and_return_unverified_module(const char*, size_t, hlo_module_proto*);
+xla_computation xla_computation_from_hlo_module_proto(const hlo_module_proto);
+void hlo_module_proto_free(hlo_module_proto);
+
 char *xla_computation_name(xla_computation);
+hlo_module_proto xla_computation_proto(const xla_computation);
 void xla_computation_free(xla_computation);
 
 void status_free(status);
