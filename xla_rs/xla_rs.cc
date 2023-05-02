@@ -957,6 +957,20 @@ void literal_copy_from(literal l, const void* src, size_t size_in_bytes) {
   std::memcpy(l->untyped_data(), src, size_in_bytes);
 }
 
+literal literal_make_tuple(const literal* l, size_t n) {
+  Literal out = LiteralUtil::MakeTuple(absl::MakeSpan(l, n));
+  return new Literal(std::move(out));
+}
+
+literal literal_make_tuple_owned(const literal* l, size_t n) {
+  std::vector<xla::Literal> elems;
+  for (size_t i = 0; i < n; ++i) {
+    elems.push_back(std::move(*(l[i])));
+  }
+  Literal out = LiteralUtil::MakeTupleOwned(std::move(elems));
+  return new Literal(std::move(out));
+}
+
 void literal_free(literal l) {
   delete l;
 }

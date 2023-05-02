@@ -7,6 +7,7 @@
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #pragma GCC diagnostic ignored "-Winvalid-offsetof"
 #pragma GCC diagnostic ignored "-Wreturn-type"
+#include "tensorflow/compiler/xla/literal_util.h"
 #include "tensorflow/compiler/xla/client/client_library.h"
 #include "tensorflow/compiler/xla/client/lib/constants.h"
 #include "tensorflow/compiler/xla/client/lib/matrix.h"
@@ -193,6 +194,8 @@ void literal_decompose_tuple(literal, literal*, size_t);
 int64_t literal_size_bytes(const literal);
 void literal_copy_to(const literal, void*, size_t);
 void literal_copy_from(literal, const void*, size_t);
+literal literal_make_tuple(const literal*, size_t);
+literal literal_make_tuple_owned(const literal*, size_t);
 void literal_free(literal);
 
 status hlo_module_proto_parse_and_return_unverified_module(const char*, size_t, hlo_module_proto*);

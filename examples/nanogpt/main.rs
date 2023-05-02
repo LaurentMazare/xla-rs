@@ -268,7 +268,7 @@ fn sample(exe: &PjRtLoadedExecutable, tokenizer: &Tokenizer, cnt: usize) -> Resu
     let mut new_tokens = vec![];
     for _i in 1..=cnt {
         let input_l =
-            Literal::vec(&input[input.len().saturating_sub(1024)..]).reshape(&[1, 1024])?;
+            Literal::vec1(&input[input.len().saturating_sub(1024)..]).reshape(&[1, 1024])?;
         let logits = exe.execute(&[input_l])?;
         let logits = logits[0][0].to_literal_sync()?;
         let logits_v: Vec<f32> = logits.to_vec()?;

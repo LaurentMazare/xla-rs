@@ -18,8 +18,8 @@ fn main() -> Result<()> {
     let proto = xla::HloModuleProto::from_text_file("examples/fn_hlo.txt")?;
     let comp = xla::XlaComputation::from_proto(&proto);
     let result = client.compile(&comp)?;
-    let x = xla::Literal::vec(&[1f32, 2f32, 3f32, 4f32]).reshape(&[2, 2])?;
-    let y = xla::Literal::vec(&[1f32, 1f32, 1f32, 1f32]).reshape(&[2, 2])?;
+    let x = xla::Literal::vec1(&[1f32, 2f32, 3f32, 4f32]).reshape(&[2, 2])?;
+    let y = xla::Literal::vec1(&[1f32, 1f32, 1f32, 1f32]).reshape(&[2, 2])?;
     let result = result.execute::<xla::Literal>(&[x, y])?[0][0].to_literal_sync()?;
     let result = &result.to_tuple1()?;
     let shape = result.shape()?;

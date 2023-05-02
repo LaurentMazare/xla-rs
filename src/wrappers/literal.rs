@@ -164,7 +164,7 @@ impl Literal {
 
     /// Create a literal from a slice of data, the resulting literal has one dimension which size
     /// is the same as the slice passed as argument.
-    pub fn vec<T: NativeType>(f: &[T]) -> Self {
+    pub fn vec1<T: NativeType>(f: &[T]) -> Self {
         let ptr = unsafe { T::create_r1(f.as_ptr(), f.len()) };
         Literal(ptr)
     }
@@ -258,7 +258,7 @@ impl<T: NativeType> From<T> for Literal {
 
 impl<T: NativeType> From<&[T]> for Literal {
     fn from(f: &[T]) -> Self {
-        Literal::vec(f)
+        Literal::vec1(f)
     }
 }
 
