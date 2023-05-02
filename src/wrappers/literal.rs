@@ -202,6 +202,52 @@ impl Literal {
             }
         }
     }
+
+    pub fn to_tuple(mut self) -> Result<Vec<Literal>> {
+        self.decompose_tuple()
+    }
+
+    pub fn to_tuple1(mut self) -> Result<Self> {
+        let mut tuple = self.decompose_tuple()?;
+        if tuple.len() != 1 {
+            Err(Error::UnexpectedNumberOfElemsInTuple { expected: 1, got: tuple.len() })?
+        }
+        let v1 = tuple.pop().unwrap();
+        Ok(v1)
+    }
+
+    pub fn to_tuple2(mut self) -> Result<(Self, Self)> {
+        let mut tuple = self.decompose_tuple()?;
+        if tuple.len() != 2 {
+            Err(Error::UnexpectedNumberOfElemsInTuple { expected: 2, got: tuple.len() })?
+        }
+        let v2 = tuple.pop().unwrap();
+        let v1 = tuple.pop().unwrap();
+        Ok((v1, v2))
+    }
+
+    pub fn to_tuple3(mut self) -> Result<(Self, Self, Self)> {
+        let mut tuple = self.decompose_tuple()?;
+        if tuple.len() != 3 {
+            Err(Error::UnexpectedNumberOfElemsInTuple { expected: 3, got: tuple.len() })?
+        }
+        let v3 = tuple.pop().unwrap();
+        let v2 = tuple.pop().unwrap();
+        let v1 = tuple.pop().unwrap();
+        Ok((v1, v2, v3))
+    }
+
+    pub fn to_tuple4(mut self) -> Result<(Self, Self, Self, Self)> {
+        let mut tuple = self.decompose_tuple()?;
+        if tuple.len() != 4 {
+            Err(Error::UnexpectedNumberOfElemsInTuple { expected: 4, got: tuple.len() })?
+        }
+        let v4 = tuple.pop().unwrap();
+        let v3 = tuple.pop().unwrap();
+        let v2 = tuple.pop().unwrap();
+        let v1 = tuple.pop().unwrap();
+        Ok((v1, v2, v3, v4))
+    }
 }
 
 impl<T: NativeType> From<T> for Literal {
