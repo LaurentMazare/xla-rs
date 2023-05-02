@@ -281,6 +281,7 @@ impl Drop for XlaComputation {
 pub struct HloModuleProto(c_lib::hlo_module_proto);
 
 impl HloModuleProto {
+    /// Read a HLO module from a text file.
     pub fn from_text_file<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
         use std::io::Read;
         let mut file = std::fs::File::open(path.as_ref())?;
@@ -289,12 +290,35 @@ impl HloModuleProto {
         Self::parse_and_return_unverified_module(&content)
     }
 
+    /// Read a HLO module from a proto file, either in binary or pbtxt format.
+    pub fn from_proto_file<P: AsRef<std::path::Path>>(path: P, binary: bool) -> Result<Self> {
+        use std::io::Read;
+        let mut file = std::fs::File::open(path.as_ref())?;
+        let mut content = Vec::new();
+        file.read_to_end(&mut content)?;
+        Self::parse_proto(&content, binary)
+    }
+
     pub fn parse_and_return_unverified_module(data: &[u8]) -> Result<Self> {
         let mut ptr: c_lib::hlo_module_proto = std::ptr::null_mut();
         let status = unsafe {
             c_lib::hlo_module_proto_parse_and_return_unverified_module(
                 data.as_ptr() as *const libc::c_char,
                 data.len(),
+                &mut ptr,
+            )
+        };
+        handle_status(status)?;
+        Ok(Self(ptr))
+    }
+
+    pub fn parse_proto(data: &[u8], binary: bool) -> Result<Self> {
+        let mut ptr: c_lib::hlo_module_proto = std::ptr::null_mut();
+        let status = unsafe {
+            c_lib::hlo_module_proto_parse_proto(
+                data.as_ptr() as *const libc::c_char,
+                data.len(),
+                binary,
                 &mut ptr,
             )
         };

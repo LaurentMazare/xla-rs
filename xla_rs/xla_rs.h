@@ -7,6 +7,7 @@
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #pragma GCC diagnostic ignored "-Winvalid-offsetof"
 #pragma GCC diagnostic ignored "-Wreturn-type"
+#include "tensorflow/compiler/xla/statusor.h"
 #include "tensorflow/compiler/xla/literal_util.h"
 #include "tensorflow/compiler/xla/client/client_library.h"
 #include "tensorflow/compiler/xla/client/lib/constants.h"
@@ -199,6 +200,7 @@ literal literal_make_tuple_owned(const literal*, size_t);
 void literal_free(literal);
 
 status hlo_module_proto_parse_and_return_unverified_module(const char*, size_t, hlo_module_proto*);
+status hlo_module_proto_parse_proto(const char*, size_t, bool, hlo_module_proto*);
 xla_computation xla_computation_from_hlo_module_proto(const hlo_module_proto);
 void hlo_module_proto_free(hlo_module_proto);
 
