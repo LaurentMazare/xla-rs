@@ -247,6 +247,11 @@ pub(self) fn handle_status(status: c_lib::status) -> Result<()> {
 }
 
 impl XlaComputation {
+    pub fn from_proto(proto: &HloModuleProto) -> Self {
+        let ptr = unsafe { c_lib::xla_computation_from_hlo_module_proto(proto.0) };
+        Self(ptr)
+    }
+
     /// The computation name.
     pub fn name(&self) -> String {
         unsafe {
@@ -259,10 +264,47 @@ impl XlaComputation {
     pub fn compile(&self, client: &PjRtClient) -> Result<PjRtLoadedExecutable> {
         client.compile(self)
     }
+
+    /// Get the HloModuleProto for the computation.
+    pub fn proto(&self) -> HloModuleProto {
+        let ptr = unsafe { c_lib::xla_computation_proto(self.0) };
+        HloModuleProto(ptr)
+    }
 }
 
 impl Drop for XlaComputation {
     fn drop(&mut self) {
         unsafe { c_lib::xla_computation_free(self.0) }
+    }
+}
+
+pub struct HloModuleProto(c_lib::hlo_module_proto);
+
+impl HloModuleProto {
+    pub fn from_text_file<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
+        use std::io::Read;
+        let mut file = std::fs::File::open(path.as_ref())?;
+        let mut content = Vec::new();
+        file.read_to_end(&mut content)?;
+        Self::parse_and_return_unverified_module(&content)
+    }
+
+    pub fn parse_and_return_unverified_module(data: &[u8]) -> Result<Self> {
+        let mut ptr: c_lib::hlo_module_proto = std::ptr::null_mut();
+        let status = unsafe {
+            c_lib::hlo_module_proto_parse_and_return_unverified_module(
+                data.as_ptr() as *const libc::c_char,
+                data.len(),
+                &mut ptr,
+            )
+        };
+        handle_status(status)?;
+        Ok(Self(ptr))
+    }
+}
+
+impl Drop for HloModuleProto {
+    fn drop(&mut self) {
+        unsafe { c_lib::hlo_module_proto_free(self.0) }
     }
 }

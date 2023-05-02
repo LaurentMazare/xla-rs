@@ -976,3 +976,21 @@ void xla_computation_free(xla_computation c) {
 char *status_error_message(status s) {
   return strdup(s->error_message().c_str());
 }
+
+status hlo_module_proto_parse_and_return_unverified_module(const char* data, size_t len, hlo_module_proto* output) {
+  ASSIGN_OR_RETURN_STATUS(hmp, ParseAndReturnUnverifiedModule(std::string(data, len)));
+  *output = new HloModuleProto(hmp->ToProto());
+  return nullptr;
+}
+
+xla_computation xla_computation_from_hlo_module_proto(const hlo_module_proto p) {
+  return new XlaComputation(*p);
+}
+
+void hlo_module_proto_free(hlo_module_proto p) {
+  delete p;
+}
+
+hlo_module_proto xla_computation_proto(const xla_computation c) {
+  return new HloModuleProto(c->proto());
+}
