@@ -84,3 +84,16 @@ fn tuple_op() -> Result<()> {
     assert_eq!(result[0].to_vec::<f32>()?, [3.1]);
     Ok(())
 }
+
+#[test]
+fn tuple_literal() -> Result<()> {
+    let x = xla::Literal::scalar(3.1f32);
+    let y = xla::Literal::vec1(&[4.2f32, 1.337f32]);
+    let result = xla::Literal::tuple(vec![x, y]);
+    assert_eq!(result.shape()?.tuple_size(), Some(2));
+    let mut result = result;
+    let result = result.decompose_tuple()?;
+    assert_eq!(result[1].to_vec::<f32>()?, [4.2, 1.337]);
+    assert_eq!(result[0].to_vec::<f32>()?, [3.1]);
+    Ok(())
+}

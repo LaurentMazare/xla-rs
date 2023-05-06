@@ -248,6 +248,15 @@ impl Literal {
         let v1 = tuple.pop().unwrap();
         Ok((v1, v2, v3, v4))
     }
+
+    pub fn tuple(elems: Vec<Self>) -> Self {
+        let elem_ptrs: Vec<_> = elems.iter().map(|e| e.0).collect();
+        let literal =
+            unsafe { c_lib::literal_make_tuple_owned(elem_ptrs.as_ptr(), elem_ptrs.len()) };
+        // Ensure that elems are only dropped after the pointers have been used.
+        drop(elems);
+        Self(literal)
+    }
 }
 
 impl<T: NativeType> From<T> for Literal {
