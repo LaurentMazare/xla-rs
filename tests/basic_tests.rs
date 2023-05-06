@@ -65,3 +65,22 @@ fn mean_op() -> Result<()> {
     assert_eq!(result.shape()?.dimensions(), []);
     Ok(())
 }
+
+#[test]
+fn tuple_op() -> Result<()> {
+    let client = xla::PjRtClient::cpu()?;
+    let builder = xla::XlaBuilder::new("test");
+    let x = builder.parameter(0, f32::PRIMITIVE_TYPE, &[-1], "x")?;
+    let y = builder.parameter(1, f32::PRIMITIVE_TYPE, &[2], "x")?;
+    let tuple = builder.tuple(&[x, y])?.build()?.compile(&client)?;
+    let x = xla::Literal::scalar(3.1f32);
+    let y = xla::Literal::vec1(&[4.2f32, 1.337f32]);
+    let result = tuple.execute::<xla::Literal>(&[x, y])?;
+    let result = result[0][0].to_literal_sync()?;
+    assert_eq!(result.shape()?.tuple_size(), Some(2));
+    let mut result = result;
+    let result = result.decompose_tuple()?;
+    assert_eq!(result[1].to_vec::<f32>()?, [4.2, 1.337]);
+    assert_eq!(result[0].to_vec::<f32>()?, [3.1]);
+    Ok(())
+}
