@@ -358,6 +358,47 @@ impl XlaOp {
         self.maybe_keep_dims(op, &dims, keep_dims)
     }
 
+    /// Sequentially execute `body` until `cond` fails.
+    ///
+    /// - `init` argument has a type `T`.
+    /// - `cond` is a computation with a single argument of type `T` producing a value of type
+    /// `PRED`.
+    /// - `body` is a computation with a single argument of type `T` producing a value of type
+    /// `T`.
+    pub fn while_(cond: XlaComputation, body: XlaComputation, init: Self) -> Result<Self> {
+        let op = unsafe { c_lib::op_while(cond.0, body.0, init.op) };
+        init.wrap(op)
+    }
+
+    /// Execute `true_comp` if `self` is true, `false_comp` if `self` is false, and return the result.
+    /// `self` has to be a scalar of type `PRED`.
+    /// `true_op` is used as the single argument to `true_comp` and `false_op` as the single
+    /// argument to `false_comp`.
+    pub fn conditional(
+        &self,
+        true_op: Self,
+        true_comp: XlaComputation,
+        false_op: Self,
+        false_comp: XlaComputation,
+    ) -> Result<Self> {
+        let op = unsafe {
+            c_lib::op_conditional(self.op, true_op.op, true_comp.0, false_op.op, false_comp.0)
+        };
+        self.wrap(op)
+    }
+
+    pub fn outfeed(&self, ty: PrimitiveType, dims: &[i64], config: &str) {
+        unsafe {
+            c_lib::outfeed(
+                self.op,
+                ty as i32,
+                dims.len() as i32,
+                dims.as_ptr(),
+                config.as_ptr() as *const libc::c_char,
+            )
+        }
+    }
+
     /// The kind of elements that are computed by this operand.
     pub fn element_type(&self) -> Result<PrimitiveType> {
         self.builder.get_element_type(self)

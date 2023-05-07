@@ -94,6 +94,20 @@ impl XlaBuilder {
         self.wrap(op)
     }
 
+    /// Read a single value from the implicit streaming interface of the device.
+    pub fn infeed(&self, ty: PrimitiveType, dims: &[i64], config: &str) -> Result<XlaOp> {
+        let op = unsafe {
+            c_lib::infeed(
+                self.ptr(),
+                ty as i32,
+                dims.len() as i32,
+                dims.as_ptr(),
+                config.as_ptr() as *const libc::c_char,
+            )
+        };
+        self.wrap(op)
+    }
+
     pub fn parameter_with_shape(
         &self,
         parameter_number: i64,

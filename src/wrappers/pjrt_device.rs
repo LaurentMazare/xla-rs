@@ -1,4 +1,4 @@
-use crate::c_lib;
+use crate::{c_lib, Result};
 use std::marker::PhantomData;
 
 /// A device attached to a [`super::PjRtClient`].
@@ -41,5 +41,18 @@ impl PjRtDevice<'_> {
             let ptr = c_lib::pjrt_device_debug_string(self.device);
             super::c_ptr_to_string(ptr)
         }
+    }
+
+    pub fn transfer_to_infeed(&self, src: &super::Literal) -> Result<()> {
+        let status = unsafe { c_lib::pjrt_device_transfer_to_infeed(self.device, src.0) };
+        super::handle_status(status)?;
+        Ok(())
+    }
+
+    /// Transfer and return a value for the given shape from the outfeed queue.
+    pub fn transfer_from_outfeed(&self, dst: &mut super::Literal) -> Result<()> {
+        let status = unsafe { c_lib::pjrt_device_transfer_from_outfeed(self.device, dst.0) };
+        super::handle_status(status)?;
+        Ok(())
     }
 }
