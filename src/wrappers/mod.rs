@@ -17,7 +17,7 @@ pub use pjrt_buffer::PjRtBuffer;
 pub use pjrt_client::PjRtClient;
 pub use pjrt_device::PjRtDevice;
 pub use pjrt_loaded_executable::PjRtLoadedExecutable;
-pub use shape::Shape;
+pub use shape::{ArrayShape, Shape};
 pub use xla_builder::XlaBuilder;
 pub use xla_op::XlaOp;
 
@@ -98,8 +98,30 @@ pub enum ElementType {
     C128,
 }
 
+impl ElementType {
+    pub fn primitive_type(&self) -> PrimitiveType {
+        match self {
+            Self::Pred => PrimitiveType::Pred,
+            Self::S8 => PrimitiveType::S8,
+            Self::S16 => PrimitiveType::S16,
+            Self::S32 => PrimitiveType::S32,
+            Self::S64 => PrimitiveType::S64,
+            Self::U8 => PrimitiveType::U8,
+            Self::U16 => PrimitiveType::U16,
+            Self::U32 => PrimitiveType::U32,
+            Self::U64 => PrimitiveType::U64,
+            Self::F16 => PrimitiveType::F16,
+            Self::F32 => PrimitiveType::F32,
+            Self::Bf16 => PrimitiveType::Bf16,
+            Self::F64 => PrimitiveType::F64,
+            Self::C64 => PrimitiveType::C64,
+            Self::C128 => PrimitiveType::C128,
+        }
+    }
+}
+
 pub trait ArrayElement: Copy {
-    const PRIMITIVE_TYPE: PrimitiveType;
+    const TY: ElementType;
     const ELEMENT_SIZE_IN_BYTES: usize;
     const ZERO: Self;
 }
@@ -208,7 +230,7 @@ native_type!(
 macro_rules! element_type {
     ($ty:ty, $v:ident, $sz:tt) => {
         impl ArrayElement for $ty {
-            const PRIMITIVE_TYPE: PrimitiveType = PrimitiveType::$v;
+            const TY: ElementType = ElementType::$v;
             const ELEMENT_SIZE_IN_BYTES: usize = $sz;
             const ZERO: Self = 0 as Self;
         }
@@ -220,7 +242,7 @@ macro_rules! element_type {
 pub struct F16;
 
 impl ArrayElement for F16 {
-    const PRIMITIVE_TYPE: PrimitiveType = PrimitiveType::F16;
+    const TY: ElementType = ElementType::F16;
     const ELEMENT_SIZE_IN_BYTES: usize = 2;
     const ZERO: Self = Self;
 }
@@ -230,7 +252,7 @@ impl ArrayElement for F16 {
 pub struct Bf16;
 
 impl ArrayElement for Bf16 {
-    const PRIMITIVE_TYPE: PrimitiveType = PrimitiveType::Bf16;
+    const TY: ElementType = ElementType::Bf16;
     const ELEMENT_SIZE_IN_BYTES: usize = 2;
     const ZERO: Self = Self;
 }

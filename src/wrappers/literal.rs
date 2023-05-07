@@ -1,4 +1,4 @@
-use super::{ArrayElement, FromPrimitive, NativeType, PrimitiveType, Shape};
+use super::{ArrayElement, ArrayShape, FromPrimitive, NativeType, PrimitiveType, Shape};
 use crate::{c_lib, Error, Result};
 
 /// A literal represent a value, typically a multi-dimensional array, stored on the host device.
@@ -102,6 +102,10 @@ impl Literal {
         }
     }
 
+    pub fn array_shape(&self) -> Result<ArrayShape> {
+        ArrayShape::try_from(&self.shape()?)
+    }
+
     /// Copy the literal data to a slice. This returns an error if the primitive type used by the
     /// literal is not `T` or if the number of elements in the slice and literal are different.
     pub fn copy_raw_to<T: ArrayElement>(&self, dst: &mut [T]) -> Result<()> {
@@ -193,9 +197,10 @@ impl Literal {
     /// When the input is a tuple, return a vector of its elements. This replaces the original
     /// value by an empty tuple, no copy is performed.
     pub fn decompose_tuple(&mut self) -> Result<Vec<Literal>> {
-        match self.shape()?.tuple_size() {
-            None => Ok(vec![]),
-            Some(tuple_len) => {
+        match self.shape()? {
+            Shape::Array(_) => Ok(vec![]),
+            Shape::Tuple(shapes) => {
+                let tuple_len = shapes.len();
                 let mut outputs = vec![std::ptr::null_mut::<c_lib::_literal>(); tuple_len];
                 unsafe { c_lib::literal_decompose_tuple(self.0, outputs.as_mut_ptr(), tuple_len) };
                 Ok(outputs.into_iter().map(Literal).collect())

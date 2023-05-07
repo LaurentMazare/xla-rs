@@ -1,86 +1,125 @@
-use super::{ArrayElement, PrimitiveType};
+use super::{ArrayElement, ElementType, PrimitiveType};
 use crate::Error;
 
-/// A shape specifies a primitive type as well as some array dimensions.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Shape {
-    pub(super) ty: PrimitiveType,
-    pub(super) dimensions: Vec<i64>,
-    pub(super) tuple_shapes_size: usize,
+pub struct ArrayShape {
+    ty: ElementType,
+    dims: Vec<i64>,
 }
 
-impl Shape {
-    /// Create a new shape.
-    pub fn new<E: ArrayElement>(dimensions: Vec<i64>) -> Shape {
-        Shape { ty: E::PRIMITIVE_TYPE, dimensions, tuple_shapes_size: 0 }
-    }
-
-    /// Create a new shape.
-    pub fn with_type(ty: PrimitiveType, dimensions: Vec<i64>) -> Shape {
-        Shape { ty, dimensions, tuple_shapes_size: 0 }
-    }
-
-    /// Create a new tuple shape.
-    pub fn tuple(size: usize) -> Shape {
-        Shape { ty: PrimitiveType::Tuple, dimensions: vec![], tuple_shapes_size: size }
+impl ArrayShape {
+    pub fn ty(&self) -> ElementType {
+        self.ty
     }
 
     /// The stored primitive type.
-    pub fn element_type(&self) -> PrimitiveType {
-        self.ty
-    }
-
-    /// The stored primitive type, shortcut for `element_type`.
-    pub fn ty(&self) -> PrimitiveType {
-        self.ty
+    pub fn primitive_type(&self) -> PrimitiveType {
+        self.ty.primitive_type()
     }
 
     /// The number of elements stored in arrays that use this shape, this is the product of sizes
     /// across each dimension.
     pub fn element_count(&self) -> usize {
-        self.dimensions.iter().map(|d| *d as usize).product::<usize>()
+        self.dims.iter().map(|d| *d as usize).product::<usize>()
     }
 
-    pub fn dimensions(&self) -> &[i64] {
-        &self.dimensions
+    pub fn dims(&self) -> &[i64] {
+        &self.dims
     }
 
     pub fn first_dim(&self) -> Option<i64> {
-        self.dimensions.first().copied()
+        self.dims.first().copied()
     }
 
     pub fn last_dim(&self) -> Option<i64> {
-        self.dimensions.last().copied()
+        self.dims.last().copied()
+    }
+}
+
+/// A shape specifies a primitive type as well as some array dimensions.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Shape {
+    Tuple(Vec<Shape>),
+    Array(ArrayShape),
+}
+
+impl Shape {
+    /// Create a new array shape.
+    pub fn array<E: ArrayElement>(dims: Vec<i64>) -> Self {
+        Self::Array(ArrayShape { ty: E::TY, dims })
+    }
+
+    /// Create a new array shape.
+    pub fn array_with_type(ty: ElementType, dims: Vec<i64>) -> Self {
+        Self::Array(ArrayShape { ty, dims })
+    }
+
+    /// Create a new tuple shape.
+    pub fn tuple(shapes: Vec<Self>) -> Self {
+        Self::Tuple(shapes)
+    }
+
+    /// The stored primitive type.
+    pub fn primitive_type(&self) -> PrimitiveType {
+        match self {
+            Self::Tuple(_) => PrimitiveType::Tuple,
+            Self::Array(a) => a.ty.primitive_type(),
+        }
     }
 
     pub fn is_tuple(&self) -> bool {
-        self.ty == PrimitiveType::Tuple
+        match self {
+            Self::Tuple(_) => true,
+            Self::Array { .. } => false,
+        }
     }
 
     pub fn tuple_size(&self) -> Option<usize> {
-        if self.ty == PrimitiveType::Tuple {
-            Some(self.tuple_shapes_size)
-        } else {
-            None
+        match self {
+            Self::Tuple(shapes) => Some(shapes.len()),
+            Self::Array { .. } => None,
+        }
+    }
+}
+
+impl TryFrom<&Shape> for ArrayShape {
+    type Error = Error;
+
+    fn try_from(value: &Shape) -> Result<Self, Self::Error> {
+        match value {
+            Shape::Tuple(_) => Err(Error::NotAnArray { expected: None, got: value.clone() }),
+            Shape::Array(a) => Ok(a.clone()),
         }
     }
 }
 
 macro_rules! extract_dims {
     ($cnt:tt, $dims:expr, $out_type:ty) => {
+        impl TryFrom<&ArrayShape> for $out_type {
+            type Error = Error;
+
+            fn try_from(value: &ArrayShape) -> Result<Self, Self::Error> {
+                if value.dims.len() != $cnt {
+                    Err(Error::UnexpectedNumberOfDims {
+                        expected: $cnt,
+                        got: value.dims.len(),
+                        dims: value.dims.clone(),
+                    })
+                } else {
+                    Ok($dims(&value.dims))
+                }
+            }
+        }
+
         impl TryFrom<&Shape> for $out_type {
             type Error = Error;
 
             fn try_from(value: &Shape) -> Result<Self, Self::Error> {
-                let dims = &value.dimensions;
-                if dims.len() != $cnt {
-                    Err(Error::UnexpectedNumberOfDims {
-                        expected: $cnt,
-                        got: dims.len(),
-                        dims: dims.clone(),
-                    })
-                } else {
-                    Ok($dims(dims))
+                match value {
+                    Shape::Tuple(_) => {
+                        Err(Error::NotAnArray { expected: Some($cnt), got: value.clone() })
+                    }
+                    Shape::Array(a) => Self::try_from(a),
                 }
             }
         }

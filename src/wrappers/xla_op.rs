@@ -5,7 +5,7 @@
 //!
 //! For details on the semantics, see
 //! [operation_semantics](https://www.tensorflow.org/xla/operation_semantics).
-use super::{PrimitiveType, Shape, XlaBuilder, XlaComputation};
+use super::{ArrayShape, PrimitiveType, Shape, XlaBuilder, XlaComputation};
 use crate::{c_lib, Error, Result};
 
 pub struct XlaOp {
@@ -268,7 +268,7 @@ impl XlaOp {
     }
 
     /// A node that when executed generates values using a random uniform distribution.
-    pub fn rng_uniform(min: &Self, max: &Self, shape: &Shape) -> Result<Self> {
+    pub fn rng_uniform(min: &Self, max: &Self, shape: &ArrayShape) -> Result<Self> {
         let op = unsafe {
             c_lib::op_rng_uniform(
                 min.op,
@@ -282,7 +282,7 @@ impl XlaOp {
     }
 
     /// A node that when executed generates values using a random normal distribution.
-    pub fn rng_normal(mu: &Self, sigma: &Self, shape: &Shape) -> Result<Self> {
+    pub fn rng_normal(mu: &Self, sigma: &Self, shape: &ArrayShape) -> Result<Self> {
         let op = unsafe {
             c_lib::op_rng_normal(
                 mu.op,
@@ -413,6 +413,10 @@ impl XlaOp {
         self.builder.get_shape(self)
     }
 
+    pub fn array_shape(&self) -> Result<ArrayShape> {
+        Ok(ArrayShape::try_from(&self.builder.get_shape(self)?)?)
+    }
+
     pub fn dims(&self) -> Result<Vec<usize>> {
         self.builder.get_dims(self)
     }
@@ -486,10 +490,10 @@ impl XlaOp {
 
     pub fn take(&self, indices: &XlaOp, axis: i64) -> Result<Self> {
         let axis = self.normalize_index(axis)?;
-        let shape = self.shape()?;
-        let indices_shape = indices.shape()?;
-        let index_dims = indices_shape.dimensions();
-        let dims = shape.dimensions();
+        let shape = self.array_shape()?;
+        let indices_shape = indices.array_shape()?;
+        let index_dims = indices_shape.dims();
+        let dims = shape.dims();
         let offset_dims: Vec<_> = (0..((dims.len() + index_dims.len()) as i64 - 1))
             .filter(|x| *x < axis || *x >= axis + index_dims.len() as i64)
             .collect();
@@ -505,12 +509,12 @@ impl XlaOp {
 
     fn maybe_keep_dims(&self, res: XlaOp, dims: &[i64], keep_dims: bool) -> Result<XlaOp> {
         if keep_dims && !dims.is_empty() {
-            let shape = self.shape()?;
-            let mut dimensions = shape.dimensions().to_vec();
+            let shape = self.array_shape()?;
+            let mut dims = shape.dims().to_vec();
             for d in dims.iter() {
-                dimensions[*d as usize] = 1;
+                dims[*d as usize] = 1;
             }
-            res.reshape(&dimensions)
+            res.reshape(&dims)
         } else {
             Ok(res)
         }
@@ -587,10 +591,10 @@ impl XlaOp {
     pub fn matmul(&self, rhs: &Self) -> Result<Self> {
         // Similar to the jax implementation but without the squeezing.
         // https://github.com/google/jax/blob/849e47f79ac64ccba1a762804217c00a9905025b/jax/_src/numpy/lax_numpy.py#L3028
-        let lhs_shape = self.shape()?;
-        let rhs_shape = self.shape()?;
-        let lhs_dims = lhs_shape.dimensions();
-        let rhs_dims = rhs_shape.dimensions();
+        let lhs_shape = self.array_shape()?;
+        let rhs_shape = self.array_shape()?;
+        let lhs_dims = lhs_shape.dims();
+        let rhs_dims = rhs_shape.dims();
         let lhs_ndims = lhs_dims.len();
         let rhs_ndims = rhs_dims.len();
         if lhs_ndims < 1 || rhs_ndims < 1 {

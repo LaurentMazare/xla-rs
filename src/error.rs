@@ -15,6 +15,9 @@ pub enum Error {
     #[error("unexpected number of dimensions, expected: {expected}, got: {got} ({dims:?})")]
     UnexpectedNumberOfDims { expected: usize, got: usize, dims: Vec<i64> },
 
+    #[error("not an array, expected: {expected:?}, got: {got:?}")]
+    NotAnArray { expected: Option<usize>, got: crate::Shape },
+
     #[error("unexpected number of tuple elements, expected: {expected}, got: {got}")]
     UnexpectedNumberOfElemsInTuple { expected: usize, got: usize },
 
