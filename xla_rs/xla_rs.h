@@ -65,6 +65,8 @@ void pjrt_loaded_executable_free(pjrt_loaded_executable);
 int pjrt_device_id(pjrt_device);
 int pjrt_device_process_index(pjrt_device);
 int pjrt_device_local_hardware_id(pjrt_device);
+status pjrt_device_transfer_to_infeed(pjrt_device, const literal);
+status pjrt_device_transfer_from_outfeed(pjrt_device, literal);
 char *pjrt_device_kind(pjrt_device);
 char *pjrt_device_debug_string(pjrt_device);
 char *pjrt_device_to_string(pjrt_device);
@@ -86,6 +88,8 @@ void xla_builder_free(xla_builder);
 xla_op constant_literal(const xla_builder, const literal);
 xla_op parameter(const xla_builder, int64_t, int, int, const int64_t *,
                  const char *);
+xla_op infeed(const xla_builder, int, int, const int64_t *, const char *);
+void outfeed(const xla_op, int, int, const int64_t *, const char *);
 
 // Ops
 xla_op op_add(const xla_op, const xla_op);
@@ -170,6 +174,9 @@ xla_op op_unknown_error(const xla_builder, const char *);
 xla_op op_invalid_argument_error(const xla_builder, const char *);
 xla_op op_iota1(const xla_builder, int, size_t);
 xla_op op_iota(const xla_builder, int, size_t, const int64_t *, int64_t);
+xla_op op_while(const xla_computation, const xla_computation, const xla_op);
+xla_op op_conditional(const xla_op, const xla_op, const xla_computation,
+                      const xla_op, const xla_computation);
 xla_builder op_builder(const xla_op);
 
 int xla_op_valid(const xla_op);

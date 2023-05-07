@@ -146,6 +146,16 @@ int pjrt_device_local_hardware_id(pjrt_device d) {
   return d->local_hardware_id();
 }
 
+status pjrt_device_transfer_to_infeed(pjrt_device d, const literal l) {
+  MAYBE_RETURN_STATUS(d->TransferToInfeed(*l));
+  return nullptr;
+}
+
+status pjrt_device_transfer_from_outfeed(pjrt_device d, literal l) {
+  MAYBE_RETURN_STATUS(d->TransferFromOutfeed(l));
+  return nullptr;
+}
+
 char *pjrt_device_kind(pjrt_device d) {
   return strdup(std::string(d->device_kind()).c_str());
 }
@@ -197,9 +207,7 @@ xla_op constant_literal(const xla_builder b, const literal l) {
 FOR_EACH_NATIVE_TYPE(CONST_OP_R01)
 #undef CONST_OP_R01
 
-xla_op parameter(const xla_builder b, int64_t id, int pr_type, int dsize,
-                 const int64_t *ds, const char *name) {
-  BEGIN_PROTECT_OP
+Shape make_shape(int pr_type, int dsize, const int64_t *ds) {
   bool has_negative_dim = false;
   for (int i = 0; i < dsize; ++i) {
     if (ds[i] < 0) {
@@ -227,8 +235,29 @@ xla_op parameter(const xla_builder b, int64_t id, int pr_type, int dsize,
     shape = ShapeUtil::MakeShape((PrimitiveType)pr_type,
                                  absl::Span<const int64_t>(ds, dsize));
   }
+  return shape;
+}
+
+xla_op parameter(const xla_builder b, int64_t id, int pr_type, int dsize,
+                 const int64_t *ds, const char *name) {
+  BEGIN_PROTECT_OP
+  Shape shape = make_shape(pr_type, dsize, ds);
   return new XlaOp(Parameter(b, id, shape, std::string(name)));
   END_PROTECT_OP_B(b)
+}
+
+xla_op infeed(const xla_builder b, int pr_type, int dsize, const int64_t *ds,
+              const char *name) {
+  BEGIN_PROTECT_OP
+  Shape shape = make_shape(pr_type, dsize, ds);
+  return new XlaOp(Infeed(b, shape, std::string(name)));
+  END_PROTECT_OP_B(b)
+}
+
+void outfeed(const xla_op op, int pr_type, int dsize, const int64_t *ds,
+             const char *outfeed_config) {
+  Shape shape = make_shape(pr_type, dsize, ds);
+  Outfeed(*op, shape, std::string(outfeed_config));
 }
 
 xla_op op_add(const xla_op lhs, const xla_op rhs) {
@@ -744,6 +773,22 @@ xla_op op_iota(const xla_builder b, int pr_type, size_t dsize,
                                     absl::Span<const int64_t>(ds, dsize));
   return new XlaOp(Iota(b, shape, increasing_dim));
   END_PROTECT_OP_B(b)
+}
+
+xla_op op_while(const xla_computation cond, const xla_computation body,
+                const xla_op init) {
+  BEGIN_PROTECT_OP
+  return new XlaOp(While(*cond, *body, *init));
+  END_PROTECT_OP(init)
+}
+
+xla_op op_conditional(const xla_op pred, const xla_op true_op,
+                      const xla_computation true_comp, const xla_op false_op,
+                      const xla_computation false_comp) {
+  BEGIN_PROTECT_OP
+  return new XlaOp(
+      Conditional(*pred, *true_op, *true_comp, *false_op, *false_comp));
+  END_PROTECT_OP(pred)
 }
 
 xla_builder op_builder(const xla_op arg) { return arg->builder(); }
