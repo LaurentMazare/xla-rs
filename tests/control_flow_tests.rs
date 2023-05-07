@@ -1,4 +1,4 @@
-use xla::{ElementType, Result};
+use xla::{ArrayElement, Result};
 
 #[test]
 fn while_op() -> Result<()> {

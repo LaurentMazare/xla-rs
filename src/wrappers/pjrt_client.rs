@@ -1,5 +1,5 @@
 //! A device (CPUs, GPUs, TPUs) where computations can be run.
-use super::{ElementType, Literal, PjRtBuffer, PjRtDevice, PjRtLoadedExecutable, XlaComputation};
+use super::{ArrayElement, Literal, PjRtBuffer, PjRtDevice, PjRtLoadedExecutable, XlaComputation};
 use crate::{c_lib, Error, Result};
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -99,7 +99,7 @@ impl PjRtClient {
     /// The source data is passed as a slice of the specified primitive type, as well as the
     /// dimensions. The dimensions have to match the number of elements in the source data,
     /// otherwise an error is returned.
-    pub fn buffer_from_host_buffer<T: ElementType>(
+    pub fn buffer_from_host_buffer<T: ArrayElement>(
         &self,
         data: &[T],
         dims: &[usize],

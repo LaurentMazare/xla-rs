@@ -1,4 +1,4 @@
-use super::{ElementType, FromPrimitive, NativeType, PrimitiveType, Shape};
+use super::{ArrayElement, FromPrimitive, NativeType, PrimitiveType, Shape};
 use crate::{c_lib, Error, Result};
 
 /// A literal represent a value, typically a multi-dimensional array, stored on the host device.
@@ -49,7 +49,7 @@ impl Literal {
 
     /// Get the first element from a literal. This returns an error if type `T` is not the
     /// primitive type that the literal uses.
-    pub fn get_first_element<T: NativeType + ElementType>(&self) -> Result<T> {
+    pub fn get_first_element<T: NativeType + ArrayElement>(&self) -> Result<T> {
         let ty = self.ty()?;
         if ty != T::PRIMITIVE_TYPE {
             Err(Error::ElementTypeMismatch { on_device: ty, on_host: T::PRIMITIVE_TYPE })?
@@ -104,7 +104,7 @@ impl Literal {
 
     /// Copy the literal data to a slice. This returns an error if the primitive type used by the
     /// literal is not `T` or if the number of elements in the slice and literal are different.
-    pub fn copy_raw_to<T: ElementType>(&self, dst: &mut [T]) -> Result<()> {
+    pub fn copy_raw_to<T: ArrayElement>(&self, dst: &mut [T]) -> Result<()> {
         let ty = self.ty()?;
         let element_count = self.element_count();
         if ty != T::PRIMITIVE_TYPE {
@@ -126,7 +126,7 @@ impl Literal {
     /// Copy data from a slice to the literal. This returns an error if the primitive type used
     /// by the literal is not `T` or if number of elements in the slice and the literal are
     /// different.
-    pub fn copy_raw_from<T: ElementType>(&mut self, src: &[T]) -> Result<()> {
+    pub fn copy_raw_from<T: ArrayElement>(&mut self, src: &[T]) -> Result<()> {
         let ty = self.ty()?;
         let element_count = self.element_count();
         if ty != T::PRIMITIVE_TYPE {
@@ -147,7 +147,7 @@ impl Literal {
 
     /// Copy the values stored in the literal in a newly created vector. The data is flattened out
     /// for literals with more than one dimension.
-    pub fn to_vec<T: ElementType>(&self) -> Result<Vec<T>> {
+    pub fn to_vec<T: ArrayElement>(&self) -> Result<Vec<T>> {
         let element_count = self.element_count();
         // Maybe we should use an uninitialized vec instead?
         let mut data = vec![T::ZERO; element_count];

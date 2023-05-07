@@ -1,6 +1,6 @@
 use anyhow::Result;
 extern crate xla;
-use xla::ElementType;
+use xla::ArrayElement;
 
 fn main() -> Result<()> {
     let client = xla::PjRtClient::cpu()?;

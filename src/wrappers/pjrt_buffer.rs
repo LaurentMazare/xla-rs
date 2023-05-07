@@ -1,5 +1,5 @@
 //! A view on a memory slice hosted on a device.
-use super::{ElementType, FromPrimitive, Literal, PjRtDevice, Shape};
+use super::{ArrayElement, FromPrimitive, Literal, PjRtDevice, Shape};
 use crate::{c_lib, Error, Result};
 
 /// A buffer represents a view on a memory slice hosted on a device.
@@ -47,7 +47,7 @@ impl PjRtBuffer {
     }
 
     /// Copy the data stored in a buffer to host memory in a blocking way.
-    pub fn copy_raw_to_host_sync<T: ElementType>(
+    pub fn copy_raw_to_host_sync<T: ArrayElement>(
         &self,
         dst: &mut [T],
         offset: usize,

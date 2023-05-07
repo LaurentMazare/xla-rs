@@ -79,7 +79,26 @@ impl PrimitiveType {
     }
 }
 
-pub trait ElementType: Copy {
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ElementType {
+    Pred,
+    S8,
+    S16,
+    S32,
+    S64,
+    U8,
+    U16,
+    U32,
+    U64,
+    F16,
+    F32,
+    Bf16,
+    F64,
+    C64,
+    C128,
+}
+
+pub trait ArrayElement: Copy {
     const PRIMITIVE_TYPE: PrimitiveType;
     const ELEMENT_SIZE_IN_BYTES: usize;
     const ZERO: Self;
@@ -188,7 +207,7 @@ native_type!(
 
 macro_rules! element_type {
     ($ty:ty, $v:ident, $sz:tt) => {
-        impl ElementType for $ty {
+        impl ArrayElement for $ty {
             const PRIMITIVE_TYPE: PrimitiveType = PrimitiveType::$v;
             const ELEMENT_SIZE_IN_BYTES: usize = $sz;
             const ZERO: Self = 0 as Self;
@@ -200,7 +219,7 @@ macro_rules! element_type {
 #[derive(Copy, Clone, Debug)]
 pub struct F16;
 
-impl ElementType for F16 {
+impl ArrayElement for F16 {
     const PRIMITIVE_TYPE: PrimitiveType = PrimitiveType::F16;
     const ELEMENT_SIZE_IN_BYTES: usize = 2;
     const ZERO: Self = Self;
@@ -210,7 +229,7 @@ impl ElementType for F16 {
 #[derive(Copy, Clone, Debug)]
 pub struct Bf16;
 
-impl ElementType for Bf16 {
+impl ArrayElement for Bf16 {
     const PRIMITIVE_TYPE: PrimitiveType = PrimitiveType::Bf16;
     const ELEMENT_SIZE_IN_BYTES: usize = 2;
     const ZERO: Self = Self;

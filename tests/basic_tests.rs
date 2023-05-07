@@ -1,4 +1,4 @@
-use xla::{ElementType, Result};
+use xla::{ArrayElement, Result};
 
 #[test]
 fn add_op() -> Result<()> {

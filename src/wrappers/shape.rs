@@ -1,4 +1,4 @@
-use super::{ElementType, PrimitiveType};
+use super::{ArrayElement, PrimitiveType};
 use crate::Error;
 
 /// A shape specifies a primitive type as well as some array dimensions.
@@ -11,7 +11,7 @@ pub struct Shape {
 
 impl Shape {
     /// Create a new shape.
-    pub fn new<E: ElementType>(dimensions: Vec<i64>) -> Shape {
+    pub fn new<E: ArrayElement>(dimensions: Vec<i64>) -> Shape {
         Shape { ty: E::PRIMITIVE_TYPE, dimensions, tuple_shapes_size: 0 }
     }
 

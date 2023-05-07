@@ -1,4 +1,4 @@
-use xla::{ElementType, FromRawBytes, PjRtBuffer, PjRtClient, PrimitiveType, Result, XlaOp};
+use xla::{ArrayElement, FromRawBytes, PjRtBuffer, PjRtClient, PrimitiveType, Result, XlaOp};
 
 #[allow(dead_code)]
 #[derive(Clone)]
@@ -24,7 +24,7 @@ pub struct VarStore {
 }
 
 impl VarBuilder {
-    pub fn new<B: ElementType, O: ElementType>(builder: &xla::XlaBuilder) -> Self {
+    pub fn new<B: ArrayElement, O: ArrayElement>(builder: &xla::XlaBuilder) -> Self {
         let vars = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
         Self {
             builder: builder.clone(),
