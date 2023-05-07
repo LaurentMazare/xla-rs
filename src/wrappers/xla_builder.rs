@@ -81,6 +81,7 @@ impl XlaBuilder {
         dims: &[i64],
         name: &str,
     ) -> Result<XlaOp> {
+        let name = std::ffi::CString::new(name).unwrap();
         let op = unsafe {
             c_lib::parameter(
                 self.ptr(),
@@ -88,7 +89,7 @@ impl XlaBuilder {
                 ty as i32,
                 dims.len() as i32,
                 dims.as_ptr(),
-                name.as_ptr() as *const libc::c_char,
+                name.as_ptr(),
             )
         };
         self.wrap(op)
@@ -96,14 +97,9 @@ impl XlaBuilder {
 
     /// Read a single value from the implicit streaming interface of the device.
     pub fn infeed(&self, ty: PrimitiveType, dims: &[i64], config: &str) -> Result<XlaOp> {
+        let config = std::ffi::CString::new(config).unwrap();
         let op = unsafe {
-            c_lib::infeed(
-                self.ptr(),
-                ty as i32,
-                dims.len() as i32,
-                dims.as_ptr(),
-                config.as_ptr() as *const libc::c_char,
-            )
+            c_lib::infeed(self.ptr(), ty as i32, dims.len() as i32, dims.as_ptr(), config.as_ptr())
         };
         self.wrap(op)
     }

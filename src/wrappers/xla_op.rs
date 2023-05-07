@@ -388,14 +388,9 @@ impl XlaOp {
     }
 
     pub fn outfeed(&self, ty: PrimitiveType, dims: &[i64], config: &str) {
+        let config = std::ffi::CString::new(config).unwrap();
         unsafe {
-            c_lib::outfeed(
-                self.op,
-                ty as i32,
-                dims.len() as i32,
-                dims.as_ptr(),
-                config.as_ptr() as *const libc::c_char,
-            )
+            c_lib::outfeed(self.op, ty as i32, dims.len() as i32, dims.as_ptr(), config.as_ptr())
         }
     }
 
