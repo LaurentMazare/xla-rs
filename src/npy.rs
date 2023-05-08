@@ -288,7 +288,7 @@ impl crate::Literal {
         f.write_all(&[1u8, 0u8])?;
         let shape = self.array_shape()?;
         let header =
-            Header { descr: shape.ty(), fortran_order: false, shape: shape.dimensions().to_vec() };
+            Header { descr: shape.ty(), fortran_order: false, shape: shape.dims().to_vec() };
         let mut header = header.to_string()?;
         let pad = 16 - (NPY_MAGIC_STRING.len() + 5 + header.len()) % 16;
         for _ in 0..pad % 16 {
@@ -299,9 +299,7 @@ impl crate::Literal {
         f.write_all(header.as_bytes())?;
         let numel = self.element_count();
         let element_type = self.element_type()?;
-        let elt_size_in_bytes = element_type.element_size_in_bytes().ok_or_else(|| {
-            Error::Npy(format!("unsupported element type for npy {element_type:?}"))
-        })?;
+        let elt_size_in_bytes = element_type.element_size_in_bytes();
         let mut content = vec![0u8; numel * elt_size_in_bytes];
         self.copy_raw_to(&mut content)?;
         f.write_all(&content)?;

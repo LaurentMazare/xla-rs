@@ -53,28 +53,26 @@ pub enum PrimitiveType {
 }
 
 impl PrimitiveType {
-    /// The size for this element type in bytes if defined.
-    pub fn element_size_in_bytes(&self) -> Option<usize> {
+    fn element_type(self) -> Result<ElementType> {
         match self {
-            PrimitiveType::Invalid => None,
-            PrimitiveType::Pred => None,
-            PrimitiveType::S8 => Some(1),
-            PrimitiveType::S16 => Some(2),
-            PrimitiveType::S32 => Some(4),
-            PrimitiveType::S64 => Some(8),
-            PrimitiveType::U8 => Some(1),
-            PrimitiveType::U16 => Some(2),
-            PrimitiveType::U32 => Some(4),
-            PrimitiveType::U64 => Some(8),
-            PrimitiveType::F16 => Some(2),
-            PrimitiveType::F32 => Some(4),
-            PrimitiveType::Bf16 => Some(2),
-            PrimitiveType::F64 => Some(8),
-            PrimitiveType::C64 => Some(8),
-            PrimitiveType::C128 => Some(16),
-            PrimitiveType::Tuple => None,
-            PrimitiveType::OpaqueType => None,
-            PrimitiveType::Token => None,
+            Self::Pred => Ok(ElementType::Pred),
+            Self::S8 => Ok(ElementType::S8),
+            Self::S16 => Ok(ElementType::S16),
+            Self::S32 => Ok(ElementType::S32),
+            Self::S64 => Ok(ElementType::S64),
+            Self::U8 => Ok(ElementType::U8),
+            Self::U16 => Ok(ElementType::U16),
+            Self::U32 => Ok(ElementType::U32),
+            Self::U64 => Ok(ElementType::U64),
+            Self::F16 => Ok(ElementType::F16),
+            Self::F32 => Ok(ElementType::F32),
+            Self::Bf16 => Ok(ElementType::Bf16),
+            Self::F64 => Ok(ElementType::F64),
+            Self::C64 => Ok(ElementType::C64),
+            Self::C128 => Ok(ElementType::C128),
+            Self::Invalid | Self::Tuple | Self::OpaqueType | Self::Token => {
+                Err(Error::NotAnElementType { got: self })
+            }
         }
     }
 }
@@ -99,6 +97,27 @@ pub enum ElementType {
 }
 
 impl ElementType {
+    /// The size for this element type in bytes.
+    pub fn element_size_in_bytes(&self) -> usize {
+        match self {
+            Self::Pred => 1,
+            Self::S8 => 1,
+            Self::S16 => 2,
+            Self::S32 => 4,
+            Self::S64 => 8,
+            Self::U8 => 1,
+            Self::U16 => 2,
+            Self::U32 => 4,
+            Self::U64 => 8,
+            Self::F16 => 2,
+            Self::F32 => 4,
+            Self::Bf16 => 2,
+            Self::F64 => 8,
+            Self::C64 => 8,
+            Self::C128 => 16,
+        }
+    }
+
     pub fn primitive_type(&self) -> PrimitiveType {
         match self {
             Self::Pred => PrimitiveType::Pred,

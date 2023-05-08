@@ -15,6 +15,9 @@ pub enum Error {
     #[error("unexpected number of dimensions, expected: {expected}, got: {got} ({dims:?})")]
     UnexpectedNumberOfDims { expected: usize, got: usize, dims: Vec<i64> },
 
+    #[error("not an element type, got: {got:?}")]
+    NotAnElementType { got: crate::PrimitiveType },
+
     #[error("not an array, expected: {expected:?}, got: {got:?}")]
     NotAnArray { expected: Option<usize>, got: crate::Shape },
 
@@ -22,7 +25,7 @@ pub enum Error {
     UnexpectedNumberOfElemsInTuple { expected: usize, got: usize },
 
     #[error("element type mismatch, on-device: {on_device:?}, on-host: {on_host:?}")]
-    ElementTypeMismatch { on_device: crate::PrimitiveType, on_host: crate::PrimitiveType },
+    ElementTypeMismatch { on_device: crate::ElementType, on_host: crate::ElementType },
 
     #[error("unsupported element type for {op}: {ty:?}")]
     UnsupportedElementType { ty: crate::PrimitiveType, op: &'static str },
@@ -30,7 +33,7 @@ pub enum Error {
     #[error(
         "target buffer is too large, offset {offset}, shape {shape:?}, buffer_len: {buffer_len}"
     )]
-    TargetBufferIsTooLarge { offset: usize, shape: crate::Shape, buffer_len: usize },
+    TargetBufferIsTooLarge { offset: usize, shape: crate::ArrayShape, buffer_len: usize },
 
     #[error("binary buffer is too large, element count {element_count}, buffer_len: {buffer_len}")]
     BinaryBufferIsTooLarge { element_count: usize, buffer_len: usize },

@@ -53,8 +53,8 @@ impl PjRtBuffer {
         offset: usize,
     ) -> Result<()> {
         let shape = ArrayShape::try_from(&self.on_device_shape()?)?;
-        let on_host = T::TY.primitive_type();
-        let on_device = shape.primitive_type();
+        let on_host = T::TY;
+        let on_device = shape.primitive_type().element_type()?;
         if on_device != on_host {
             Err(Error::ElementTypeMismatch { on_device, on_host })?
         }

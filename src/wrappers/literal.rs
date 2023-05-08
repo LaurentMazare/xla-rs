@@ -1,4 +1,6 @@
-use super::{ArrayElement, ArrayShape, FromPrimitive, NativeType, PrimitiveType, Shape};
+use super::{
+    ArrayElement, ArrayShape, ElementType, FromPrimitive, NativeType, PrimitiveType, Shape,
+};
 use crate::{c_lib, Error, Result};
 
 /// A literal represent a value, typically a multi-dimensional array, stored on the host device.
@@ -23,11 +25,12 @@ impl Literal {
     /// The data is untyped, i.e. it is a sequence of bytes represented as a slice of `u8` even if
     /// the primitive type is not `U8`.
     pub fn create_from_shape_and_untyped_data(
-        ty: PrimitiveType,
+        ty: ElementType,
         dims: &[usize],
         untyped_data: &[u8],
     ) -> Result<Self> {
         let dims64: Vec<_> = dims.iter().map(|x| *x as i64).collect();
+        let ty = ty.primitive_type();
         let v = unsafe {
             c_lib::literal_create_from_shape_and_data(
                 ty as i32,
@@ -51,9 +54,8 @@ impl Literal {
     /// primitive type that the literal uses.
     pub fn get_first_element<T: NativeType + ArrayElement>(&self) -> Result<T> {
         let ty = self.ty()?;
-        let on_host = T::TY.primitive_type();
-        if ty != on_host {
-            Err(Error::ElementTypeMismatch { on_device: ty, on_host })?
+        if ty != T::TY {
+            Err(Error::ElementTypeMismatch { on_device: ty, on_host: T::TY })?
         }
         if self.element_count() == 0 {
             Err(Error::EmptyLiteral)?
@@ -68,15 +70,21 @@ impl Literal {
     }
 
     /// The primitive type used by element stored in this literal.
-    pub fn element_type(&self) -> Result<PrimitiveType> {
+    pub fn primitive_type(&self) -> Result<PrimitiveType> {
         let ty = unsafe { c_lib::literal_element_type(self.0) };
         match FromPrimitive::from_i32(ty) {
             None => Err(Error::UnexpectedElementType(ty)),
             Some(ty) => Ok(ty),
         }
     }
-    /// The primitive type used by element stored in this literal, shortcut for `element_type`.
-    pub fn ty(&self) -> Result<PrimitiveType> {
+
+    /// The element type used by element stored in this literal.
+    pub fn element_type(&self) -> Result<ElementType> {
+        self.primitive_type()?.element_type()
+    }
+
+    /// The element type used by element stored in this literal, shortcut for `element_type`.
+    pub fn ty(&self) -> Result<ElementType> {
         self.element_type()
     }
 
@@ -112,9 +120,8 @@ impl Literal {
     pub fn copy_raw_to<T: ArrayElement>(&self, dst: &mut [T]) -> Result<()> {
         let ty = self.ty()?;
         let element_count = self.element_count();
-        let on_host = T::TY.primitive_type();
-        if ty != on_host {
-            Err(Error::ElementTypeMismatch { on_device: ty, on_host })?
+        if ty != T::TY {
+            Err(Error::ElementTypeMismatch { on_device: ty, on_host: T::TY })?
         }
         if dst.len() > element_count {
             Err(Error::BinaryBufferIsTooLarge { element_count, buffer_len: dst.len() })?
@@ -135,9 +142,8 @@ impl Literal {
     pub fn copy_raw_from<T: ArrayElement>(&mut self, src: &[T]) -> Result<()> {
         let ty = self.ty()?;
         let element_count = self.element_count();
-        let on_host = T::TY.primitive_type();
-        if ty != on_host {
-            Err(Error::ElementTypeMismatch { on_device: ty, on_host })?
+        if ty != T::TY {
+            Err(Error::ElementTypeMismatch { on_device: ty, on_host: T::TY })?
         }
         if src.len() > element_count {
             Err(Error::BinaryBufferIsTooLarge { element_count, buffer_len: src.len() })?
