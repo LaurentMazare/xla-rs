@@ -184,6 +184,7 @@ void xla_op_free(xla_op);
 
 int shape_dimensions_size(const shape);
 size_t shape_tuple_shapes_size(const shape);
+shape shape_tuple_shapes(const shape, int);
 int shape_element_type(const shape);
 int64_t shape_dimensions(const shape, int);
 void shape_free(shape);

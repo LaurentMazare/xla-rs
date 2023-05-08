@@ -14,7 +14,7 @@ use clap::Parser;
 use rand::prelude::*;
 
 extern crate xla;
-use xla::{PrimitiveType, XlaBuilder, XlaOp};
+use xla::{ElementType, PrimitiveType, XlaBuilder, XlaOp};
 
 mod sentencepiece;
 use sentencepiece::Tokenizer;
@@ -195,9 +195,8 @@ impl Mlp {
 }
 
 fn masked_fill<T: xla::NativeType>(on_false: &XlaOp, mask: &XlaOp, on_true: T) -> Result<XlaOp> {
-    let shape = mask.shape()?;
-    let on_true =
-        mask.builder().c0(on_true)?.convert(on_false.ty()?)?.broadcast(shape.dimensions())?;
+    let shape = mask.array_shape()?;
+    let on_true = mask.builder().c0(on_true)?.convert(on_false.ty()?)?.broadcast(shape.dims())?;
     let m = mask.select(&on_true, on_false)?;
     Ok(m)
 }
@@ -255,15 +254,15 @@ impl CausalSelfAttention {
         let v = v.reshape(&target_dim)?.swap_dims(1, 2)?;
         let q = self.apply_rotary_emb(&q, &freqs_cis)?;
         let k = self.apply_rotary_emb(&k, &freqs_cis)?;
-        let k_shape = k.shape()?;
+        let k_shape = k.array_shape()?;
         let att = (q.matmul(&k.swap_dims(-2, -1)?)?
             * builder.c0(1f32 / (k_shape.last_dim().unwrap() as f32).sqrt())?.convert(ty)?)?;
         let mask = builder
-            .one(PrimitiveType::S32)?
+            .one(ElementType::S32)?
             .broadcast(&[t, t])?
             .lower_triangle()?
             .reshape(&[1, 1, t, t])?;
-        let zero = builder.zero(PrimitiveType::S32)?.broadcast(&[b, self.n_head as i64, t, t])?;
+        let zero = builder.zero(ElementType::S32)?.broadcast(&[b, self.n_head as i64, t, t])?;
         let att = masked_fill(&att, &mask.eq(&zero)?, f32::NEG_INFINITY)?;
         let y = att.softmax(-1)?.matmul(&v)?;
         let y = y.swap_dims(1, 2)?.reshape(&[b, t, c])?;
@@ -351,7 +350,7 @@ fn llama_computation(args: &Args, bsize: i64) -> Result<(xla::XlaComputation, Va
     let config = Config::config_7b();
     let freqs_cis = precompute_freqs_cis(&config, &b)?;
     let llama = Llama::new(vb.clone(), &config)?;
-    let input = vb.arg("tokens", PrimitiveType::U32, &[bsize as usize, CONTEXT_SIZE])?;
+    let input = vb.arg("tokens", ElementType::U32, &[bsize as usize, CONTEXT_SIZE])?;
     let logits = llama.forward(&input, &freqs_cis)?.convert(PrimitiveType::F32)?;
     let prs = (logits / b.c0(args.temperature)?)?.softmax(-1)?;
     Ok((prs.build()?, vb.into_store()))

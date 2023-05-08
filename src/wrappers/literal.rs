@@ -99,16 +99,7 @@ impl Literal {
     pub fn shape(&self) -> Result<Shape> {
         let mut out: c_lib::shape = std::ptr::null_mut();
         unsafe { c_lib::literal_shape(self.0, &mut out) };
-        let rank = unsafe { c_lib::shape_dimensions_size(out) };
-        let dimensions: Vec<_> =
-            (0..rank).map(|i| unsafe { c_lib::shape_dimensions(out, i) }).collect();
-        let ty = unsafe { c_lib::shape_element_type(out) };
-        let tuple_shapes_size = unsafe { c_lib::shape_tuple_shapes_size(out) };
-        unsafe { c_lib::shape_free(out) };
-        match FromPrimitive::from_i32(ty) {
-            None => Err(Error::UnexpectedElementType(ty)),
-            Some(ty) => Ok(Shape { ty, dimensions, tuple_shapes_size }),
-        }
+        unsafe { Shape::from_ptr(out) }
     }
 
     pub fn array_shape(&self) -> Result<ArrayShape> {
@@ -207,7 +198,7 @@ impl Literal {
     /// value by an empty tuple, no copy is performed.
     pub fn decompose_tuple(&mut self) -> Result<Vec<Literal>> {
         match self.shape()? {
-            Shape::Array(_) => Ok(vec![]),
+            Shape::Array(_) | Shape::Unsupported(_) => Ok(vec![]),
             Shape::Tuple(shapes) => {
                 let tuple_len = shapes.len();
                 let mut outputs = vec![std::ptr::null_mut::<c_lib::_literal>(); tuple_len];

@@ -12,7 +12,7 @@ fn add_op() -> Result<()> {
     let result = result.execute::<xla::Literal>(&[])?;
     let result = result[0][0].to_literal_sync()?;
     assert_eq!(result.element_count(), 2);
-    assert_eq!(result.shape()?, xla::Shape::new::<f32>(vec![2]));
+    assert_eq!(result.array_shape()?, xla::ArrayShape::new::<f32>(vec![2]));
     assert_eq!(result.get_first_element::<f32>()?, 85.);
     assert_eq!(result.to_vec::<f32>()?, [85., 85.]);
     Ok(())
@@ -22,7 +22,7 @@ fn add_op() -> Result<()> {
 fn sum_op() -> Result<()> {
     let client = xla::PjRtClient::cpu()?;
     let builder = xla::XlaBuilder::new("test");
-    let x = builder.parameter(0, f32::PRIMITIVE_TYPE, &[2], "x")?;
+    let x = builder.parameter(0, f32::TY, &[2], "x")?;
     let sum = x.reduce_sum(&[], false)?.build()?.compile(&client)?;
     let input = xla::Literal::vec1(&[4.2f32, 1.337f32]);
     let result = sum.execute::<xla::Literal>(&[input])?;
@@ -30,24 +30,24 @@ fn sum_op() -> Result<()> {
     assert_eq!(result.to_vec::<f32>()?, [4.2, 1.337]);
 
     let builder = xla::XlaBuilder::new("test");
-    let x = builder.parameter(0, f32::PRIMITIVE_TYPE, &[-2], "x")?;
+    let x = builder.parameter(0, f32::TY, &[-2], "x")?;
     let sum = x.reduce_sum(&[0], false)?.build()?.compile(&client)?;
     let input = xla::Literal::vec1(&[4.2f32, 1.337f32]);
     let result = sum.execute::<xla::Literal>(&[input])?;
     let result = result[0][0].to_literal_sync()?;
     assert_eq!(result.to_vec::<f32>()?, [5.5369997]);
     // Dimensions got reduced.
-    assert_eq!(result.shape()?.dimensions(), []);
+    assert_eq!(result.array_shape()?.dims(), []);
 
     let builder = xla::XlaBuilder::new("test");
-    let x = builder.parameter(0, f32::PRIMITIVE_TYPE, &[-2], "x")?;
+    let x = builder.parameter(0, f32::TY, &[-2], "x")?;
     let sum = x.reduce_sum(&[0], true)?.build()?.compile(&client)?;
     let input = xla::Literal::vec1(&[4.2f32, 1.337f32]);
     let result = sum.execute::<xla::Literal>(&[input])?;
     let result = result[0][0].to_literal_sync()?;
     assert_eq!(result.to_vec::<f32>()?, [5.5369997]);
     // keep_dims = true in this case.
-    assert_eq!(result.shape()?.dimensions(), [1]);
+    assert_eq!(result.array_shape()?.dims(), [1]);
     Ok(())
 }
 
@@ -55,14 +55,14 @@ fn sum_op() -> Result<()> {
 fn mean_op() -> Result<()> {
     let client = xla::PjRtClient::cpu()?;
     let builder = xla::XlaBuilder::new("test");
-    let x = builder.parameter(0, f32::PRIMITIVE_TYPE, &[-2], "x")?;
+    let x = builder.parameter(0, f32::TY, &[-2], "x")?;
     let sum = x.reduce_mean(&[0], false)?.build()?.compile(&client)?;
     let input = xla::Literal::vec1(&[4.2f32, 1.337f32]);
     let result = sum.execute::<xla::Literal>(&[input])?;
     let result = result[0][0].to_literal_sync()?;
     assert_eq!(result.to_vec::<f32>()?, [2.7684999]);
     // Dimensions got reduced.
-    assert_eq!(result.shape()?.dimensions(), []);
+    assert_eq!(result.array_shape()?.dims(), []);
     Ok(())
 }
 
@@ -70,8 +70,8 @@ fn mean_op() -> Result<()> {
 fn tuple_op() -> Result<()> {
     let client = xla::PjRtClient::cpu()?;
     let builder = xla::XlaBuilder::new("test");
-    let x = builder.parameter(0, f32::PRIMITIVE_TYPE, &[-1], "x")?;
-    let y = builder.parameter(1, f32::PRIMITIVE_TYPE, &[2], "x")?;
+    let x = builder.parameter(0, f32::TY, &[-1], "x")?;
+    let y = builder.parameter(1, f32::TY, &[2], "x")?;
     let tuple = builder.tuple(&[x, y])?.build()?.compile(&client)?;
     let x = xla::Literal::scalar(3.1f32);
     let y = xla::Literal::vec1(&[4.2f32, 1.337f32]);

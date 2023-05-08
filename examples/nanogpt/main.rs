@@ -9,14 +9,14 @@ use anyhow::Result;
 use rand::prelude::*;
 
 extern crate xla;
-use xla::{Literal, PjRtLoadedExecutable, PrimitiveType, XlaBuilder, XlaOp};
+use xla::{ElementType, Literal, PjRtLoadedExecutable, XlaBuilder, XlaOp};
 
 mod tokenizer;
 mod var_store;
 use tokenizer::Tokenizer;
 use var_store::VarStore;
 
-const TY: PrimitiveType = PrimitiveType::F32;
+const TY: ElementType = ElementType::F32;
 const TEMPERATURE: f32 = 0.8f32;
 const USE_CPU: bool = false;
 const NUM_SAMPLES: usize = 10;
@@ -104,8 +104,8 @@ impl Linear {
 }
 
 fn masked_fill<T: xla::NativeType>(on_false: &XlaOp, mask: &XlaOp, on_true: T) -> Result<XlaOp> {
-    let shape = mask.shape()?;
-    let on_true = mask.builder().c0(on_true)?.broadcast(shape.dimensions())?;
+    let shape = mask.array_shape()?;
+    let on_true = mask.builder().c0(on_true)?.broadcast(shape.dims())?;
     let m = mask.select(&on_true, on_false)?;
     Ok(m)
 }
@@ -137,15 +137,15 @@ impl CausalSelfAttention {
         let k = k.reshape(&target_dim)?.swap_dims(1, 2)?;
         let q = q.reshape(&target_dim)?.swap_dims(1, 2)?;
         let v = v.reshape(&target_dim)?.swap_dims(1, 2)?;
-        let k_shape = k.shape()?;
+        let k_shape = k.array_shape()?;
         let att = (q.matmul(&k.swap_dims(-2, -1)?)?
             * builder.c0(1f32 / (k_shape.last_dim().unwrap() as f32).sqrt()))?;
         let mask = builder
-            .one(PrimitiveType::S32)?
+            .one(ElementType::S32)?
             .broadcast(&[t, t])?
             .lower_triangle()?
             .reshape(&[1, 1, t, t])?;
-        let zero = builder.zero(PrimitiveType::S32)?.broadcast(&[b, self.n_head as i64, t, t])?;
+        let zero = builder.zero(ElementType::S32)?.broadcast(&[b, self.n_head as i64, t, t])?;
         let att = masked_fill(&att, &mask.eq(&zero)?, f32::NEG_INFINITY)?;
         let y = att.softmax(-1)?.matmul(&v)?;
         let y = y.swap_dims(1, 2)?.reshape(&[b, t, c])?;
@@ -253,7 +253,7 @@ fn gpt_computation(vs: VarStore, bsize: i64) -> Result<xla::XlaComputation> {
     let b = XlaBuilder::new("gpt");
     let config = GptConfig::default();
     let gpt = Gpt::new(vs, &config)?;
-    let input = b.parameter(0, PrimitiveType::S32, &[bsize, config.block_size as i64], "tokens")?;
+    let input = b.parameter(0, ElementType::S32, &[bsize, config.block_size as i64], "tokens")?;
     let logits = gpt.forward(&input)?;
     let prs = (logits / b.c0(TEMPERATURE))?.softmax(-1)?;
     Ok(prs.build()?)

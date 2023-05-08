@@ -799,6 +799,10 @@ void xla_op_free(xla_op o) { delete o; }
 
 size_t shape_tuple_shapes_size(const shape s) { return s->tuple_shapes_size(); }
 
+shape shape_tuple_shapes(const shape s, int i) {
+  return (shape)&s->tuple_shapes(i);
+}
+
 int shape_dimensions_size(const shape s) { return s->dimensions_size(); }
 
 int shape_element_type(const shape s) { return s->element_type(); }

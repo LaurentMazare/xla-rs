@@ -1,5 +1,5 @@
 use super::{ArrayElement, ElementType, PrimitiveType};
-use crate::Error;
+use crate::{c_lib, Error};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ArrayShape {
@@ -8,6 +8,20 @@ pub struct ArrayShape {
 }
 
 impl ArrayShape {
+    /// Create a new array shape.
+    pub fn new<E: ArrayElement>(dims: Vec<i64>) -> Self {
+        Self { ty: E::TY, dims }
+    }
+
+    /// Create a new array shape.
+    pub fn new_with_type(ty: ElementType, dims: Vec<i64>) -> Self {
+        Self { ty, dims }
+    }
+
+    pub fn element_type(&self) -> ElementType {
+        self.ty
+    }
+
     pub fn ty(&self) -> ElementType {
         self.ty
     }
@@ -41,6 +55,7 @@ impl ArrayShape {
 pub enum Shape {
     Tuple(Vec<Shape>),
     Array(ArrayShape),
+    Unsupported(PrimitiveType),
 }
 
 impl Shape {
@@ -64,21 +79,52 @@ impl Shape {
         match self {
             Self::Tuple(_) => PrimitiveType::Tuple,
             Self::Array(a) => a.ty.primitive_type(),
+            Self::Unsupported(ty) => *ty,
         }
     }
 
     pub fn is_tuple(&self) -> bool {
         match self {
             Self::Tuple(_) => true,
-            Self::Array { .. } => false,
+            Self::Array { .. } | Self::Unsupported(_) => false,
         }
     }
 
     pub fn tuple_size(&self) -> Option<usize> {
         match self {
             Self::Tuple(shapes) => Some(shapes.len()),
-            Self::Array { .. } => None,
+            Self::Array { .. } | Self::Unsupported(_) => None,
         }
+    }
+
+    pub(crate) unsafe fn from_ptr(ptr: c_lib::shape) -> crate::Result<Self> {
+        fn from_ptr_rec(ptr: c_lib::shape) -> crate::Result<Shape> {
+            let ty = unsafe { c_lib::shape_element_type(ptr) };
+            let ty = super::FromPrimitive::from_i32(ty)
+                .ok_or_else(|| Error::UnexpectedElementType(ty))?;
+            match ty {
+                PrimitiveType::Tuple => {
+                    let elem_cnt = unsafe { c_lib::shape_tuple_shapes_size(ptr) };
+                    let shapes: crate::Result<Vec<_>> = (0..elem_cnt)
+                        .map(|i| from_ptr_rec(unsafe { c_lib::shape_tuple_shapes(ptr, i as i32) }))
+                        .collect();
+                    Ok(Shape::Tuple(shapes?))
+                }
+                ty => match ty.element_type() {
+                    Ok(ty) => {
+                        let rank = unsafe { c_lib::shape_dimensions_size(ptr) };
+                        let dims: Vec<_> =
+                            (0..rank).map(|i| unsafe { c_lib::shape_dimensions(ptr, i) }).collect();
+                        Ok(Shape::Array(ArrayShape { ty, dims }))
+                    }
+                    Err(_) => Ok(Shape::Unsupported(ty)),
+                },
+            }
+        }
+
+        let shape = from_ptr_rec(ptr);
+        unsafe { c_lib::shape_free(ptr) };
+        shape
     }
 }
 
@@ -87,7 +133,9 @@ impl TryFrom<&Shape> for ArrayShape {
 
     fn try_from(value: &Shape) -> Result<Self, Self::Error> {
         match value {
-            Shape::Tuple(_) => Err(Error::NotAnArray { expected: None, got: value.clone() }),
+            Shape::Tuple(_) | Shape::Unsupported(_) => {
+                Err(Error::NotAnArray { expected: None, got: value.clone() })
+            }
             Shape::Array(a) => Ok(a.clone()),
         }
     }
@@ -116,7 +164,7 @@ macro_rules! extract_dims {
 
             fn try_from(value: &Shape) -> Result<Self, Self::Error> {
                 match value {
-                    Shape::Tuple(_) => {
+                    Shape::Tuple(_) | Shape::Unsupported(_) => {
                         Err(Error::NotAnArray { expected: Some($cnt), got: value.clone() })
                     }
                     Shape::Array(a) => Self::try_from(a),

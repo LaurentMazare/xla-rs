@@ -29,7 +29,7 @@ fn main() -> Result<()> {
         result.to_vec::<f32>(),
         result.get_first_element::<f32>()?,
     );
-    let param = xla_builder.parameter_with_shape(0, &xla::Shape::new::<f32>(vec![]), "p")?;
+    let param = xla_builder.parameter_with_shape(0, &xla::ArrayShape::new::<f32>(vec![]), "p")?;
     let sum = param.add_(&param)?;
     let sum = sum.sqrt()?.build()?;
     let result = client.compile(&sum)?;
