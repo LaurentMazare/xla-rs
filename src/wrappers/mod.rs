@@ -17,7 +17,7 @@ pub use pjrt_buffer::PjRtBuffer;
 pub use pjrt_client::PjRtClient;
 pub use pjrt_device::PjRtDevice;
 pub use pjrt_loaded_executable::PjRtLoadedExecutable;
-pub use shape::Shape;
+pub use shape::{ArrayShape, Shape};
 pub use xla_builder::XlaBuilder;
 pub use xla_op::XlaOp;
 
@@ -53,28 +53,26 @@ pub enum PrimitiveType {
 }
 
 impl PrimitiveType {
-    /// The size for this element type in bytes if defined.
-    pub fn element_size_in_bytes(&self) -> Option<usize> {
+    fn element_type(self) -> Result<ElementType> {
         match self {
-            PrimitiveType::Invalid => None,
-            PrimitiveType::Pred => None,
-            PrimitiveType::S8 => Some(1),
-            PrimitiveType::S16 => Some(2),
-            PrimitiveType::S32 => Some(4),
-            PrimitiveType::S64 => Some(8),
-            PrimitiveType::U8 => Some(1),
-            PrimitiveType::U16 => Some(2),
-            PrimitiveType::U32 => Some(4),
-            PrimitiveType::U64 => Some(8),
-            PrimitiveType::F16 => Some(2),
-            PrimitiveType::F32 => Some(4),
-            PrimitiveType::Bf16 => Some(2),
-            PrimitiveType::F64 => Some(8),
-            PrimitiveType::C64 => Some(8),
-            PrimitiveType::C128 => Some(16),
-            PrimitiveType::Tuple => None,
-            PrimitiveType::OpaqueType => None,
-            PrimitiveType::Token => None,
+            Self::Pred => Ok(ElementType::Pred),
+            Self::S8 => Ok(ElementType::S8),
+            Self::S16 => Ok(ElementType::S16),
+            Self::S32 => Ok(ElementType::S32),
+            Self::S64 => Ok(ElementType::S64),
+            Self::U8 => Ok(ElementType::U8),
+            Self::U16 => Ok(ElementType::U16),
+            Self::U32 => Ok(ElementType::U32),
+            Self::U64 => Ok(ElementType::U64),
+            Self::F16 => Ok(ElementType::F16),
+            Self::F32 => Ok(ElementType::F32),
+            Self::Bf16 => Ok(ElementType::Bf16),
+            Self::F64 => Ok(ElementType::F64),
+            Self::C64 => Ok(ElementType::C64),
+            Self::C128 => Ok(ElementType::C128),
+            Self::Invalid | Self::Tuple | Self::OpaqueType | Self::Token => {
+                Err(Error::NotAnElementType { got: self })
+            }
         }
     }
 }
@@ -98,8 +96,51 @@ pub enum ElementType {
     C128,
 }
 
+impl ElementType {
+    /// The size for this element type in bytes.
+    pub fn element_size_in_bytes(&self) -> usize {
+        match self {
+            Self::Pred => 1,
+            Self::S8 => 1,
+            Self::S16 => 2,
+            Self::S32 => 4,
+            Self::S64 => 8,
+            Self::U8 => 1,
+            Self::U16 => 2,
+            Self::U32 => 4,
+            Self::U64 => 8,
+            Self::F16 => 2,
+            Self::F32 => 4,
+            Self::Bf16 => 2,
+            Self::F64 => 8,
+            Self::C64 => 8,
+            Self::C128 => 16,
+        }
+    }
+
+    pub fn primitive_type(&self) -> PrimitiveType {
+        match self {
+            Self::Pred => PrimitiveType::Pred,
+            Self::S8 => PrimitiveType::S8,
+            Self::S16 => PrimitiveType::S16,
+            Self::S32 => PrimitiveType::S32,
+            Self::S64 => PrimitiveType::S64,
+            Self::U8 => PrimitiveType::U8,
+            Self::U16 => PrimitiveType::U16,
+            Self::U32 => PrimitiveType::U32,
+            Self::U64 => PrimitiveType::U64,
+            Self::F16 => PrimitiveType::F16,
+            Self::F32 => PrimitiveType::F32,
+            Self::Bf16 => PrimitiveType::Bf16,
+            Self::F64 => PrimitiveType::F64,
+            Self::C64 => PrimitiveType::C64,
+            Self::C128 => PrimitiveType::C128,
+        }
+    }
+}
+
 pub trait ArrayElement: Copy {
-    const PRIMITIVE_TYPE: PrimitiveType;
+    const TY: ElementType;
     const ELEMENT_SIZE_IN_BYTES: usize;
     const ZERO: Self;
 }
@@ -208,7 +249,7 @@ native_type!(
 macro_rules! element_type {
     ($ty:ty, $v:ident, $sz:tt) => {
         impl ArrayElement for $ty {
-            const PRIMITIVE_TYPE: PrimitiveType = PrimitiveType::$v;
+            const TY: ElementType = ElementType::$v;
             const ELEMENT_SIZE_IN_BYTES: usize = $sz;
             const ZERO: Self = 0 as Self;
         }
@@ -220,7 +261,7 @@ macro_rules! element_type {
 pub struct F16;
 
 impl ArrayElement for F16 {
-    const PRIMITIVE_TYPE: PrimitiveType = PrimitiveType::F16;
+    const TY: ElementType = ElementType::F16;
     const ELEMENT_SIZE_IN_BYTES: usize = 2;
     const ZERO: Self = Self;
 }
@@ -230,7 +271,7 @@ impl ArrayElement for F16 {
 pub struct Bf16;
 
 impl ArrayElement for Bf16 {
-    const PRIMITIVE_TYPE: PrimitiveType = PrimitiveType::Bf16;
+    const TY: ElementType = ElementType::Bf16;
     const ELEMENT_SIZE_IN_BYTES: usize = 2;
     const ZERO: Self = Self;
 }

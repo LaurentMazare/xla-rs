@@ -1,4 +1,6 @@
-use super::{ArrayElement, FromPrimitive, NativeType, PrimitiveType, Shape};
+use super::{
+    ArrayElement, ArrayShape, ElementType, FromPrimitive, NativeType, PrimitiveType, Shape,
+};
 use crate::{c_lib, Error, Result};
 
 /// A literal represent a value, typically a multi-dimensional array, stored on the host device.
@@ -23,11 +25,12 @@ impl Literal {
     /// The data is untyped, i.e. it is a sequence of bytes represented as a slice of `u8` even if
     /// the primitive type is not `U8`.
     pub fn create_from_shape_and_untyped_data(
-        ty: PrimitiveType,
+        ty: ElementType,
         dims: &[usize],
         untyped_data: &[u8],
     ) -> Result<Self> {
         let dims64: Vec<_> = dims.iter().map(|x| *x as i64).collect();
+        let ty = ty.primitive_type();
         let v = unsafe {
             c_lib::literal_create_from_shape_and_data(
                 ty as i32,
@@ -51,8 +54,8 @@ impl Literal {
     /// primitive type that the literal uses.
     pub fn get_first_element<T: NativeType + ArrayElement>(&self) -> Result<T> {
         let ty = self.ty()?;
-        if ty != T::PRIMITIVE_TYPE {
-            Err(Error::ElementTypeMismatch { on_device: ty, on_host: T::PRIMITIVE_TYPE })?
+        if ty != T::TY {
+            Err(Error::ElementTypeMismatch { on_device: ty, on_host: T::TY })?
         }
         if self.element_count() == 0 {
             Err(Error::EmptyLiteral)?
@@ -67,15 +70,21 @@ impl Literal {
     }
 
     /// The primitive type used by element stored in this literal.
-    pub fn element_type(&self) -> Result<PrimitiveType> {
+    pub fn primitive_type(&self) -> Result<PrimitiveType> {
         let ty = unsafe { c_lib::literal_element_type(self.0) };
         match FromPrimitive::from_i32(ty) {
             None => Err(Error::UnexpectedElementType(ty)),
             Some(ty) => Ok(ty),
         }
     }
-    /// The primitive type used by element stored in this literal, shortcut for `element_type`.
-    pub fn ty(&self) -> Result<PrimitiveType> {
+
+    /// The element type used by element stored in this literal.
+    pub fn element_type(&self) -> Result<ElementType> {
+        self.primitive_type()?.element_type()
+    }
+
+    /// The element type used by element stored in this literal, shortcut for `element_type`.
+    pub fn ty(&self) -> Result<ElementType> {
         self.element_type()
     }
 
@@ -90,16 +99,11 @@ impl Literal {
     pub fn shape(&self) -> Result<Shape> {
         let mut out: c_lib::shape = std::ptr::null_mut();
         unsafe { c_lib::literal_shape(self.0, &mut out) };
-        let rank = unsafe { c_lib::shape_dimensions_size(out) };
-        let dimensions: Vec<_> =
-            (0..rank).map(|i| unsafe { c_lib::shape_dimensions(out, i) }).collect();
-        let ty = unsafe { c_lib::shape_element_type(out) };
-        let tuple_shapes_size = unsafe { c_lib::shape_tuple_shapes_size(out) };
-        unsafe { c_lib::shape_free(out) };
-        match FromPrimitive::from_i32(ty) {
-            None => Err(Error::UnexpectedElementType(ty)),
-            Some(ty) => Ok(Shape { ty, dimensions, tuple_shapes_size }),
-        }
+        unsafe { Shape::from_ptr(out) }
+    }
+
+    pub fn array_shape(&self) -> Result<ArrayShape> {
+        ArrayShape::try_from(&self.shape()?)
     }
 
     /// Copy the literal data to a slice. This returns an error if the primitive type used by the
@@ -107,8 +111,8 @@ impl Literal {
     pub fn copy_raw_to<T: ArrayElement>(&self, dst: &mut [T]) -> Result<()> {
         let ty = self.ty()?;
         let element_count = self.element_count();
-        if ty != T::PRIMITIVE_TYPE {
-            Err(Error::ElementTypeMismatch { on_device: ty, on_host: T::PRIMITIVE_TYPE })?
+        if ty != T::TY {
+            Err(Error::ElementTypeMismatch { on_device: ty, on_host: T::TY })?
         }
         if dst.len() > element_count {
             Err(Error::BinaryBufferIsTooLarge { element_count, buffer_len: dst.len() })?
@@ -129,8 +133,8 @@ impl Literal {
     pub fn copy_raw_from<T: ArrayElement>(&mut self, src: &[T]) -> Result<()> {
         let ty = self.ty()?;
         let element_count = self.element_count();
-        if ty != T::PRIMITIVE_TYPE {
-            Err(Error::ElementTypeMismatch { on_device: ty, on_host: T::PRIMITIVE_TYPE })?
+        if ty != T::TY {
+            Err(Error::ElementTypeMismatch { on_device: ty, on_host: T::TY })?
         }
         if src.len() > element_count {
             Err(Error::BinaryBufferIsTooLarge { element_count, buffer_len: src.len() })?
@@ -193,9 +197,10 @@ impl Literal {
     /// When the input is a tuple, return a vector of its elements. This replaces the original
     /// value by an empty tuple, no copy is performed.
     pub fn decompose_tuple(&mut self) -> Result<Vec<Literal>> {
-        match self.shape()?.tuple_size() {
-            None => Ok(vec![]),
-            Some(tuple_len) => {
+        match self.shape()? {
+            Shape::Array(_) | Shape::Unsupported(_) => Ok(vec![]),
+            Shape::Tuple(shapes) => {
+                let tuple_len = shapes.len();
                 let mut outputs = vec![std::ptr::null_mut::<c_lib::_literal>(); tuple_len];
                 unsafe { c_lib::literal_decompose_tuple(self.0, outputs.as_mut_ptr(), tuple_len) };
                 Ok(outputs.into_iter().map(Literal).collect())

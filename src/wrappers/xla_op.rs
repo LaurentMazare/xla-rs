@@ -5,7 +5,7 @@
 //!
 //! For details on the semantics, see
 //! [operation_semantics](https://www.tensorflow.org/xla/operation_semantics).
-use super::{PrimitiveType, Shape, XlaBuilder, XlaComputation};
+use super::{ArrayShape, PrimitiveType, Shape, XlaBuilder, XlaComputation};
 use crate::{c_lib, Error, Result};
 
 pub struct XlaOp {
@@ -268,28 +268,30 @@ impl XlaOp {
     }
 
     /// A node that when executed generates values using a random uniform distribution.
-    pub fn rng_uniform(min: &Self, max: &Self, shape: &Shape) -> Result<Self> {
+    pub fn rng_uniform(min: &Self, max: &Self, shape: &ArrayShape) -> Result<Self> {
+        let dims = shape.dims();
         let op = unsafe {
             c_lib::op_rng_uniform(
                 min.op,
                 max.op,
-                shape.ty as i32,
-                shape.dimensions.len() as i32,
-                shape.dimensions.as_ptr(),
+                shape.primitive_type() as i32,
+                dims.len() as i32,
+                dims.as_ptr(),
             )
         };
         min.wrap(op)
     }
 
     /// A node that when executed generates values using a random normal distribution.
-    pub fn rng_normal(mu: &Self, sigma: &Self, shape: &Shape) -> Result<Self> {
+    pub fn rng_normal(mu: &Self, sigma: &Self, shape: &ArrayShape) -> Result<Self> {
+        let dims = shape.dims();
         let op = unsafe {
             c_lib::op_rng_normal(
                 mu.op,
                 sigma.op,
-                shape.ty as i32,
-                shape.dimensions.len() as i32,
-                shape.dimensions.as_ptr(),
+                shape.primitive_type() as i32,
+                dims.len() as i32,
+                dims.as_ptr(),
             )
         };
         mu.wrap(op)
@@ -395,13 +397,13 @@ impl XlaOp {
     }
 
     /// The kind of elements that are computed by this operand.
-    pub fn element_type(&self) -> Result<PrimitiveType> {
-        self.builder.get_element_type(self)
+    pub fn primitive_type(&self) -> Result<PrimitiveType> {
+        self.builder.get_primitive_type(self)
     }
 
-    /// The kind of elements that are computed by this operand, shortcut for `element_type`.
+    /// The kind of elements that are computed by this operand, shortcut for `primitive_type`.
     pub fn ty(&self) -> Result<PrimitiveType> {
-        self.element_type()
+        self.primitive_type()
     }
 
     /// The number of dimensions for this node.
@@ -411,6 +413,10 @@ impl XlaOp {
 
     pub fn shape(&self) -> Result<Shape> {
         self.builder.get_shape(self)
+    }
+
+    pub fn array_shape(&self) -> Result<ArrayShape> {
+        ArrayShape::try_from(&self.builder.get_shape(self)?)
     }
 
     pub fn dims(&self) -> Result<Vec<usize>> {
@@ -486,10 +492,10 @@ impl XlaOp {
 
     pub fn take(&self, indices: &XlaOp, axis: i64) -> Result<Self> {
         let axis = self.normalize_index(axis)?;
-        let shape = self.shape()?;
-        let indices_shape = indices.shape()?;
-        let index_dims = indices_shape.dimensions();
-        let dims = shape.dimensions();
+        let shape = self.array_shape()?;
+        let indices_shape = indices.array_shape()?;
+        let index_dims = indices_shape.dims();
+        let dims = shape.dims();
         let offset_dims: Vec<_> = (0..((dims.len() + index_dims.len()) as i64 - 1))
             .filter(|x| *x < axis || *x >= axis + index_dims.len() as i64)
             .collect();
@@ -503,14 +509,14 @@ impl XlaOp {
         self.gather(&indices, &offset_dims, &[axis], &[axis], index_vector_dim, &slice_sizes)
     }
 
-    fn maybe_keep_dims(&self, res: XlaOp, dims: &[i64], keep_dims: bool) -> Result<XlaOp> {
-        if keep_dims && !dims.is_empty() {
-            let shape = self.shape()?;
-            let mut dimensions = shape.dimensions().to_vec();
-            for d in dims.iter() {
-                dimensions[*d as usize] = 1;
+    fn maybe_keep_dims(&self, res: XlaOp, dims_to_keep: &[i64], keep_dims: bool) -> Result<XlaOp> {
+        if keep_dims && !dims_to_keep.is_empty() {
+            let shape = self.array_shape()?;
+            let mut dims = shape.dims().to_vec();
+            for d in dims_to_keep.iter() {
+                dims[*d as usize] = 1;
             }
-            res.reshape(&dimensions)
+            res.reshape(&dims)
         } else {
             Ok(res)
         }
@@ -521,7 +527,7 @@ impl XlaOp {
     /// original node.
     pub fn reduce_sum(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
         let builder = XlaBuilder::new("Sum");
-        let ty = self.element_type()?;
+        let ty = self.primitive_type()?.element_type()?;
         let x = builder.parameter(0, ty, &[], "x")?;
         let y = builder.parameter(1, ty, &[], "y")?;
         let sum = x.add_(&y)?.build()?;
@@ -532,8 +538,8 @@ impl XlaOp {
     /// A node that computes the average value across the specified dimensions.
     pub fn reduce_mean(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
         let b = &self.builder();
-        let ty = self.element_type()?;
-        let mut scale = b.one(PrimitiveType::S32)?;
+        let ty = self.primitive_type()?;
+        let mut scale = b.one(crate::ElementType::S32)?;
         for d in dims.iter() {
             scale = (scale * self.dimensions_size(*d)?)?;
         }
@@ -544,7 +550,7 @@ impl XlaOp {
     /// A node that computes the maximum value across the specified dimensions.
     pub fn reduce_max(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
         let builder = XlaBuilder::new("Max");
-        let ty = self.element_type()?;
+        let ty = self.primitive_type()?.element_type()?;
         let x = builder.parameter(0, ty, &[], "x")?;
         let y = builder.parameter(1, ty, &[], "y")?;
         let sum = x.max(&y)?.build()?;
@@ -555,7 +561,7 @@ impl XlaOp {
     /// A node that computes the minimum value across the specified dimensions.
     pub fn reduce_min(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
         let builder = XlaBuilder::new("Min");
-        let ty = self.element_type()?;
+        let ty = self.primitive_type()?.element_type()?;
         let x = builder.parameter(0, ty, &[], "x")?;
         let y = builder.parameter(1, ty, &[], "y")?;
         let sum = x.min(&y)?.build()?;
@@ -573,7 +579,7 @@ impl XlaOp {
     /// Layer normalization, this normalizes values on the target dimension to be of zero mean and
     /// standard deviation one, and then scales the result by `scale` and adds `bias`.
     pub fn layer_norm(&self, dim: i64, scale: &XlaOp, bias: &XlaOp) -> Result<Self> {
-        let ty = self.element_type().unwrap_or(PrimitiveType::F32);
+        let ty = self.primitive_type().unwrap_or(PrimitiveType::F32);
         let eps = self.builder().c0(1e-5)?.convert(ty)?;
         let mean = self.reduce_mean(&[dim], true)?;
         let mean2 = (self * self)?.reduce_mean(&[dim], true)?;
@@ -587,10 +593,10 @@ impl XlaOp {
     pub fn matmul(&self, rhs: &Self) -> Result<Self> {
         // Similar to the jax implementation but without the squeezing.
         // https://github.com/google/jax/blob/849e47f79ac64ccba1a762804217c00a9905025b/jax/_src/numpy/lax_numpy.py#L3028
-        let lhs_shape = self.shape()?;
-        let rhs_shape = self.shape()?;
-        let lhs_dims = lhs_shape.dimensions();
-        let rhs_dims = rhs_shape.dimensions();
+        let lhs_shape = self.array_shape()?;
+        let rhs_shape = self.array_shape()?;
+        let lhs_dims = lhs_shape.dims();
+        let rhs_dims = rhs_shape.dims();
         let lhs_ndims = lhs_dims.len();
         let rhs_ndims = rhs_dims.len();
         if lhs_ndims < 1 || rhs_ndims < 1 {

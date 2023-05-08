@@ -1,5 +1,6 @@
 use super::{
-    handle_status, FromPrimitive, Literal, NativeType, PrimitiveType, Shape, XlaComputation, XlaOp,
+    handle_status, ArrayShape, FromPrimitive, Literal, NativeType, PrimitiveType, Shape,
+    XlaComputation, XlaOp,
 };
 use crate::{c_lib, Error, Result};
 use std::rc::Rc;
@@ -77,7 +78,7 @@ impl XlaBuilder {
     pub fn parameter(
         &self,
         parameter_number: i64,
-        ty: PrimitiveType,
+        ty: super::ElementType,
         dims: &[i64],
         name: &str,
     ) -> Result<XlaOp> {
@@ -86,7 +87,7 @@ impl XlaBuilder {
             c_lib::parameter(
                 self.ptr(),
                 parameter_number,
-                ty as i32,
+                ty.primitive_type() as i32,
                 dims.len() as i32,
                 dims.as_ptr(),
                 name.as_ptr(),
@@ -107,10 +108,11 @@ impl XlaBuilder {
     pub fn parameter_with_shape(
         &self,
         parameter_number: i64,
-        shape: &Shape,
+        shape: &ArrayShape,
         name: &str,
     ) -> Result<XlaOp> {
-        self.parameter(parameter_number, shape.ty, &shape.dimensions, name)
+        let dims = shape.dims();
+        self.parameter(parameter_number, shape.ty(), dims, name)
     }
 
     pub fn constant_r1c<T: NativeType>(&self, f: T, len: usize) -> Result<XlaOp> {
@@ -130,46 +132,47 @@ impl XlaBuilder {
     }
 
     /// A scalar node with the zero value for the associated type.
-    pub fn zero(&self, ty: super::PrimitiveType) -> Result<XlaOp> {
-        let op = unsafe { c_lib::op_zero(self.ptr(), ty as i32) };
+    pub fn zero(&self, ty: super::ElementType) -> Result<XlaOp> {
+        let op = unsafe { c_lib::op_zero(self.ptr(), ty.primitive_type() as i32) };
         self.wrap(op)
     }
 
     /// A scalar node with the one value for the associated type.
-    pub fn one(&self, ty: super::PrimitiveType) -> Result<XlaOp> {
-        let op = unsafe { c_lib::op_one(self.ptr(), ty as i32) };
+    pub fn one(&self, ty: super::ElementType) -> Result<XlaOp> {
+        let op = unsafe { c_lib::op_one(self.ptr(), ty.primitive_type() as i32) };
         self.wrap(op)
     }
 
     /// A scalar node with the minimum value for the associated type.
-    pub fn min_value(&self, ty: super::PrimitiveType) -> Result<XlaOp> {
-        let op = unsafe { c_lib::op_min_value(self.ptr(), ty as i32) };
+    pub fn min_value(&self, ty: super::ElementType) -> Result<XlaOp> {
+        let op = unsafe { c_lib::op_min_value(self.ptr(), ty.primitive_type() as i32) };
         self.wrap(op)
     }
 
     /// A scalar node with the maximum value for the associated type.
-    pub fn max_value(&self, ty: super::PrimitiveType) -> Result<XlaOp> {
-        let op = unsafe { c_lib::op_max_value(self.ptr(), ty as i32) };
+    pub fn max_value(&self, ty: super::ElementType) -> Result<XlaOp> {
+        let op = unsafe { c_lib::op_max_value(self.ptr(), ty.primitive_type() as i32) };
         self.wrap(op)
     }
 
     /// A constant node with the specified shape that holds increasing values starting from 0 along
     /// the iota dimension.
-    pub fn iota(
-        &self,
-        ty: super::PrimitiveType,
-        dims: &[i64],
-        iota_dimension: i64,
-    ) -> Result<XlaOp> {
+    pub fn iota(&self, ty: super::ElementType, dims: &[i64], iota_dimension: i64) -> Result<XlaOp> {
         let op = unsafe {
-            c_lib::op_iota(self.ptr(), ty as i32, dims.len(), dims.as_ptr(), iota_dimension)
+            c_lib::op_iota(
+                self.ptr(),
+                ty.primitive_type() as i32,
+                dims.len(),
+                dims.as_ptr(),
+                iota_dimension,
+            )
         };
         self.wrap(op)
     }
 
     /// A constant node for a unidimensional array of increasing values starting from 0.
-    pub fn iota1(&self, ty: super::PrimitiveType, size: usize) -> Result<XlaOp> {
-        let op = unsafe { c_lib::op_iota1(self.ptr(), ty as i32, size) };
+    pub fn iota1(&self, ty: super::ElementType, size: usize) -> Result<XlaOp> {
+        let op = unsafe { c_lib::op_iota1(self.ptr(), ty.primitive_type() as i32, size) };
         self.wrap(op)
     }
 
@@ -208,16 +211,7 @@ impl XlaBuilder {
         let mut out: c_lib::shape = std::ptr::null_mut();
         let status = unsafe { c_lib::get_shape(self.ptr(), op.op, &mut out) };
         handle_status(status)?;
-        let rank = unsafe { c_lib::shape_dimensions_size(out) };
-        let dimensions: Vec<_> =
-            (0..rank).map(|i| unsafe { c_lib::shape_dimensions(out, i) }).collect();
-        let ty = unsafe { c_lib::shape_element_type(out) };
-        let tuple_shapes_size = unsafe { c_lib::shape_tuple_shapes_size(out) };
-        unsafe { c_lib::shape_free(out) };
-        match FromPrimitive::from_i32(ty) {
-            None => Err(Error::UnexpectedElementType(ty)),
-            Some(ty) => Ok(Shape { ty, dimensions, tuple_shapes_size }),
-        }
+        unsafe { Shape::from_ptr(out) }
     }
 
     /// The dimension sizes associated with this op.
@@ -230,7 +224,7 @@ impl XlaBuilder {
     }
 
     /// The element type associated with this op.
-    pub fn get_element_type(&self, op: &XlaOp) -> Result<super::PrimitiveType> {
+    pub fn get_primitive_type(&self, op: &XlaOp) -> Result<super::PrimitiveType> {
         let mut ty = 0i32;
         let status = unsafe { c_lib::get_element_type(self.ptr(), op.op, &mut ty) };
         handle_status(status)?;

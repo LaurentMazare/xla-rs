@@ -26,7 +26,7 @@
 //! # Load multiple values from a npz file.
 //! values = np.loadz("test.npz")
 //! ```
-use crate::{Error, Literal, PrimitiveType, Result};
+use crate::{ElementType, Error, Literal, Result};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Read, Write};
@@ -58,7 +58,7 @@ fn read_header<R: Read>(reader: &mut R) -> Result<String> {
 
 #[derive(Debug, PartialEq)]
 struct Header {
-    descr: PrimitiveType,
+    descr: ElementType,
     fortran_order: bool,
     shape: Vec<i64>,
 }
@@ -68,14 +68,14 @@ impl Header {
         let fortran_order = if self.fortran_order { "True" } else { "False" };
         let mut shape = self.shape.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",");
         let descr = match self.descr {
-            PrimitiveType::F16 => "f2",
-            PrimitiveType::F32 => "f4",
-            PrimitiveType::F64 => "f8",
-            PrimitiveType::S32 => "i4",
-            PrimitiveType::S64 => "i8",
-            PrimitiveType::S16 => "i2",
-            PrimitiveType::S8 => "i1",
-            PrimitiveType::U8 => "u1",
+            ElementType::F16 => "f2",
+            ElementType::F32 => "f4",
+            ElementType::F64 => "f8",
+            ElementType::S32 => "i4",
+            ElementType::S64 => "i8",
+            ElementType::S16 => "i2",
+            ElementType::S8 => "i1",
+            ElementType::U8 => "u1",
             descr => return Err(Error::Npy(format!("unsupported kind {descr:?}"))),
         };
         if !shape.is_empty() {
@@ -146,17 +146,17 @@ impl Header {
                 //     int64, int32, int16, int8,
                 //     uint8, and bool.
                 match descr.trim_matches(|c: char| c == '=' || c == '<' || c == '|') {
-                    "e" | "f2" => PrimitiveType::F16,
-                    "f" | "f4" => PrimitiveType::F32,
-                    "d" | "f8" => PrimitiveType::F64,
-                    "i" | "i4" => PrimitiveType::S32,
-                    "q" | "i8" => PrimitiveType::S64,
-                    "h" | "i2" => PrimitiveType::S16,
-                    "b" | "i1" => PrimitiveType::S8,
-                    "B" | "u1" => PrimitiveType::U8,
-                    "?" | "b1" => PrimitiveType::Pred,
-                    "F" | "F4" => PrimitiveType::C64,
-                    "D" | "F8" => PrimitiveType::C128,
+                    "e" | "f2" => ElementType::F16,
+                    "f" | "f4" => ElementType::F32,
+                    "d" | "f8" => ElementType::F64,
+                    "i" | "i4" => ElementType::S32,
+                    "q" | "i8" => ElementType::S64,
+                    "h" | "i2" => ElementType::S16,
+                    "b" | "i1" => ElementType::S8,
+                    "B" | "u1" => ElementType::U8,
+                    "?" | "b1" => ElementType::Pred,
+                    "F" | "F4" => ElementType::C64,
+                    "D" | "F8" => ElementType::C128,
                     descr => return Err(Error::Npy(format!("unrecognized descr {descr}"))),
                 }
             }
@@ -183,7 +183,7 @@ pub trait FromRawBytes: Sized {
     type Context;
     fn from_raw_bytes(
         h: &Self::Context,
-        ty: PrimitiveType,
+        ty: ElementType,
         dims: &[usize],
         bytes: &[u8],
     ) -> Result<Self>;
@@ -261,7 +261,7 @@ impl FromRawBytes for crate::Literal {
 
     fn from_raw_bytes(
         _: &Self::Context,
-        ty: PrimitiveType,
+        ty: ElementType,
         dims: &[usize],
         bytes: &[u8],
     ) -> Result<Self> {
@@ -274,7 +274,7 @@ impl FromRawBytes for crate::PjRtBuffer {
 
     fn from_raw_bytes(
         client: &Self::Context,
-        ty: PrimitiveType,
+        ty: ElementType,
         dims: &[usize],
         bytes: &[u8],
     ) -> Result<Self> {
@@ -286,12 +286,9 @@ impl crate::Literal {
     fn write<T: Write>(&self, f: &mut T) -> Result<()> {
         f.write_all(NPY_MAGIC_STRING)?;
         f.write_all(&[1u8, 0u8])?;
-        let shape = self.shape()?;
-        let header = Header {
-            descr: shape.element_type(),
-            fortran_order: false,
-            shape: shape.dimensions().to_vec(),
-        };
+        let shape = self.array_shape()?;
+        let header =
+            Header { descr: shape.ty(), fortran_order: false, shape: shape.dims().to_vec() };
         let mut header = header.to_string()?;
         let pad = 16 - (NPY_MAGIC_STRING.len() + 5 + header.len()) % 16;
         for _ in 0..pad % 16 {
@@ -302,9 +299,7 @@ impl crate::Literal {
         f.write_all(header.as_bytes())?;
         let numel = self.element_count();
         let element_type = self.element_type()?;
-        let elt_size_in_bytes = element_type.element_size_in_bytes().ok_or_else(|| {
-            Error::Npy(format!("unsupported element type for npy {element_type:?}"))
-        })?;
+        let elt_size_in_bytes = element_type.element_size_in_bytes();
         let mut content = vec![0u8; numel * elt_size_in_bytes];
         self.copy_raw_to(&mut content)?;
         f.write_all(&content)?;
@@ -343,14 +338,14 @@ mod tests {
         let h = "{'descr': '<f8', 'fortran_order': False, 'shape': (128,), }";
         assert_eq!(
             Header::parse(h).unwrap(),
-            Header { descr: crate::PrimitiveType::F64, fortran_order: false, shape: vec![128] }
+            Header { descr: crate::ElementType::F64, fortran_order: false, shape: vec![128] }
         );
         let h = "{'descr': '<f4', 'fortran_order': True, 'shape': (256,1,128), }";
         let h = Header::parse(h).unwrap();
         assert_eq!(
             h,
             Header {
-                descr: crate::PrimitiveType::F32,
+                descr: crate::ElementType::F32,
                 fortran_order: true,
                 shape: vec![256, 1, 128]
             }
@@ -360,7 +355,7 @@ mod tests {
             "{'descr': '<f4', 'fortran_order': True, 'shape': (256,1,128,), }"
         );
 
-        let h = Header { descr: crate::PrimitiveType::S64, fortran_order: false, shape: vec![] };
+        let h = Header { descr: crate::ElementType::S64, fortran_order: false, shape: vec![] };
         assert_eq!(
             h.to_string().unwrap(),
             "{'descr': '<i8', 'fortran_order': False, 'shape': (), }"

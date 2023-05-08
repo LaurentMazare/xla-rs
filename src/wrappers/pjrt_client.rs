@@ -117,7 +117,7 @@ impl PjRtClient {
                 self.ptr(),
                 device,
                 data.as_ptr() as *const libc::c_void,
-                T::PRIMITIVE_TYPE as i32,
+                T::TY.primitive_type() as i32,
                 dims.len() as i32,
                 dims.as_ptr(),
                 &mut buffer,
@@ -134,16 +134,14 @@ impl PjRtClient {
     /// is returned.
     pub fn buffer_from_host_raw_bytes(
         &self,
-        ty: super::PrimitiveType,
+        ty: super::ElementType,
         data: &[u8],
         dims: &[usize],
         device: Option<&PjRtDevice>,
     ) -> Result<PjRtBuffer> {
         let mut buffer: c_lib::pjrt_buffer = std::ptr::null_mut();
         let element_count: usize = dims.iter().product();
-        let element_size_in_bytes = ty
-            .element_size_in_bytes()
-            .ok_or(Error::UnsupportedElementType { ty, op: "buffer_from_bytes" })?;
+        let element_size_in_bytes = ty.element_size_in_bytes();
         if element_count * element_size_in_bytes != data.len() {
             Err(Error::WrongElementCount { dims: dims.to_vec(), element_count })?
         }

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 
-use xla::{FromRawBytes, Literal, PrimitiveType};
+use xla::{ElementType, FromRawBytes, Literal};
 
 #[derive(Clone)]
 pub struct VarStore {
@@ -24,7 +24,7 @@ impl VarStore {
     pub fn take(
         &mut self,
         s: &str,
-        expected_type: PrimitiveType,
+        expected_type: ElementType,
         expected_dims: &[usize],
     ) -> Result<Literal> {
         let path = format!("{}.{s}", self.path.join("."));
@@ -33,9 +33,9 @@ impl VarStore {
             .borrow_mut()
             .remove(&path)
             .with_context(|| format!("cannot find {path} in VarStore"))?;
-        let shape = literal.shape()?;
-        let element_type = shape.element_type();
-        let dims = shape.dimensions();
+        let shape = literal.array_shape()?;
+        let element_type = shape.ty();
+        let dims = shape.dims();
         if element_type != expected_type {
             anyhow::bail!(
                 "unexpected element type for {}, got {:?} expected {:?}",

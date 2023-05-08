@@ -1,10 +1,10 @@
-use xla::{ArrayElement, FromRawBytes, PjRtBuffer, PjRtClient, PrimitiveType, Result, XlaOp};
+use xla::{ArrayElement, ElementType, FromRawBytes, PjRtBuffer, PjRtClient, Result, XlaOp};
 
 #[allow(dead_code)]
 #[derive(Clone)]
 struct NamedVar {
     path: String,
-    ty: PrimitiveType,
+    ty: ElementType,
     dims: Vec<usize>,
     is_arg: bool,
 }
@@ -14,8 +14,8 @@ pub struct VarBuilder {
     path: Vec<String>,
     vars: std::rc::Rc<std::cell::RefCell<Vec<NamedVar>>>,
     builder: xla::XlaBuilder,
-    default_buffer_type_for_var: PrimitiveType,
-    default_op_type_for_var: PrimitiveType,
+    default_buffer_type_for_var: ElementType,
+    default_op_type_for_var: ElementType,
 }
 
 #[allow(dead_code)]
@@ -30,8 +30,8 @@ impl VarBuilder {
             builder: builder.clone(),
             path: vec![],
             vars,
-            default_buffer_type_for_var: B::PRIMITIVE_TYPE,
-            default_op_type_for_var: O::PRIMITIVE_TYPE,
+            default_buffer_type_for_var: B::TY,
+            default_op_type_for_var: O::TY,
         }
     }
 
@@ -42,7 +42,7 @@ impl VarBuilder {
     pub fn var_(
         &mut self,
         s: &str,
-        ty: PrimitiveType,
+        ty: ElementType,
         dims: &[usize],
         is_arg: bool,
     ) -> Result<XlaOp> {
@@ -57,10 +57,10 @@ impl VarBuilder {
 
     pub fn var(&mut self, s: &str, dims: &[usize]) -> Result<XlaOp> {
         let v = self.var_(s, self.default_buffer_type_for_var, dims, false)?;
-        v.convert(self.default_op_type_for_var)
+        v.convert(self.default_op_type_for_var.primitive_type())
     }
 
-    pub fn arg(&mut self, s: &str, ty: PrimitiveType, dims: &[usize]) -> Result<XlaOp> {
+    pub fn arg(&mut self, s: &str, ty: ElementType, dims: &[usize]) -> Result<XlaOp> {
         self.var_(s, ty, dims, true)
     }
 
@@ -119,9 +119,7 @@ impl VarStore {
             let buffer = if var.is_arg {
                 let ty = var.ty;
                 let element_count: usize = var.dims.iter().product();
-                let element_size_in_bytes = ty
-                    .element_size_in_bytes()
-                    .ok_or(xla::Error::UnsupportedElementType { ty, op: "buffer_from_bytes" })?;
+                let element_size_in_bytes = ty.element_size_in_bytes();
                 let data = vec![0u8; element_count * element_size_in_bytes];
                 c.buffer_from_host_raw_bytes(ty, &data, &var.dims, None)?
             } else {

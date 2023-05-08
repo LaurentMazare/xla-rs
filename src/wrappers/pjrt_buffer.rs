@@ -1,5 +1,5 @@
 //! A view on a memory slice hosted on a device.
-use super::{ArrayElement, FromPrimitive, Literal, PjRtDevice, Shape};
+use super::{ArrayElement, ArrayShape, Literal, PjRtDevice, Shape};
 use crate::{c_lib, Error, Result};
 
 /// A buffer represents a view on a memory slice hosted on a device.
@@ -34,16 +34,7 @@ impl PjRtBuffer {
     /// Retrieve the shape used by this buffer.
     pub fn on_device_shape(&self) -> Result<Shape> {
         let shape = unsafe { c_lib::pjrt_buffer_on_device_shape(self.buffer) };
-        let rank = unsafe { c_lib::shape_dimensions_size(shape) };
-        let dimensions: Vec<_> =
-            (0..rank).map(|i| unsafe { c_lib::shape_dimensions(shape, i) }).collect();
-        let ty = unsafe { c_lib::shape_element_type(shape) };
-        let tuple_shapes_size = unsafe { c_lib::shape_tuple_shapes_size(shape) };
-        unsafe { c_lib::shape_free(shape) };
-        match FromPrimitive::from_i32(ty) {
-            None => Err(Error::UnexpectedElementType(ty)),
-            Some(ty) => Ok(Shape { ty, dimensions, tuple_shapes_size }),
-        }
+        unsafe { Shape::from_ptr(shape) }
     }
 
     /// Copy the data stored in a buffer to host memory in a blocking way.
@@ -52,9 +43,11 @@ impl PjRtBuffer {
         dst: &mut [T],
         offset: usize,
     ) -> Result<()> {
-        let shape = self.on_device_shape()?;
-        if shape.ty != T::PRIMITIVE_TYPE {
-            Err(Error::ElementTypeMismatch { on_device: shape.ty, on_host: T::PRIMITIVE_TYPE })?
+        let shape = ArrayShape::try_from(&self.on_device_shape()?)?;
+        let on_host = T::TY;
+        let on_device = shape.primitive_type().element_type()?;
+        if on_device != on_host {
+            Err(Error::ElementTypeMismatch { on_device, on_host })?
         }
         if offset + dst.len() > shape.element_count() {
             Err(Error::TargetBufferIsTooLarge { offset, shape, buffer_len: dst.len() })?
