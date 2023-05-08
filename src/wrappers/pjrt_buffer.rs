@@ -1,5 +1,5 @@
 //! A view on a memory slice hosted on a device.
-use super::{ArrayElement, FromPrimitive, Literal, PjRtDevice, Shape};
+use super::{ArrayElement, ArrayShape, FromPrimitive, Literal, PjRtDevice, Shape};
 use crate::{c_lib, Error, Result};
 
 /// A buffer represents a view on a memory slice hosted on a device.
@@ -52,9 +52,11 @@ impl PjRtBuffer {
         dst: &mut [T],
         offset: usize,
     ) -> Result<()> {
-        let shape = self.on_device_shape()?;
-        if shape.ty != T::PRIMITIVE_TYPE {
-            Err(Error::ElementTypeMismatch { on_device: shape.ty, on_host: T::PRIMITIVE_TYPE })?
+        let shape = ArrayShape::try_from(&self.on_device_shape()?)?;
+        let on_host = T::TY.primitive_type();
+        let on_device = shape.primitive_type();
+        if on_device != on_host {
+            Err(Error::ElementTypeMismatch { on_device, on_host })?
         }
         if offset + dst.len() > shape.element_count() {
             Err(Error::TargetBufferIsTooLarge { offset, shape, buffer_len: dst.len() })?

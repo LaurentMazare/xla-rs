@@ -51,8 +51,9 @@ impl Literal {
     /// primitive type that the literal uses.
     pub fn get_first_element<T: NativeType + ArrayElement>(&self) -> Result<T> {
         let ty = self.ty()?;
-        if ty != T::PRIMITIVE_TYPE {
-            Err(Error::ElementTypeMismatch { on_device: ty, on_host: T::PRIMITIVE_TYPE })?
+        let on_host = T::TY.primitive_type();
+        if ty != on_host {
+            Err(Error::ElementTypeMismatch { on_device: ty, on_host })?
         }
         if self.element_count() == 0 {
             Err(Error::EmptyLiteral)?
@@ -111,8 +112,9 @@ impl Literal {
     pub fn copy_raw_to<T: ArrayElement>(&self, dst: &mut [T]) -> Result<()> {
         let ty = self.ty()?;
         let element_count = self.element_count();
-        if ty != T::PRIMITIVE_TYPE {
-            Err(Error::ElementTypeMismatch { on_device: ty, on_host: T::PRIMITIVE_TYPE })?
+        let on_host = T::TY.primitive_type();
+        if ty != on_host {
+            Err(Error::ElementTypeMismatch { on_device: ty, on_host })?
         }
         if dst.len() > element_count {
             Err(Error::BinaryBufferIsTooLarge { element_count, buffer_len: dst.len() })?
@@ -133,8 +135,9 @@ impl Literal {
     pub fn copy_raw_from<T: ArrayElement>(&mut self, src: &[T]) -> Result<()> {
         let ty = self.ty()?;
         let element_count = self.element_count();
-        if ty != T::PRIMITIVE_TYPE {
-            Err(Error::ElementTypeMismatch { on_device: ty, on_host: T::PRIMITIVE_TYPE })?
+        let on_host = T::TY.primitive_type();
+        if ty != on_host {
+            Err(Error::ElementTypeMismatch { on_device: ty, on_host })?
         }
         if src.len() > element_count {
             Err(Error::BinaryBufferIsTooLarge { element_count, buffer_len: src.len() })?

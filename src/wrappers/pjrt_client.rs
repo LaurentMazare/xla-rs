@@ -117,7 +117,7 @@ impl PjRtClient {
                 self.ptr(),
                 device,
                 data.as_ptr() as *const libc::c_void,
-                T::PRIMITIVE_TYPE as i32,
+                T::TY.primitive_type() as i32,
                 dims.len() as i32,
                 dims.as_ptr(),
                 &mut buffer,

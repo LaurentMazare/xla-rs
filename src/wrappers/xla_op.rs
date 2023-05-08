@@ -269,13 +269,14 @@ impl XlaOp {
 
     /// A node that when executed generates values using a random uniform distribution.
     pub fn rng_uniform(min: &Self, max: &Self, shape: &ArrayShape) -> Result<Self> {
+        let dims = shape.dims();
         let op = unsafe {
             c_lib::op_rng_uniform(
                 min.op,
                 max.op,
-                shape.ty as i32,
-                shape.dimensions.len() as i32,
-                shape.dimensions.as_ptr(),
+                shape.primitive_type() as i32,
+                dims.len() as i32,
+                dims.as_ptr(),
             )
         };
         min.wrap(op)
@@ -283,13 +284,14 @@ impl XlaOp {
 
     /// A node that when executed generates values using a random normal distribution.
     pub fn rng_normal(mu: &Self, sigma: &Self, shape: &ArrayShape) -> Result<Self> {
+        let dims = shape.dims();
         let op = unsafe {
             c_lib::op_rng_normal(
                 mu.op,
                 sigma.op,
-                shape.ty as i32,
-                shape.dimensions.len() as i32,
-                shape.dimensions.as_ptr(),
+                shape.primitive_type() as i32,
+                dims.len() as i32,
+                dims.as_ptr(),
             )
         };
         mu.wrap(op)
