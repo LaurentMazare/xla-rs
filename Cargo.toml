@@ -1,6 +1,6 @@
 [package]
 name = "xla"
-version = "0.1.4"
+version = "0.1.5"
 authors = ["laurent <laurent.mazare@gmail.com>"]
 edition = "2021"
 description = "Bindings for the XLA C++ library."
