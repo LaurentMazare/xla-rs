@@ -258,6 +258,13 @@ xla_op parameter(const xla_builder b, int64_t id, int pr_type, int dsize,
   END_PROTECT_OP_B(b)
 }
 
+xla_op parameter_s(const xla_builder b, int64_t id, const shape s,
+                   const char *name) {
+  BEGIN_PROTECT_OP
+  return new XlaOp(Parameter(b, id, *s, std::string(name)));
+  END_PROTECT_OP_B(b)
+}
+
 xla_op infeed(const xla_builder b, int pr_type, int dsize, const int64_t *ds,
               const char *config) {
   BEGIN_PROTECT_OP

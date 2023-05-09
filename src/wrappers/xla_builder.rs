@@ -1,6 +1,5 @@
 use super::{
-    handle_status, ArrayShape, FromPrimitive, Literal, NativeType, PrimitiveType, Shape,
-    XlaComputation, XlaOp,
+    handle_status, FromPrimitive, Literal, NativeType, PrimitiveType, Shape, XlaComputation, XlaOp,
 };
 use crate::{c_lib, Error, Result};
 use std::rc::Rc;
@@ -105,14 +104,14 @@ impl XlaBuilder {
         self.wrap(op)
     }
 
-    pub fn parameter_with_shape(
-        &self,
-        parameter_number: i64,
-        shape: &ArrayShape,
-        name: &str,
-    ) -> Result<XlaOp> {
-        let dims = shape.dims();
-        self.parameter(parameter_number, shape.ty(), dims, name)
+    pub fn parameter_s(&self, parameter_number: i64, shape: &Shape, name: &str) -> Result<XlaOp> {
+        let c_shape = shape.c_shape()?;
+        let name = std::ffi::CString::new(name).unwrap();
+        let op = unsafe {
+            c_lib::parameter_s(self.ptr(), parameter_number, c_shape.as_ptr(), name.as_ptr())
+        };
+        drop(c_shape);
+        self.wrap(op)
     }
 
     pub fn constant_r1c<T: NativeType>(&self, f: T, len: usize) -> Result<XlaOp> {

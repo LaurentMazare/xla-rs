@@ -203,6 +203,10 @@ impl CShape {
         }
         from_ptr_rec(self.0)
     }
+
+    pub(crate) fn as_ptr(&self) -> c_lib::shape {
+        self.0
+    }
 }
 
 impl Drop for CShape {

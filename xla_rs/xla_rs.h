@@ -89,6 +89,7 @@ void xla_builder_free(xla_builder);
 xla_op constant_literal(const xla_builder, const literal);
 xla_op parameter(const xla_builder, int64_t, int, int, const int64_t *,
                  const char *);
+xla_op parameter_s(const xla_builder, int64_t, const shape, const char *);
 xla_op infeed(const xla_builder, int, int, const int64_t *, const char *);
 void outfeed(const xla_op, int, int, const int64_t *, const char *);
 
