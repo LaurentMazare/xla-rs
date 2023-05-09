@@ -3,6 +3,7 @@ extern crate xla;
 
 fn main() -> Result<()> {
     xla::set_tf_min_log_level(xla::TfLogLevel::Warning);
+
     let client = xla::PjRtClient::cpu()?;
     println!("{} {} {}", client.platform_name(), client.platform_version(), client.device_count());
     for device in client.devices().iter() {
