@@ -211,7 +211,8 @@ impl XlaBuilder {
         let mut out: c_lib::shape = std::ptr::null_mut();
         let status = unsafe { c_lib::get_shape(self.ptr(), op.op, &mut out) };
         handle_status(status)?;
-        unsafe { Shape::from_ptr(out) }
+        let c_shape = super::shape::CShape::from_ptr(out);
+        c_shape.shape()
     }
 
     /// The dimension sizes associated with this op.

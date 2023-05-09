@@ -34,7 +34,8 @@ impl PjRtBuffer {
     /// Retrieve the shape used by this buffer.
     pub fn on_device_shape(&self) -> Result<Shape> {
         let shape = unsafe { c_lib::pjrt_buffer_on_device_shape(self.buffer) };
-        unsafe { Shape::from_ptr(shape) }
+        let c_shape = super::shape::CShape::from_ptr(shape);
+        c_shape.shape()
     }
 
     /// Copy the data stored in a buffer to host memory in a blocking way.

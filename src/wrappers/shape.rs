@@ -96,36 +96,6 @@ impl Shape {
             Self::Array { .. } | Self::Unsupported(_) => None,
         }
     }
-
-    pub(crate) unsafe fn from_ptr(ptr: c_lib::shape) -> crate::Result<Self> {
-        fn from_ptr_rec(ptr: c_lib::shape) -> crate::Result<Shape> {
-            let ty = unsafe { c_lib::shape_element_type(ptr) };
-            let ty = super::FromPrimitive::from_i32(ty)
-                .ok_or_else(|| Error::UnexpectedElementType(ty))?;
-            match ty {
-                PrimitiveType::Tuple => {
-                    let elem_cnt = unsafe { c_lib::shape_tuple_shapes_size(ptr) };
-                    let shapes: crate::Result<Vec<_>> = (0..elem_cnt)
-                        .map(|i| from_ptr_rec(unsafe { c_lib::shape_tuple_shapes(ptr, i as i32) }))
-                        .collect();
-                    Ok(Shape::Tuple(shapes?))
-                }
-                ty => match ty.element_type() {
-                    Ok(ty) => {
-                        let rank = unsafe { c_lib::shape_dimensions_size(ptr) };
-                        let dims: Vec<_> =
-                            (0..rank).map(|i| unsafe { c_lib::shape_dimensions(ptr, i) }).collect();
-                        Ok(Shape::Array(ArrayShape { ty, dims }))
-                    }
-                    Err(_) => Ok(Shape::Unsupported(ty)),
-                },
-            }
-        }
-
-        let shape = from_ptr_rec(ptr);
-        unsafe { c_lib::shape_free(ptr) };
-        shape
-    }
 }
 
 impl TryFrom<&Shape> for ArrayShape {
@@ -179,3 +149,44 @@ extract_dims!(2, |d: &Vec<i64>| (d[0], d[1]), (i64, i64));
 extract_dims!(3, |d: &Vec<i64>| (d[0], d[1], d[2]), (i64, i64, i64));
 extract_dims!(4, |d: &Vec<i64>| (d[0], d[1], d[2], d[3]), (i64, i64, i64, i64));
 extract_dims!(5, |d: &Vec<i64>| (d[0], d[1], d[2], d[3], d[4]), (i64, i64, i64, i64, i64));
+
+pub(crate) struct CShape(c_lib::shape);
+
+impl CShape {
+    pub(crate) fn from_ptr(ptr: c_lib::shape) -> Self {
+        Self(ptr)
+    }
+
+    pub(crate) fn shape(&self) -> crate::Result<Shape> {
+        fn from_ptr_rec(ptr: c_lib::shape) -> crate::Result<Shape> {
+            let ty = unsafe { c_lib::shape_element_type(ptr) };
+            let ty = super::FromPrimitive::from_i32(ty)
+                .ok_or_else(|| Error::UnexpectedElementType(ty))?;
+            match ty {
+                PrimitiveType::Tuple => {
+                    let elem_cnt = unsafe { c_lib::shape_tuple_shapes_size(ptr) };
+                    let shapes: crate::Result<Vec<_>> = (0..elem_cnt)
+                        .map(|i| from_ptr_rec(unsafe { c_lib::shape_tuple_shapes(ptr, i as i32) }))
+                        .collect();
+                    Ok(Shape::Tuple(shapes?))
+                }
+                ty => match ty.element_type() {
+                    Ok(ty) => {
+                        let rank = unsafe { c_lib::shape_dimensions_size(ptr) };
+                        let dims: Vec<_> =
+                            (0..rank).map(|i| unsafe { c_lib::shape_dimensions(ptr, i) }).collect();
+                        Ok(Shape::Array(ArrayShape { ty, dims }))
+                    }
+                    Err(_) => Ok(Shape::Unsupported(ty)),
+                },
+            }
+        }
+        from_ptr_rec(self.0)
+    }
+}
+
+impl Drop for CShape {
+    fn drop(&mut self) {
+        unsafe { c_lib::shape_free(self.0) };
+    }
+}

@@ -99,7 +99,8 @@ impl Literal {
     pub fn shape(&self) -> Result<Shape> {
         let mut out: c_lib::shape = std::ptr::null_mut();
         unsafe { c_lib::literal_shape(self.0, &mut out) };
-        unsafe { Shape::from_ptr(out) }
+        let c_shape = super::shape::CShape::from_ptr(out);
+        c_shape.shape()
     }
 
     pub fn array_shape(&self) -> Result<ArrayShape> {
