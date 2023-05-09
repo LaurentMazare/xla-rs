@@ -1,5 +1,5 @@
 use super::{ArrayElement, ElementType, PrimitiveType};
-use crate::{c_lib, Error};
+use crate::{c_lib, Error, Result};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ArrayShape {
@@ -96,12 +96,32 @@ impl Shape {
             Self::Array { .. } | Self::Unsupported(_) => None,
         }
     }
+
+    #[allow(dead_code)]
+    pub(crate) fn c_shape(&self) -> Result<CShape> {
+        match self {
+            Self::Tuple(shapes) => {
+                let shapes = shapes.iter().map(|s| s.c_shape()).collect::<Result<Vec<_>>>()?;
+                let ptrs: Vec<_> = shapes.iter().map(|s| s.0).collect();
+                let c_shape = CShape(unsafe { c_lib::make_shape_tuple(ptrs.len(), ptrs.as_ptr()) });
+                drop(shapes);
+                Ok(c_shape)
+            }
+            Self::Array(a) => {
+                let dims = a.dims();
+                Ok(CShape(unsafe {
+                    c_lib::make_shape_array(a.primitive_type() as i32, dims.len(), dims.as_ptr())
+                }))
+            }
+            Self::Unsupported(_) => Err(Error::UnsupportedShape { shape: self.clone() }),
+        }
+    }
 }
 
 impl TryFrom<&Shape> for ArrayShape {
     type Error = Error;
 
-    fn try_from(value: &Shape) -> Result<Self, Self::Error> {
+    fn try_from(value: &Shape) -> Result<Self> {
         match value {
             Shape::Tuple(_) | Shape::Unsupported(_) => {
                 Err(Error::NotAnArray { expected: None, got: value.clone() })
@@ -116,7 +136,7 @@ macro_rules! extract_dims {
         impl TryFrom<&ArrayShape> for $out_type {
             type Error = Error;
 
-            fn try_from(value: &ArrayShape) -> Result<Self, Self::Error> {
+            fn try_from(value: &ArrayShape) -> Result<Self> {
                 if value.dims.len() != $cnt {
                     Err(Error::UnexpectedNumberOfDims {
                         expected: $cnt,
@@ -132,7 +152,7 @@ macro_rules! extract_dims {
         impl TryFrom<&Shape> for $out_type {
             type Error = Error;
 
-            fn try_from(value: &Shape) -> Result<Self, Self::Error> {
+            fn try_from(value: &Shape) -> Result<Self> {
                 match value {
                     Shape::Tuple(_) | Shape::Unsupported(_) => {
                         Err(Error::NotAnArray { expected: Some($cnt), got: value.clone() })
@@ -157,15 +177,15 @@ impl CShape {
         Self(ptr)
     }
 
-    pub(crate) fn shape(&self) -> crate::Result<Shape> {
-        fn from_ptr_rec(ptr: c_lib::shape) -> crate::Result<Shape> {
+    pub(crate) fn shape(&self) -> Result<Shape> {
+        fn from_ptr_rec(ptr: c_lib::shape) -> Result<Shape> {
             let ty = unsafe { c_lib::shape_element_type(ptr) };
             let ty = super::FromPrimitive::from_i32(ty)
                 .ok_or_else(|| Error::UnexpectedElementType(ty))?;
             match ty {
                 PrimitiveType::Tuple => {
                     let elem_cnt = unsafe { c_lib::shape_tuple_shapes_size(ptr) };
-                    let shapes: crate::Result<Vec<_>> = (0..elem_cnt)
+                    let shapes: Result<Vec<_>> = (0..elem_cnt)
                         .map(|i| from_ptr_rec(unsafe { c_lib::shape_tuple_shapes(ptr, i as i32) }))
                         .collect();
                     Ok(Shape::Tuple(shapes?))

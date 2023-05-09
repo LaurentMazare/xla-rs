@@ -21,6 +21,9 @@ pub enum Error {
     #[error("not an array, expected: {expected:?}, got: {got:?}")]
     NotAnArray { expected: Option<usize>, got: crate::Shape },
 
+    #[error("cannot handle unsupported shapes {shape:?}")]
+    UnsupportedShape { shape: crate::Shape },
+
     #[error("unexpected number of tuple elements, expected: {expected}, got: {got}")]
     UnexpectedNumberOfElemsInTuple { expected: usize, got: usize },
 

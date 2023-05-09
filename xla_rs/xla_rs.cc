@@ -207,7 +207,7 @@ xla_op constant_literal(const xla_builder b, const literal l) {
 FOR_EACH_NATIVE_TYPE(CONST_OP_R01)
 #undef CONST_OP_R01
 
-Shape make_shape(int pr_type, int dsize, const int64_t *ds) {
+Shape make_shape_internal(int pr_type, int dsize, const int64_t *ds) {
   bool has_negative_dim = false;
   for (int i = 0; i < dsize; ++i) {
     if (ds[i] < 0) {
@@ -238,10 +238,22 @@ Shape make_shape(int pr_type, int dsize, const int64_t *ds) {
   return shape;
 }
 
+shape make_shape_array(int pr_type, size_t dsize, const int64_t *ds) {
+  return new Shape(make_shape_internal(pr_type, dsize, ds));
+}
+
+shape make_shape_tuple(size_t dsize, const shape *ds) {
+  std::vector<Shape> elts;
+  for (size_t i = 0; i < dsize; ++i) {
+    elts.push_back(*ds[i]);
+  }
+  return new Shape(ShapeUtil::MakeTupleShape(elts));
+}
+
 xla_op parameter(const xla_builder b, int64_t id, int pr_type, int dsize,
                  const int64_t *ds, const char *name) {
   BEGIN_PROTECT_OP
-  Shape shape = make_shape(pr_type, dsize, ds);
+  Shape shape = make_shape_internal(pr_type, dsize, ds);
   return new XlaOp(Parameter(b, id, shape, std::string(name)));
   END_PROTECT_OP_B(b)
 }
@@ -249,14 +261,14 @@ xla_op parameter(const xla_builder b, int64_t id, int pr_type, int dsize,
 xla_op infeed(const xla_builder b, int pr_type, int dsize, const int64_t *ds,
               const char *config) {
   BEGIN_PROTECT_OP
-  Shape shape = make_shape(pr_type, dsize, ds);
+  Shape shape = make_shape_internal(pr_type, dsize, ds);
   return new XlaOp(Infeed(b, shape, std::string(config)));
   END_PROTECT_OP_B(b)
 }
 
 void outfeed(const xla_op op, int pr_type, int dsize, const int64_t *ds,
              const char *outfeed_config) {
-  Shape shape = make_shape(pr_type, dsize, ds);
+  Shape shape = make_shape_internal(pr_type, dsize, ds);
   Outfeed(*op, shape, std::string(outfeed_config));
 }
 
