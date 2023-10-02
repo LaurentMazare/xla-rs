@@ -3,12 +3,30 @@ extern crate bindgen;
 use std::env;
 use std::path::{Path, PathBuf};
 
-fn make_shared_lib<P: AsRef<Path>>(xla_dir: P) {
-    let os = env::var("CARGO_CFG_TARGET_OS").expect("Unable to get TARGET_OS");
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum OS {
+    Linux,
+    MacOS,
+    Windows,
+}
+
+impl OS {
+    fn get() -> Self {
+        let os = env::var("CARGO_CFG_TARGET_OS").expect("Unable to get TARGET_OS");
+        match os.as_str() {
+            "linux" => Self::Linux,
+            "macos" => Self::MacOS,
+            "windows" => Self::Windows,
+            os => panic!("Unsupported system {os}"),
+        }
+    }
+}
+
+fn make_shared_lib<P: AsRef<Path>>(os: OS, xla_dir: P) {
     println!("cargo:rerun-if-changed=xla_rs/xla_rs.cc");
     println!("cargo:rerun-if-changed=xla_rs/xla_rs.h");
-    match os.as_str() {
-        "linux" | "macos" => {
+    match os {
+        OS::Linux | OS::MacOS => {
             cc::Build::new()
                 .cpp(true)
                 .pic(true)
@@ -21,7 +39,7 @@ fn make_shared_lib<P: AsRef<Path>>(xla_dir: P) {
                 .file("xla_rs/xla_rs.cc")
                 .compile("xla_rs");
         }
-        "windows" => {
+        OS::Windows => {
             cc::Build::new()
                 .cpp(true)
                 .pic(true)
@@ -30,7 +48,6 @@ fn make_shared_lib<P: AsRef<Path>>(xla_dir: P) {
                 .file("xla_rs/xla_rs.cc")
                 .compile("xla_rs");
         }
-        _ => panic!("Unsupported OS"),
     };
 }
 
@@ -40,6 +57,7 @@ fn env_var_rerun(name: &str) -> Option<String> {
 }
 
 fn main() {
+    let os = OS::get();
     let xla_dir = env_var_rerun("XLA_EXTENSION_DIR")
         .map_or_else(|| env::current_dir().unwrap().join("xla_extension"), PathBuf::from);
 
@@ -57,14 +75,20 @@ fn main() {
     if std::env::var("DOCS_RS").is_ok() {
         return;
     }
-    make_shared_lib(&xla_dir);
+    make_shared_lib(os, &xla_dir);
     // The --copy-dt-needed-entries -lstdc++ are helpful to get around some
     // "DSO missing from command line" error
     // undefined reference to symbol '_ZStlsIcSt11char_traitsIcESaIcEERSt13basic_ostreamIT_T0_ES7_RKNSt7__cxx1112basic_stringIS4_S5_T1_EE@@GLIBCXX_3.4.21'
-    println!("cargo:rustc-link-arg=-Wl,--copy-dt-needed-entries");
-    println!("cargo:rustc-link-arg=-Wl,-lstdc++");
+    if os == OS::Linux {
+        println!("cargo:rustc-link-arg=-Wl,--copy-dt-needed-entries");
+        println!("cargo:rustc-link-arg=-Wl,-lstdc++");
+    }
     println!("cargo:rustc-link-search=native={}", xla_dir.join("lib").display());
     println!("cargo:rustc-link-lib=static=xla_rs");
-    println!("cargo:rustc-link-arg=-Wl,-rpath={}", xla_dir.join("lib").display());
+    if os == OS::MacOS {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", xla_dir.join("lib").display());
+    } else {
+        println!("cargo:rustc-link-arg=-Wl,-rpath={}", xla_dir.join("lib").display());
+    }
     println!("cargo:rustc-link-lib=xla_extension");
 }
