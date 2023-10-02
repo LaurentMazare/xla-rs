@@ -15,6 +15,7 @@ pub struct XlaOp {
 
 macro_rules! extract_dims {
     ($fn_name:ident, $cnt:tt, $dims:expr, $out_type:ty) => {
+        #[allow(clippy::redundant_closure_call)]
         pub fn $fn_name(&self) -> Result<$out_type> {
             let dims = self.builder.get_dims(self)?;
             if dims.len() != $cnt {

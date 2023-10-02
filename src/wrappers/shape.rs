@@ -133,6 +133,7 @@ impl TryFrom<&Shape> for ArrayShape {
 
 macro_rules! extract_dims {
     ($cnt:tt, $dims:expr, $out_type:ty) => {
+        #[allow(clippy::redundant_closure_call)]
         impl TryFrom<&ArrayShape> for $out_type {
             type Error = Error;
 
