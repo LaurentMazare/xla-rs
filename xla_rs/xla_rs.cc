@@ -43,7 +43,7 @@ status pjrt_gpu_client_create(pjrt_client *output, double memory_fraction,
   xla::GpuAllocatorConfig allocator = {.memory_fraction = memory_fraction,
                                        .preallocate = preallocate};
   ASSIGN_OR_RETURN_STATUS(
-      client, xla::GetStreamExecutorGpuClient(false, allocator, nullptr, 0));
+      client, xla::GetStreamExecutorGpuClient(false, allocator, 0, 0));
   *output = new std::shared_ptr(std::move(client));
   return nullptr;
 }
@@ -1030,7 +1030,7 @@ char *xla_computation_name(xla_computation c) {
 void xla_computation_free(xla_computation c) { delete c; }
 
 char *status_error_message(status s) {
-  return strdup(s->error_message().c_str());
+  return strdup(tsl::NullTerminatedMessage(*s));
 }
 
 status hlo_module_proto_parse_and_return_unverified_module(
