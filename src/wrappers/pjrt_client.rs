@@ -31,6 +31,7 @@ impl PjRtClient {
         Ok(Self(Rc::new(PjRtClientInternal(ptr))))
     }
 
+    /*
     /// A TPU client.
     pub fn tpu(max_inflight_computations: usize) -> Result<Self> {
         let mut ptr: c_lib::pjrt_client = std::ptr::null_mut();
@@ -39,6 +40,7 @@ impl PjRtClient {
         super::handle_status(status)?;
         Ok(Self(Rc::new(PjRtClientInternal(ptr))))
     }
+    */
 
     fn ptr(&self) -> c_lib::pjrt_client {
         self.0 .0
