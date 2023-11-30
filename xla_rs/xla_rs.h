@@ -17,7 +17,6 @@
 #include "xla/pjrt/pjrt_client.h"
 #include "xla/pjrt/pjrt_stream_executor_client.h"
 #include "xla/pjrt/tfrt_cpu_pjrt_client.h"
-#include "xla/pjrt/tpu_client.h"
 #include "xla/service/hlo_parser.h"
 #include "xla/shape_util.h"
 #include "xla/statusor.h"
@@ -52,7 +51,7 @@ typedef struct _hlo_module_proto *hlo_module_proto;
 
 status pjrt_cpu_client_create(pjrt_client *);
 status pjrt_gpu_client_create(pjrt_client *, double, bool);
-status pjrt_tpu_client_create(pjrt_client *, int);
+// status pjrt_tpu_client_create(pjrt_client *, int);
 void pjrt_client_free(pjrt_client);
 int pjrt_client_device_count(pjrt_client);
 int pjrt_client_addressable_device_count(pjrt_client);
