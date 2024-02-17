@@ -58,8 +58,11 @@ fn env_var_rerun(name: &str) -> Option<String> {
 
 fn main() {
     let os = OS::get();
-    let xla_dir = env_var_rerun("XLA_EXTENSION_DIR")
-        .map_or_else(|| env::current_dir().unwrap().join("xla_extension"), PathBuf::from);
+    let xla_dir_str = match env_var_rerun("XLA_EXTENSION_DIR") {
+        Some(d) => d,
+        None => panic!("Environment variable `XLA_EXTENSION_DIR` not found!")
+    };
+    let xla_dir = PathBuf::from(xla_dir_str);
 
     println!("cargo:rerun-if-changed=xla_rs/xla_rs.h");
     println!("cargo:rerun-if-changed=xla_rs/xla_rs.cc");
