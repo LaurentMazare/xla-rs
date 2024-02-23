@@ -4,6 +4,7 @@ use super::{
 use crate::{c_lib, Error, Result};
 
 /// A literal represent a value, typically a multi-dimensional array, stored on the host device.
+#[derive(Debug)]
 pub struct Literal(pub(super) c_lib::literal);
 
 impl Clone for Literal {

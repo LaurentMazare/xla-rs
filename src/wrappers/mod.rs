@@ -77,7 +77,7 @@ impl PrimitiveType {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Display)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ElementType {
     Pred,
     S8,
