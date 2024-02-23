@@ -7,6 +7,8 @@ mod shape;
 mod xla_builder;
 mod xla_op;
 
+use std::fmt::{Formatter, Display};
+
 use crate::c_lib;
 use crate::error::{Error, Result};
 use num_derive::FromPrimitive;
@@ -94,6 +96,28 @@ pub enum ElementType {
     F64,
     C64,
     C128,
+}
+
+impl Display for ElementType {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        match self {
+            ElementType::Pred => write!(f, "xla::ElementType::Pred (bool)"),
+            ElementType::S8 => write!(f, "xla::ElementType::S8 (i8)"),
+            ElementType::S16 => write!(f, "xla::ElementType::S16 (i16)"),
+            ElementType::S32 => write!(f, "xla::ElementType::S32 (i32)"),
+            ElementType::S64 => write!(f, "xla::ElementType::S64 (i64)"),
+            ElementType::U8 => write!(f, "xla::ElementType::U8 (u8)"),
+            ElementType::U16 => write!(f, "xla::ElementType::U16 (u16)"),
+            ElementType::U32 => write!(f, "xla::ElementType::U32 (u32)"),
+            ElementType::U64 => write!(f, "xla::ElementType::U64 (u64)"),
+            ElementType::F16 => write!(f, "xla::ElementType::F16 (5 exponent bits)"),
+            ElementType::Bf16 => write!(f, "xla::ElementType::Bf16 (8 exponent bits)"),
+            ElementType::F32 => write!(f, "xla::ElementType::F32 (f32)"),
+            ElementType::F64 => write!(f, "xla::ElementType::F64 (f64)"),
+            ElementType::C64 => write!(f, "xla::ElementType::C64 (f32 real, f32 imaginary)"),
+            ElementType::C128 => write!(f, "xla::ElementType::C64 (f64 real, f64 imaginary)")
+        }
+    }
 }
 
 impl ElementType {
