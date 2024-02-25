@@ -115,7 +115,7 @@ impl Display for ElementType {
             ElementType::F32 => write!(f, "xla::ElementType::F32 (f32)"),
             ElementType::F64 => write!(f, "xla::ElementType::F64 (f64)"),
             ElementType::C64 => write!(f, "xla::ElementType::C64 (f32 real, f32 imaginary)"),
-            ElementType::C128 => write!(f, "xla::ElementType::C64 (f64 real, f64 imaginary)")
+            ElementType::C128 => write!(f, "xla::ElementType::C128 (f64 real, f64 imaginary)")
         }
     }
 }
