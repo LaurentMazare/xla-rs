@@ -3,8 +3,8 @@ use crate::{c_lib, Error, Result};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ArrayShape {
-    ty: ElementType,
-    dims: Vec<i64>,
+    pub ty: ElementType,
+    pub dims: Vec<i64>,
 }
 
 impl ArrayShape {
