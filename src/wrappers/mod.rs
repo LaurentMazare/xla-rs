@@ -7,6 +7,9 @@ mod shape;
 mod xla_builder;
 mod xla_op;
 
+use half::bf16;
+use half::f16;
+
 use std::fmt::{Formatter, Display};
 
 use crate::c_lib;
@@ -290,14 +293,17 @@ impl ArrayElement for F16 {
     const ZERO: Self = Self;
 }
 
-// Dummy BF16 type.
-#[derive(Copy, Clone, Debug)]
-pub struct Bf16;
 
-impl ArrayElement for Bf16 {
+impl ArrayElement for bf16 {
     const TY: ElementType = ElementType::Bf16;
     const ELEMENT_SIZE_IN_BYTES: usize = 2;
-    const ZERO: Self = Self;
+    const ZERO: Self = bf16::ZERO;
+}
+
+impl ArrayElement for f16 {
+    const TY: ElementType = ElementType::F16;
+    const ELEMENT_SIZE_IN_BYTES: usize = 2;
+    const ZERO: Self = f16::ZERO;
 }
 
 element_type!(u8, U8, 1);
