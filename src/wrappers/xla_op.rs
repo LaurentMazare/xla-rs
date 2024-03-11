@@ -570,15 +570,17 @@ impl XlaOp {
     }
 
     /// A node that computes the indices of maximum values across the specified dimension.
-    /*
+    //*
     pub fn reduce_argmax(&self, dim: i64, keep_dims: bool) -> Result<Self> {
         let builder = XlaBuilder::new("Argmax");
 
+        let my_shape = self.array_shape()?.dims;
+
         let ty = self.primitive_type()?.element_type()?;
         let in_shape = self.shape()?;
-        let (data_shape, index_shape) = if let Shape::Array(s) = in_shape {
+        let (data_shape, index_shape) = {
             let mut dims: Vec<i64> = Vec::new();
-            for (i, d) in s.dims().iter().enumerate().rev() {
+            for (i, d) in my_shape.iter().enumerate().rev() {
                 if dim != i as i64 {
                     dims.push(*d);
                 }
@@ -587,10 +589,9 @@ impl XlaOp {
                 Shape::Array(ArrayShape { ty: ty, dims: dims.clone() }),
                 Shape::Array(ArrayShape { ty: ElementType::S64, dims: dims }),
             )
-        } else {
-            return Err(Error::UnsupportedShape { shape: in_shape });
         };
 
+        let const_zero = builder.zero(ElementType::S64)?;
         let const_one = builder.one(ElementType::S64)?;
         let const_len = builder.constant_r0(self.array_shape()?.dims[dim as usize])?;
         let accum = builder.parameter_s(
@@ -606,21 +607,35 @@ impl XlaOp {
         let i = accum.get_tuple_element(0)?;
         let max_accum = accum.get_tuple_element(1)?;
         let index_accum = accum.get_tuple_element(2)?;
-        let cond = i.gt(&const_len)?;
+        let cond = i.gt(&const_len)?.build()?;
 
-        let slice = self.dynamic_slice(&i, i.add_(const_one), dim)
-        let  = next.gt(&max_accum)?;
-        let new_max = gt.select(&next, &max_accum)?;
-        let new_index = gt.select(&index_accum.add_(&const_one)?, &index_accum)?;
-        let argmax = builder.tuple(&[new_max, new_index])?.build()?;
+        let mut starts = Vec::new();
+        let mut sizes = Vec::new();
+        for j in (0..my_shape.len()).rev() {
+            if dim == j as i64 {
+                starts.push(&i);
+                sizes.push(1);
+            } else {
+                starts.push(&const_zero);
+                sizes.push(my_shape[j]);
+            }
+        }
 
+        let slice = self.dynamic_slice(&starts, &sizes)?;
+        let check = slice.gt(&max_accum)?;
+        let new_max = check.select(&slice, &max_accum)?;
+        let new_index = check.select(&i, &index_accum)?;
+        let new_i = i.add_(&const_one)?;
+        let argmax = builder.tuple(&[new_i, new_max, new_index])?.build()?;
+
+        let init_index = self.builder.zero(ElementType::S64)?;
         let init_max_accum = self.builder.min_value(ty)?;
         let init_index_accum = self.builder.zero(ElementType::S64)?;
-        let init_value = self.builder.tuple(&[init_max_accum, init_index_accum])?;
+        let init_value = self.builder.tuple(&[init_index, init_max_accum, init_index_accum])?;
 
-        self.reduce(init_value, argmax, &[dim], keep_dims)
+        Self::while_(cond, argmax, init_value)
     }
-    */
+    //*/
 
     /// A node that computes the minimum value across the specified dimensions.
     pub fn reduce_min(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
