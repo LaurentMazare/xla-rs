@@ -6,7 +6,7 @@
 //! For details on the semantics, see
 //! [operation_semantics](https://www.tensorflow.org/xla/operation_semantics).
 use super::{ArrayShape, PrimitiveType, Shape, XlaBuilder, XlaComputation};
-use crate::{c_lib, Error, Result};
+use crate::{c_lib, ElementType, Error, Result};
 
 pub struct XlaOp {
     pub(super) op: c_lib::xla_op,
@@ -557,6 +557,49 @@ impl XlaOp {
         let sum = x.max(&y)?.build()?;
         let init_value = self.builder.min_value(ty)?;
         self.reduce(init_value, sum, dims, keep_dims)
+    }
+
+    /// A node that computes the indices of maximum values across the specified dimension.
+    pub fn reduce_argmax(&self, dim: i64, keep_dims: bool) -> Result<Self> {
+        let builder = XlaBuilder::new("Argmax");
+
+        let ty = self.primitive_type()?.element_type()?;
+        let in_shape = self.shape()?;
+        let (data_shape, index_shape) = if let Shape::Array(s) = in_shape {
+            let mut dims: Vec<i64> = Vec::new();
+            for (i, d) in s.dims().iter().enumerate().rev() {
+                if dim != i as i64 {
+                    dims.push(*d);
+                }
+            }
+            (
+                Shape::Array(ArrayShape { ty: ty, dims: dims.clone() }),
+                Shape::Array(ArrayShape { ty: ElementType::S64, dims: dims }),
+            )
+        } else {
+            return Err(Error::UnsupportedShape { shape: in_shape });
+        };
+
+        let const_one = builder.one(ElementType::S64)?;
+        let accum = builder.parameter_s(
+            0,
+            &Shape::Tuple(vec![data_shape.clone(), index_shape]),
+            "accum",
+        )?;
+        let next = builder.parameter_s(1, &data_shape, "next")?;
+
+        let max_accum = accum.get_tuple_element(0)?;
+        let index_accum = accum.get_tuple_element(1)?;
+        let gt = next.gt(&max_accum)?;
+        let new_max = gt.select(&next, &max_accum)?;
+        let new_index = gt.select(&index_accum.add_(&const_one)?, &index_accum)?;
+        let argmax = builder.tuple(&[new_max, new_index])?.build()?;
+
+        let init_max_accum = self.builder.min_value(ty)?;
+        let init_index_accum = self.builder.zero(ElementType::S64)?;
+        let init_value = self.builder.tuple(&[init_max_accum, init_index_accum])?;
+
+        self.reduce(init_value, argmax, &[dim], keep_dims)
     }
 
     /// A node that computes the minimum value across the specified dimensions.
