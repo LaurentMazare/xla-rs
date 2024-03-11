@@ -6,6 +6,7 @@ mod pjrt_loaded_executable;
 mod shape;
 mod xla_builder;
 mod xla_op;
+mod tests;
 
 use half::bf16;
 use half::f16;

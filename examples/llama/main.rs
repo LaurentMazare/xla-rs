@@ -345,7 +345,7 @@ fn llama_computation(args: &Args, bsize: i64) -> Result<(xla::XlaComputation, Va
     let mut vb = if args.cpu {
         VarBuilder::new::<xla::F16, f32>(&b)
     } else {
-        VarBuilder::new::<xla::F16, xla::Bf16>(&b)
+        VarBuilder::new::<xla::F16, half::bf16>(&b)
     };
     let config = Config::config_7b();
     let freqs_cis = precompute_freqs_cis(&config, &b)?;

@@ -665,6 +665,16 @@ xla_op op_slice_in_dim(const xla_op arg, int64_t start, int64_t stop,
   END_PROTECT_OP(arg)
 }
 
+xla_op op_dynamic_slice(const xla_op arg, const xla_op *starts, const int64_t *sizes, size_t n_dims) {
+  BEGIN_PROTECT_OP
+  std::vector<XlaOp> starts_ = {};
+  for (size_t i = 0; i < n_dims; ++i) {
+    starts_.push_back(*starts[i]);
+  }
+  return new XlaOp(DynamicSlice(*arg, absl::Span<const XlaOp>(starts_), absl::Span<const int64_t>(sizes, n_dims)));
+  END_PROTECT_OP(arg)
+}
+
 xla_op op_concat_in_dim(const xla_op arg, const xla_op *args, size_t nargs,
                         int64_t dim) {
   BEGIN_PROTECT_OP

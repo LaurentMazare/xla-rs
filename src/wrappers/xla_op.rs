@@ -208,6 +208,16 @@ impl XlaOp {
         self.wrap(op)
     }
 
+    pub fn dynamic_slice<B: std::borrow::Borrow<XlaOp>>(
+        &self,
+        start_indices: &[B],
+        sizes: &[i64]
+    ) -> Result<Self> {
+        let start_indices: Vec<_> = start_indices.iter().map(|a| a.borrow().op).collect();
+        let op = unsafe { c_lib::op_dynamic_slice(self.op, start_indices.as_ptr(), sizes.as_ptr(), start_indices.len()) };
+        self.wrap(op)
+    }
+
     /// A specialized version of `slice_in_dim` using a stride of one, so with all values with an
     /// index between `start_index` (inclusive) and `stop_index` (exclusive).
     pub fn slice_in_dim1(&self, start_index: i64, stop_index: i64, dim: i64) -> Result<Self> {
@@ -560,6 +570,7 @@ impl XlaOp {
     }
 
     /// A node that computes the indices of maximum values across the specified dimension.
+    /*
     pub fn reduce_argmax(&self, dim: i64, keep_dims: bool) -> Result<Self> {
         let builder = XlaBuilder::new("Argmax");
 
@@ -581,16 +592,24 @@ impl XlaOp {
         };
 
         let const_one = builder.one(ElementType::S64)?;
+        let const_len = builder.constant_r0(self.array_shape()?.dims[dim as usize])?;
         let accum = builder.parameter_s(
             0,
-            &Shape::Tuple(vec![data_shape.clone(), index_shape]),
+            &Shape::Tuple(vec![
+                Shape::Array(ArrayShape { dims: Vec::new(), ty: ElementType::S64 }),
+                data_shape.clone(),
+                index_shape,
+            ]),
             "accum",
         )?;
-        let next = builder.parameter_s(1, &data_shape, "next")?;
 
-        let max_accum = accum.get_tuple_element(0)?;
-        let index_accum = accum.get_tuple_element(1)?;
-        let gt = next.gt(&max_accum)?;
+        let i = accum.get_tuple_element(0)?;
+        let max_accum = accum.get_tuple_element(1)?;
+        let index_accum = accum.get_tuple_element(2)?;
+        let cond = i.gt(&const_len)?;
+
+        let slice = self.dynamic_slice(&i, i.add_(const_one), dim)
+        let  = next.gt(&max_accum)?;
         let new_max = gt.select(&next, &max_accum)?;
         let new_index = gt.select(&index_accum.add_(&const_one)?, &index_accum)?;
         let argmax = builder.tuple(&[new_max, new_index])?.build()?;
@@ -601,6 +620,7 @@ impl XlaOp {
 
         self.reduce(init_value, argmax, &[dim], keep_dims)
     }
+    */
 
     /// A node that computes the minimum value across the specified dimensions.
     pub fn reduce_min(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
