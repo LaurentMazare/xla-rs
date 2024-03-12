@@ -3,14 +3,14 @@ use crate::{c_lib, Error, Result};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ArrayShape {
-    pub ty: ElementType,
-    pub dims: Vec<i64>,
+    ty: ElementType,
+    dims: Vec<i64>,
 }
 
 impl ArrayShape {
     /// Create a new array shape.
-    pub fn new<E: ArrayElement>(dims: Vec<i64>) -> Self {
-        Self { ty: E::TY, dims }
+    pub fn new(dims: Vec<i64>, ty: ElementType) -> Self {
+        Self { ty, dims }
     }
 
     /// Create a new array shape.

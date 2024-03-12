@@ -171,6 +171,7 @@ xla_op op_convert_element_type(const xla_op, int);
 xla_op op_dimensions_size(const xla_op, int64_t);
 xla_op op_reduce(const xla_op, const xla_op, const xla_computation,
                  const int64_t *, size_t);
+xla_op op_reduce_multiple(const xla_op *, const xla_op *, const xla_computation, const int64_t *, size_t, size_t);
 xla_op op_internal_error(const xla_builder, const char *);
 xla_op op_unknown_error(const xla_builder, const char *);
 xla_op op_invalid_argument_error(const xla_builder, const char *);
