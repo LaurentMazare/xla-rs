@@ -645,26 +645,27 @@ impl XlaOp {
         }
 
         let slice = me.dynamic_slice(&starts, &sizes)?;
-        println!("{:?}", slice.array_shape()?.dims());
-        println!("{:?}", slice_dims);
         let slice_reshaped = slice.reshape(&slice_dims)?;
         let check = slice_reshaped.gt(&max_accum)?;
-        println!("652");
         let new_max = check.select(&slice_reshaped, &max_accum)?;
-        println!("653");
         let new_index = check.select(&i_iter, &index_accum)?;
-        println!("654");
         let new_i = i_iter.add_(&const_one)?;
-        let argmax = self.builder.tuple(&[new_i, me, new_max, new_index])?.build()?;
+        let argmax = iter_builder.tuple(&[new_i, me, new_max, new_index])?.build()?;
 
         let init_index = self.builder.zero(ElementType::S64)?;
-        let init_max_accum = self.builder.min_value(ty)?;
-        let init_index_accum = self.builder.zero(ElementType::S64)?;
+        let init_max_accum = self.slice_in_dim1(0, 1, dim)?;
+        let init_max_accum = init_max_accum.reshape(&slice_dims)?;
+        let n_elems = slice_dims.iter().map(|d| *d as usize).product::<usize>();
+        let zero_vec = (0..n_elems).map(|_| 0i64).collect::<Vec<i64>>();
+        let zero_const = self.builder.constant_r1(zero_vec.as_slice())?;
+        let init_index_accum = zero_const.reshape(&slice_dims)?;
         let cpy = self.copy()?;
         let init_value =
-            self.builder.tuple(&[init_index, cpy, init_max_accum, init_index_accum])?;
+        self.builder.tuple(&[init_index, cpy, init_max_accum, init_index_accum])?;
 
-        Self::while_(cond, argmax, init_value)
+        let full_result = Self::while_(cond, argmax, init_value)?;
+        let argmax = full_result.get_tuple_element(3)?;
+        self.maybe_keep_dims(argmax, &[dim], keep_dims)
     }
     //*/
     /// A node that computes the minimum value across the specified dimensions.

@@ -46,9 +46,9 @@ mod tests {
             .to_literal_sync()
             .expect("to_literal_sync");
         let rust_result = result.to_vec::<i64>().expect("to_vec");
-
-        assert_eq!(rust_result[0], 1);
-        assert_eq!(rust_result[1], 2);
+        println!("{:?}", rust_result);
+        assert_eq!(rust_result[0], 2);
+        assert_eq!(rust_result[1], 0);
         assert_eq!(rust_result[2], 2);
     }
 }
