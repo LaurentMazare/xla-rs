@@ -20,6 +20,7 @@
 #include "xla/service/hlo_parser.h"
 #include "xla/shape_util.h"
 #include "xla/statusor.h"
+//#include "xla_extension/include/xla/xla_data.pb.h"
 #pragma GCC diagnostic pop
 using namespace xla;
 
@@ -167,6 +168,19 @@ xla_op op_get_tuple_element(const xla_op, int64_t);
 xla_op op_gather(const xla_op, const xla_op, const int64_t *, size_t,
                  const int64_t *, size_t, const int64_t *, size_t,
                  const int64_t *, const int64_t *, size_t);
+xla_op op_scatter(const xla_op,
+                  const xla_op,
+                  const xla_op,
+                  const xla_computation,
+                  const int64_t *,
+                  size_t,
+                  const int64_t *,
+                  size_t,
+                  const int64_t *,
+                  size_t,
+                  const int64_t *,
+                  bool,
+                  bool);
 xla_op op_convert_element_type(const xla_op, int);
 xla_op op_dimensions_size(const xla_op, int64_t);
 xla_op op_reduce(const xla_op, const xla_op, const xla_computation,

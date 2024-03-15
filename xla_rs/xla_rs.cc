@@ -731,6 +731,38 @@ xla_op op_gather(const xla_op arg1, const xla_op arg2,
   END_PROTECT_OP(arg1)
 }
 
+xla_op op_scatter(const xla_op arg,
+                  const xla_op indices,
+                  const xla_op updates,
+                  const xla_computation update_comp,
+                  const int64_t *update_window_dims,
+                  size_t n_update_window_dims,
+                  const int64_t *inserted_window_dims,
+                  size_t n_inserted_window_dims,
+                  const int64_t *scatter_dims_to_operand_dims,
+                  size_t n_scatter_dims_to_operand_dims,
+                  const int64_t *set_index_vector_dim,
+                  bool indices_sorted,
+                  bool unique_indices) {
+  BEGIN_PROTECT_OP
+  ScatterDimensionNumbers dn;
+  for (size_t i = 0; i < n_update_window_dims; ++i) {
+    dn.add_update_window_dims(update_window_dims[i]);
+  }
+  for (size_t i = 0; i < n_inserted_window_dims; ++i) {
+    dn.add_inserted_window_dims(inserted_window_dims[i]);
+  }
+  for (size_t i = 0; i < n_scatter_dims_to_operand_dims; ++i) {
+    dn.add_scatter_dims_to_operand_dims(scatter_dims_to_operand_dims[i]);
+  }
+  if (set_index_vector_dim) {
+    dn.set_index_vector_dim(*set_index_vector_dim);
+  }
+  return new XlaOp(Scatter(*arg, *indices, *updates, *update_comp,
+                           dn, indices_sorted, unique_indices));
+  END_PROTECT_OP(arg)
+}
+
 xla_op op_convert_element_type(const xla_op arg, int pr_type) {
   BEGIN_PROTECT_OP
   return new XlaOp(ConvertElementType(*arg, (PrimitiveType)pr_type));

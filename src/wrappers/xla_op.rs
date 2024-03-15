@@ -508,6 +508,40 @@ impl XlaOp {
         self.wrap(op)
     }
 
+    pub fn scatter(
+        &self,
+        indices: &XlaOp,
+        updates: &XlaOp,
+        update_comp: &XlaComputation,
+        update_window_dims: &[i64],
+        inserted_window_dims: &[i64],
+        scatter_dims_to_operand_dims: &[i64],
+        set_index_vector_dim: Option<i64>,
+        indices_sorted: bool,
+        unique_indices: bool
+    ) {
+        let set_index_vector_dim_ptr =
+            set_index_vector_dim.as_ref().map(|p| p as *const _).unwrap_or(std::ptr::null());
+        let op = unsafe {
+            c_lib::op_scatter(
+                self.op,
+                indices.op,
+                updates.op,
+                update_comp.0,
+                update_window_dims.as_mut_ptr(),
+                update_window_dims.len(),
+                inserted_window_dims.as_mut_ptr(),
+                inserted_window_dims.len(),
+                scatter_dims_to_operand_dims.as_mut_ptr(),
+                scatter_dims_to_operand_dims.len(),
+                set_index_vector_dim_ptr,
+                indices_sorted,
+                unique_indices,
+            )
+        };
+        self.wrap(op);
+    }
+
     pub fn take(&self, indices: &XlaOp, axis: i64) -> Result<Self> {
         let axis = self.normalize_index(axis)?;
         let shape = self.array_shape()?;
