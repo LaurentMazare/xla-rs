@@ -5,6 +5,8 @@
 //!
 //! For details on the semantics, see
 //! [operation_semantics](https://www.tensorflow.org/xla/operation_semantics).
+use std::thread::Builder;
+
 use super::{ArrayShape, PrimitiveType, Shape, XlaBuilder, XlaComputation};
 use crate::{c_lib, ElementType, Error, Result};
 
@@ -518,8 +520,8 @@ impl XlaOp {
         scatter_dims_to_operand_dims: &[i64],
         set_index_vector_dim: Option<i64>,
         indices_sorted: bool,
-        unique_indices: bool
-    ) {
+        unique_indices: bool,
+    ) -> Result<Self> {
         let set_index_vector_dim_ptr =
             set_index_vector_dim.as_ref().map(|p| p as *const _).unwrap_or(std::ptr::null());
         let op = unsafe {
@@ -528,18 +530,53 @@ impl XlaOp {
                 indices.op,
                 updates.op,
                 update_comp.0,
-                update_window_dims.as_mut_ptr(),
+                update_window_dims.as_ptr(),
                 update_window_dims.len(),
-                inserted_window_dims.as_mut_ptr(),
+                inserted_window_dims.as_ptr(),
                 inserted_window_dims.len(),
-                scatter_dims_to_operand_dims.as_mut_ptr(),
+                scatter_dims_to_operand_dims.as_ptr(),
                 scatter_dims_to_operand_dims.len(),
                 set_index_vector_dim_ptr,
                 indices_sorted,
                 unique_indices,
             )
         };
-        self.wrap(op);
+        self.wrap(op)
+    }
+
+    // expects self to be a rank 1 i64 vector of indices and scatters 1s along the 2nd axis
+    pub fn one_hot(&self, n_classes: i64, ty: ElementType) -> Result<Self> {
+        let in_len = self.array_shape()?.dims()[0];
+        let out_shape = [in_len, n_classes];
+
+        let zero_vec: Vec<u32> = (0..out_shape.iter().product()).map(|_| 0u32).collect();
+        let zeroes_r1 = self.builder.constant_r1(zero_vec.as_slice())?;
+        let zeroes = zeroes_r1
+                           .convert(ty.primitive_type())?
+                           .reshape(out_shape.as_slice())?;
+
+        let ones_vec: Vec<u32> = (0..in_len).map(|_| 1u32).collect();
+        let ones_u32 = self.builder.constant_r1(ones_vec.as_slice())?;
+        let ones = ones_u32.convert(ty.primitive_type())?.reshape(&[in_len, 1, 1])?;
+
+        let one_hot_builder = XlaBuilder::new("one_hot");
+        let _op = one_hot_builder.parameter(0, ty, &[], "operand")?;
+        let up = one_hot_builder.parameter(1, ty, &[], "update")?;
+        let comp = up.build()?;
+
+        let range_vec = (0..in_len).collect::<Vec<i64>>();
+        let range = self.builder.constant_r1(range_vec.as_slice())?.reshape(&[1, in_len])?;
+        let indices = range.concat_in_dim(&[self.reshape(&[1, in_len])?], 0)?;
+
+        zeroes.scatter(&indices,
+                       &ones,
+                       &comp,
+                       &[1, 2],
+                       &[],
+                       &[0, 1],
+                       Some(0),
+                       false,
+                       false)
     }
 
     pub fn take(&self, indices: &XlaOp, axis: i64) -> Result<Self> {
@@ -632,7 +669,7 @@ impl XlaOp {
         let (data_shape, index_shape) = {
             (
                 Shape::Array(ArrayShape::new(slice_dims.clone(), ty)),
-                Shape::Array(ArrayShape::new(slice_dims.clone(), ElementType::S64))
+                Shape::Array(ArrayShape::new(slice_dims.clone(), ElementType::S64)),
             )
         };
 
@@ -704,7 +741,7 @@ impl XlaOp {
         // will this copy be fused away by XLA??
         let cpy = self.copy()?;
         let init_value =
-        self.builder.tuple(&[init_index, cpy, init_max_accum, init_index_accum])?;
+            self.builder.tuple(&[init_index, cpy, init_max_accum, init_index_accum])?;
 
         // output of while loop primitive is a tuple
         let full_result = Self::while_(cond, argmax, init_value)?;
@@ -716,7 +753,6 @@ impl XlaOp {
         self.maybe_keep_dims(argmax, &[dim], keep_dims)
     }
     //*/
-
     /// A node that computes the indices of minimum values across the specified dimension.
     //*
     pub fn reduce_argmin(&self, dim: i64, keep_dims: bool) -> Result<Self> {
@@ -739,7 +775,7 @@ impl XlaOp {
         let (data_shape, index_shape) = {
             (
                 Shape::Array(ArrayShape::new(slice_dims.clone(), ty)),
-                Shape::Array(ArrayShape::new(slice_dims.clone(), ElementType::S64))
+                Shape::Array(ArrayShape::new(slice_dims.clone(), ElementType::S64)),
             )
         };
 
@@ -811,7 +847,7 @@ impl XlaOp {
         // will this copy be fused away by XLA??
         let cpy = self.copy()?;
         let init_value =
-        self.builder.tuple(&[init_index, cpy, init_max_accum, init_index_accum])?;
+            self.builder.tuple(&[init_index, cpy, init_max_accum, init_index_accum])?;
 
         // output of while loop primitive is a tuple
         let full_result = Self::while_(cond, argmax, init_value)?;
@@ -823,7 +859,6 @@ impl XlaOp {
         self.maybe_keep_dims(argmax, &[dim], keep_dims)
     }
     //*/
-
     /// A node that computes the minimum value across the specified dimensions.
     pub fn reduce_min(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
         let builder = XlaBuilder::new("Min");
@@ -858,7 +893,7 @@ impl XlaOp {
     /// matrix-matrix or matrix-vector multiplications.
     pub fn matmul(&self, rhs: &Self) -> Result<Self> {
         // Similar to the jax implementation but without the squeezing.
-        // https://github.com/google/jax/blob/849e47f79ac64ccba1a762804217c00a9905025b/jax/_src/numpy/lax_numpy.py#L3028
+        // https://github.com/google/jax/blob/849matmule47f79ac64ccba1a762804217c00a9905025b/jax/_src/numpy/lax_numpy.py#L3028
         let lhs_shape = self.array_shape()?;
         let rhs_shape = self.array_shape()?;
         let lhs_dims = lhs_shape.dims();
