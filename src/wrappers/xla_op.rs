@@ -648,7 +648,6 @@ impl XlaOp {
     }
 
     /// A node that computes the indices of maximum values across the specified dimension.
-    //*
     pub fn reduce_argmax(&self, dim: i64, keep_dims: bool) -> Result<Self> {
         // we need a builder for both the while loop condition and iteration
         let cond_builder = XlaBuilder::new("Condition");
@@ -723,7 +722,6 @@ impl XlaOp {
             }
         }
 
-
         // run the computation by comparing the current input slice to the max value accumulator
         let slice = me.dynamic_slice(&starts, &sizes)?;
         let slice_reshaped = slice.reshape(&slice_dims)?;
@@ -755,9 +753,8 @@ impl XlaOp {
         // maybe add a broadcasting dimension
         self.maybe_keep_dims(argmax, &[dim], keep_dims)
     }
-    //*/
+
     /// A node that computes the indices of minimum values across the specified dimension.
-    //*
     pub fn reduce_argmin(&self, dim: i64, keep_dims: bool) -> Result<Self> {
         // we need a builder for both the while loop condition and iteration
         let cond_builder = XlaBuilder::new("Condition");
@@ -820,11 +817,13 @@ impl XlaOp {
         // build bounds for dynamic slice (this seems excessive?)
         let mut starts = Vec::new();
         let mut sizes = Vec::new();
-        for j in (0..my_shape.len()).rev() {
+        for j in 0..my_shape.len() {
             if dim == j as i64 {
+                // slice along the given dimension should start at i and be of length 1
                 starts.push(&i_iter);
                 sizes.push(1);
             } else {
+                // slices along all other dimensions should be full size
                 starts.push(&const_zero);
                 sizes.push(my_shape[j]);
             }
@@ -861,7 +860,7 @@ impl XlaOp {
         // maybe add a broadcasting dimension
         self.maybe_keep_dims(argmax, &[dim], keep_dims)
     }
-    //*/
+
     /// A node that computes the minimum value across the specified dimensions.
     pub fn reduce_min(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
         let builder = XlaBuilder::new("Min");
