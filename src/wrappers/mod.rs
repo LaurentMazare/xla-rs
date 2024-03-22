@@ -215,6 +215,16 @@ macro_rules! native_type {
 }
 
 native_type!(
+    u8,
+    constant_r0_uint8_t,
+    constant_r1_uint8_t,
+    constant_r1c_uint8_t,
+    create_r0_uint8_t,
+    create_r1_uint8_t,
+    literal_get_first_element_uint8_t
+);
+
+native_type!(
     i32,
     constant_r0_int32_t,
     constant_r1_int32_t,
