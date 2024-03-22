@@ -711,15 +711,18 @@ impl XlaOp {
         // build bounds for dynamic slice (this seems excessive?)
         let mut starts = Vec::new();
         let mut sizes = Vec::new();
-        for j in (0..my_shape.len()).rev() {
+        for j in 0..my_shape.len() {
             if dim == j as i64 {
+                // slice along the given dimension should start at i and be of length 1
                 starts.push(&i_iter);
                 sizes.push(1);
             } else {
+                // slices along all other dimensions should be full size
                 starts.push(&const_zero);
                 sizes.push(my_shape[j]);
             }
         }
+
 
         // run the computation by comparing the current input slice to the max value accumulator
         let slice = me.dynamic_slice(&starts, &sizes)?;

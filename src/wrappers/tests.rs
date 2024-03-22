@@ -35,13 +35,12 @@ mod tests {
     fn test_argmax() {
         let builder = XlaBuilder::new("test-argmax");
 
-        let test_tensor = builder.constant_r1(&[4, 3, 5, 9, 2, 1, 6, 7, 8]).expect("test_tensor");
-        // 4, 3, 5
+        let test_tensor = builder.constant_r1(&[9, 2, 1, 6, 7, 8]).expect("test_tensor");
         // 9, 2, 1
         // 6, 7, 8
-        let test_tensor = test_tensor.reshape(&[3, 3]).expect("reshape");
+        let test_tensor = test_tensor.reshape(&[2, 3]).expect("reshape");
         let test_argmax =
-            test_tensor.reduce_argmax(1, false).expect("reduce_argmax").build().expect("build");
+            test_tensor.reduce_argmax(0, false).expect("reduce_argmax").build().expect("build");
 
         let client = PjRtClient::cpu().expect("cpu");
         let executable = client.compile(&test_argmax).expect("compile");
@@ -50,9 +49,9 @@ mod tests {
             .expect("to_literal_sync");
         let rust_result = result.to_vec::<i64>().expect("to_vec");
         println!("{:?}", rust_result);
-        assert_eq!(rust_result[0], 3);
-        assert_eq!(rust_result[1], 3);
-        assert_eq!(rust_result[2], 3);
+        assert_eq!(rust_result[0], 0);
+        assert_eq!(rust_result[1], 1);
+        assert_eq!(rust_result[2], 1);
     }
 
     #[test]
