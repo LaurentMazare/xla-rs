@@ -9,8 +9,8 @@ pub struct ArrayShape {
 
 impl ArrayShape {
     /// Create a new array shape.
-    pub fn new<E: ArrayElement>(dims: Vec<i64>) -> Self {
-        Self { ty: E::TY, dims }
+    pub fn new(dims: Vec<i64>, ty: ElementType) -> Self {
+        Self { ty, dims }
     }
 
     /// Create a new array shape.

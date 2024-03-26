@@ -5,8 +5,10 @@
 //!
 //! For details on the semantics, see
 //! [operation_semantics](https://www.tensorflow.org/xla/operation_semantics).
+use std::thread::Builder;
+
 use super::{ArrayShape, PrimitiveType, Shape, XlaBuilder, XlaComputation};
-use crate::{c_lib, Error, Result};
+use crate::{c_lib, ElementType, Error, Result};
 
 pub struct XlaOp {
     pub(super) op: c_lib::xla_op,
@@ -246,6 +248,23 @@ impl XlaOp {
         let dim = self.normalize_index(dim)?;
         let args: Vec<_> = args.iter().map(|a| a.borrow().op).collect();
         let op = unsafe { c_lib::op_concat_in_dim(self.op, args.as_ptr(), args.len(), dim) };
+        self.wrap(op)
+    }
+
+    pub fn dynamic_slice<B: std::borrow::Borrow<XlaOp>>(
+        &self,
+        start_indices: &[B],
+        sizes: &[i64],
+    ) -> Result<Self> {
+        let start_indices: Vec<_> = start_indices.iter().map(|a| a.borrow().op).collect();
+        let op = unsafe {
+            c_lib::op_dynamic_slice(
+                self.op,
+                start_indices.as_ptr(),
+                sizes.as_ptr(),
+                start_indices.len(),
+            )
+        };
         self.wrap(op)
     }
 
@@ -491,6 +510,75 @@ impl XlaOp {
         self.wrap(op)
     }
 
+    pub fn scatter(
+        &self,
+        indices: &XlaOp,
+        updates: &XlaOp,
+        update_comp: &XlaComputation,
+        update_window_dims: &[i64],
+        inserted_window_dims: &[i64],
+        scatter_dims_to_operand_dims: &[i64],
+        set_index_vector_dim: Option<i64>,
+        indices_sorted: bool,
+        unique_indices: bool,
+    ) -> Result<Self> {
+        let set_index_vector_dim_ptr =
+            set_index_vector_dim.as_ref().map(|p| p as *const _).unwrap_or(std::ptr::null());
+        let op = unsafe {
+            c_lib::op_scatter(
+                self.op,
+                indices.op,
+                updates.op,
+                update_comp.0,
+                update_window_dims.as_ptr(),
+                update_window_dims.len(),
+                inserted_window_dims.as_ptr(),
+                inserted_window_dims.len(),
+                scatter_dims_to_operand_dims.as_ptr(),
+                scatter_dims_to_operand_dims.len(),
+                set_index_vector_dim_ptr,
+                indices_sorted,
+                unique_indices,
+            )
+        };
+        self.wrap(op)
+    }
+
+    // expects self to be a rank 1 i64 vector of indices and scatters 1s along the 2nd axis
+    pub fn one_hot(&self, n_classes: i64, ty: ElementType) -> Result<Self> {
+        let in_len = self.array_shape()?.dims()[0];
+        let out_shape = [in_len, n_classes];
+
+        let zero_vec: Vec<u32> = (0..out_shape.iter().product()).map(|_| 0u32).collect();
+        let zeroes_r1 = self.builder.constant_r1(zero_vec.as_slice())?;
+        let zeroes = zeroes_r1
+                           .convert(ty.primitive_type())?
+                           .reshape(out_shape.as_slice())?;
+
+        let ones_vec: Vec<u32> = (0..in_len).map(|_| 1u32).collect();
+        let ones_u32 = self.builder.constant_r1(ones_vec.as_slice())?;
+        let ones = ones_u32.convert(ty.primitive_type())?.reshape(&[in_len, 1, 1])?;
+
+        let one_hot_builder = XlaBuilder::new("one_hot");
+        let _op = one_hot_builder.parameter(0, ty, &[], "operand")?;
+        let up = one_hot_builder.parameter(1, ty, &[], "update")?;
+        let comp = up.build()?;
+
+        let range_vec = (0..in_len).collect::<Vec<i64>>();
+        let range = self.builder.constant_r1(range_vec.as_slice())?.reshape(&[1, in_len])?;
+        let indices = range.concat_in_dim(&[self.reshape(&[1, in_len])?], 0)?;
+
+        zeroes.scatter(&indices,
+                       &ones,
+                       &comp,
+                       &[1, 2],
+                       &[],
+                       &[0, 1],
+                       Some(0),
+                       false,
+                       false)
+    }
+
     pub fn take(&self, indices: &XlaOp, axis: i64) -> Result<Self> {
         let axis = self.normalize_index(axis)?;
         let shape = self.array_shape()?;
@@ -559,6 +647,220 @@ impl XlaOp {
         self.reduce(init_value, sum, dims, keep_dims)
     }
 
+    /// A node that computes the indices of maximum values across the specified dimension.
+    pub fn reduce_argmax(&self, dim: i64, keep_dims: bool) -> Result<Self> {
+        // we need a builder for both the while loop condition and iteration
+        let cond_builder = XlaBuilder::new("Condition");
+        let iter_builder = XlaBuilder::new("Iteration");
+
+        // get self shape as slice for convenience
+        let my_shape = self.array_shape()?;
+        let my_shape = my_shape.dims();
+
+        // get the data shapes of the max value accumulator and max index accumulator
+        let ty = self.primitive_type()?.element_type()?;
+        let mut slice_dims: Vec<i64> = Vec::new();
+        for (i, d) in my_shape.iter().enumerate().rev() {
+            if dim != i as i64 {
+                slice_dims.push(*d);
+            }
+        }
+        let (data_shape, index_shape) = {
+            (
+                Shape::Array(ArrayShape::new(slice_dims.clone(), ty)),
+                Shape::Array(ArrayShape::new(slice_dims.clone(), ElementType::S64)),
+            )
+        };
+
+        // build the condition i < const_len
+        let const_len = cond_builder.constant_r0(my_shape[dim as usize])?;
+        let cond_accum = cond_builder.parameter_s(
+            0,
+            &Shape::Tuple(vec![
+                Shape::Array(ArrayShape::new(Vec::new(), ElementType::S64)),
+                self.shape()?,
+                data_shape.clone(),
+                index_shape.clone(),
+            ]),
+            "accum",
+        )?;
+        let i_cond = cond_accum.get_tuple_element(0)?;
+        let cond = i_cond.lt(&const_len)?.build()?;
+
+        // declare constants and parameters for the iteration computation
+        let const_zero = iter_builder.zero(ElementType::S64)?;
+        let const_one = iter_builder.one(ElementType::S64)?;
+        let iter_accum = iter_builder.parameter_s(
+            0,
+            &Shape::Tuple(vec![
+                Shape::Array(ArrayShape::new(Vec::new(), ElementType::S64)),
+                self.shape()?,
+                data_shape,
+                index_shape,
+            ]),
+            "accum",
+        )?;
+
+        // unpack inputs as separate arrays
+        let i_iter = iter_accum.get_tuple_element(0)?;
+        let me = iter_accum.get_tuple_element(1)?;
+        let max_accum = iter_accum.get_tuple_element(2)?;
+        let index_accum = iter_accum.get_tuple_element(3)?;
+
+        // build bounds for dynamic slice (this seems excessive?)
+        let mut starts = Vec::new();
+        let mut sizes = Vec::new();
+        for j in 0..my_shape.len() {
+            if dim == j as i64 {
+                // slice along the given dimension should start at i and be of length 1
+                starts.push(&i_iter);
+                sizes.push(1);
+            } else {
+                // slices along all other dimensions should be full size
+                starts.push(&const_zero);
+                sizes.push(my_shape[j]);
+            }
+        }
+
+        // run the computation by comparing the current input slice to the max value accumulator
+        let slice = me.dynamic_slice(&starts, &sizes)?;
+        let slice_reshaped = slice.reshape(&slice_dims)?;
+        let check = slice_reshaped.gt(&max_accum)?;
+        let new_max = check.select(&slice_reshaped, &max_accum)?;
+        let new_index = check.select(&i_iter, &index_accum)?;
+        let new_i = i_iter.add_(&const_one)?;
+        let argmax = iter_builder.tuple(&[new_i, me, new_max, new_index])?.build()?;
+
+        // define initial values and build the iteration computation
+        let init_index = self.builder.zero(ElementType::S64)?;
+        let init_max_accum = self.slice_in_dim1(0, 1, dim)?;
+        let init_max_accum = init_max_accum.reshape(&slice_dims)?;
+        let n_elems = slice_dims.iter().map(|d| *d as usize).product::<usize>();
+        let zero_vec = (0..n_elems).map(|_| 0i64).collect::<Vec<i64>>();
+        let zero_const = self.builder.constant_r1(zero_vec.as_slice())?;
+        let init_index_accum = zero_const.reshape(&slice_dims)?;
+        // will this copy be fused away by XLA??
+        let cpy = self.copy()?;
+        let init_value =
+            self.builder.tuple(&[init_index, cpy, init_max_accum, init_index_accum])?;
+
+        // output of while loop primitive is a tuple
+        let full_result = Self::while_(cond, argmax, init_value)?;
+
+        // we only want the max indices
+        let argmax = full_result.get_tuple_element(3)?;
+
+        // maybe add a broadcasting dimension
+        self.maybe_keep_dims(argmax, &[dim], keep_dims)
+    }
+
+    /// A node that computes the indices of minimum values across the specified dimension.
+    pub fn reduce_argmin(&self, dim: i64, keep_dims: bool) -> Result<Self> {
+        // we need a builder for both the while loop condition and iteration
+        let cond_builder = XlaBuilder::new("Condition");
+        let iter_builder = XlaBuilder::new("Iteration");
+
+        // get self shape as slice for convenience
+        let my_shape = self.array_shape()?;
+        let my_shape = my_shape.dims();
+
+        // get the data shapes of the max value accumulator and max index accumulator
+        let ty = self.primitive_type()?.element_type()?;
+        let mut slice_dims: Vec<i64> = Vec::new();
+        for (i, d) in my_shape.iter().enumerate().rev() {
+            if dim != i as i64 {
+                slice_dims.push(*d);
+            }
+        }
+        let (data_shape, index_shape) = {
+            (
+                Shape::Array(ArrayShape::new(slice_dims.clone(), ty)),
+                Shape::Array(ArrayShape::new(slice_dims.clone(), ElementType::S64)),
+            )
+        };
+
+        // build the condition i < const_len
+        let const_len = cond_builder.constant_r0(my_shape[dim as usize])?;
+        let cond_accum = cond_builder.parameter_s(
+            0,
+            &Shape::Tuple(vec![
+                Shape::Array(ArrayShape::new(Vec::new(), ElementType::S64)),
+                self.shape()?,
+                data_shape.clone(),
+                index_shape.clone(),
+            ]),
+            "accum",
+        )?;
+        let i_cond = cond_accum.get_tuple_element(0)?;
+        let cond = i_cond.lt(&const_len)?.build()?;
+
+        // declare constants and parameters for the iteration computation
+        let const_zero = iter_builder.zero(ElementType::S64)?;
+        let const_one = iter_builder.one(ElementType::S64)?;
+        let iter_accum = iter_builder.parameter_s(
+            0,
+            &Shape::Tuple(vec![
+                Shape::Array(ArrayShape::new(Vec::new(), ElementType::S64)),
+                self.shape()?,
+                data_shape,
+                index_shape,
+            ]),
+            "accum",
+        )?;
+
+        // unpack inputs as separate arrays
+        let i_iter = iter_accum.get_tuple_element(0)?;
+        let me = iter_accum.get_tuple_element(1)?;
+        let max_accum = iter_accum.get_tuple_element(2)?;
+        let index_accum = iter_accum.get_tuple_element(3)?;
+
+        // build bounds for dynamic slice (this seems excessive?)
+        let mut starts = Vec::new();
+        let mut sizes = Vec::new();
+        for j in 0..my_shape.len() {
+            if dim == j as i64 {
+                // slice along the given dimension should start at i and be of length 1
+                starts.push(&i_iter);
+                sizes.push(1);
+            } else {
+                // slices along all other dimensions should be full size
+                starts.push(&const_zero);
+                sizes.push(my_shape[j]);
+            }
+        }
+
+        // run the computation by comparing the current input slice to the max value accumulator
+        let slice = me.dynamic_slice(&starts, &sizes)?;
+        let slice_reshaped = slice.reshape(&slice_dims)?;
+        let check = slice_reshaped.lt(&max_accum)?;
+        let new_max = check.select(&slice_reshaped, &max_accum)?;
+        let new_index = check.select(&i_iter, &index_accum)?;
+        let new_i = i_iter.add_(&const_one)?;
+        let argmax = iter_builder.tuple(&[new_i, me, new_max, new_index])?.build()?;
+
+        // define initial values and build the iteration computation
+        let init_index = self.builder.zero(ElementType::S64)?;
+        let init_max_accum = self.slice_in_dim1(0, 1, dim)?;
+        let init_max_accum = init_max_accum.reshape(&slice_dims)?;
+        let n_elems = slice_dims.iter().map(|d| *d as usize).product::<usize>();
+        let zero_vec = (0..n_elems).map(|_| 0i64).collect::<Vec<i64>>();
+        let zero_const = self.builder.constant_r1(zero_vec.as_slice())?;
+        let init_index_accum = zero_const.reshape(&slice_dims)?;
+        // will this copy be fused away by XLA??
+        let cpy = self.copy()?;
+        let init_value =
+            self.builder.tuple(&[init_index, cpy, init_max_accum, init_index_accum])?;
+
+        // output of while loop primitive is a tuple
+        let full_result = Self::while_(cond, argmax, init_value)?;
+
+        // we only want the max indices
+        let argmax = full_result.get_tuple_element(3)?;
+
+        // maybe add a broadcasting dimension
+        self.maybe_keep_dims(argmax, &[dim], keep_dims)
+    }
+
     /// A node that computes the minimum value across the specified dimensions.
     pub fn reduce_min(&self, dims: &[i64], keep_dims: bool) -> Result<Self> {
         let builder = XlaBuilder::new("Min");
@@ -593,7 +895,7 @@ impl XlaOp {
     /// matrix-matrix or matrix-vector multiplications.
     pub fn matmul(&self, rhs: &Self) -> Result<Self> {
         // Similar to the jax implementation but without the squeezing.
-        // https://github.com/google/jax/blob/849e47f79ac64ccba1a762804217c00a9905025b/jax/_src/numpy/lax_numpy.py#L3028
+        // https://github.com/google/jax/blob/849matmule47f79ac64ccba1a762804217c00a9905025b/jax/_src/numpy/lax_numpy.py#L3028
         let lhs_shape = self.array_shape()?;
         let rhs_shape = self.array_shape()?;
         let lhs_dims = lhs_shape.dims();

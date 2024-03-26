@@ -6,6 +6,12 @@ mod pjrt_loaded_executable;
 mod shape;
 mod xla_builder;
 mod xla_op;
+mod tests;
+
+use half::bf16;
+use half::f16;
+
+use std::fmt::{Formatter, Display};
 
 use crate::c_lib;
 use crate::error::{Error, Result};
@@ -94,6 +100,28 @@ pub enum ElementType {
     F64,
     C64,
     C128,
+}
+
+impl Display for ElementType {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        match self {
+            ElementType::Pred => write!(f, "xla::ElementType::Pred (bool)"),
+            ElementType::S8 => write!(f, "xla::ElementType::S8 (i8)"),
+            ElementType::S16 => write!(f, "xla::ElementType::S16 (i16)"),
+            ElementType::S32 => write!(f, "xla::ElementType::S32 (i32)"),
+            ElementType::S64 => write!(f, "xla::ElementType::S64 (i64)"),
+            ElementType::U8 => write!(f, "xla::ElementType::U8 (u8)"),
+            ElementType::U16 => write!(f, "xla::ElementType::U16 (u16)"),
+            ElementType::U32 => write!(f, "xla::ElementType::U32 (u32)"),
+            ElementType::U64 => write!(f, "xla::ElementType::U64 (u64)"),
+            ElementType::F16 => write!(f, "xla::ElementType::F16 (5 exponent bits)"),
+            ElementType::Bf16 => write!(f, "xla::ElementType::Bf16 (8 exponent bits)"),
+            ElementType::F32 => write!(f, "xla::ElementType::F32 (f32)"),
+            ElementType::F64 => write!(f, "xla::ElementType::F64 (f64)"),
+            ElementType::C64 => write!(f, "xla::ElementType::C64 (f32 real, f32 imaginary)"),
+            ElementType::C128 => write!(f, "xla::ElementType::C128 (f64 real, f64 imaginary)")
+        }
+    }
 }
 
 impl ElementType {
@@ -187,6 +215,16 @@ macro_rules! native_type {
 }
 
 native_type!(
+    u8,
+    constant_r0_uint8_t,
+    constant_r1_uint8_t,
+    constant_r1c_uint8_t,
+    create_r0_uint8_t,
+    create_r1_uint8_t,
+    literal_get_first_element_uint8_t
+);
+
+native_type!(
     i32,
     constant_r0_int32_t,
     constant_r1_int32_t,
@@ -266,14 +304,17 @@ impl ArrayElement for F16 {
     const ZERO: Self = Self;
 }
 
-// Dummy BF16 type.
-#[derive(Copy, Clone, Debug)]
-pub struct Bf16;
 
-impl ArrayElement for Bf16 {
+impl ArrayElement for bf16 {
     const TY: ElementType = ElementType::Bf16;
     const ELEMENT_SIZE_IN_BYTES: usize = 2;
-    const ZERO: Self = Self;
+    const ZERO: Self = bf16::ZERO;
+}
+
+impl ArrayElement for f16 {
+    const TY: ElementType = ElementType::F16;
+    const ELEMENT_SIZE_IN_BYTES: usize = 2;
+    const ZERO: Self = f16::ZERO;
 }
 
 element_type!(u8, U8, 1);
