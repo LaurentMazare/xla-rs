@@ -81,7 +81,7 @@ status pjrt_buffer_to_literal_sync(pjrt_buffer, literal *);
 status pjrt_buffer_copy_raw_to_host_sync(pjrt_buffer, void *, size_t, size_t);
 shape pjrt_buffer_on_device_shape(pjrt_buffer);
 status pjrt_buffer_copy_to_device(pjrt_buffer, pjrt_device, pjrt_buffer *);
-void pjrt_buffer_free(pjrt_buffer);
+status pjrt_buffer_free(pjrt_buffer);
 
 xla_builder xla_builder_create(const char *);
 void xla_builder_free(xla_builder);

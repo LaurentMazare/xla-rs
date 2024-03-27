@@ -68,6 +68,13 @@ impl PjRtBuffer {
 
 impl Drop for PjRtBuffer {
     fn drop(&mut self) {
-        unsafe { c_lib::pjrt_buffer_free(self.buffer) }
+        let status = unsafe { c_lib::pjrt_buffer_free(self.buffer) };
+        match super::handle_status(status) {
+            Ok(_) => (),
+            Err(e) => {
+                println!("Unable to free PJRT buffer!");
+                println!("{}", e)
+            }
+        };
     }
 }

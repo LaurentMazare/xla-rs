@@ -62,6 +62,7 @@ impl PjRtLoadedExecutable {
         super::handle_status(status)?;
         Ok(self.process_execute_outputs(outputs))
     }
+
 }
 
 impl Drop for PjRtLoadedExecutable {
