@@ -139,22 +139,6 @@ status pjrt_buffer_copy_raw_to_host_sync(pjrt_buffer b, void *dst,
 }
 
 status pjrt_buffer_free(pjrt_buffer b) {
-  auto client = b->client();
-  std::cout << "big balls 1";
-  auto manager = client->GetPjRtHostMemoryForDeviceManager();
-  std::cout << "big balls 2";
-  ASSIGN_OR_RETURN_STATUS(size, b->GetOnDeviceSizeInBytes());
-  std::cout << "big balls 3";
-  ASSIGN_OR_RETURN_STATUS(ext_ref, b->AcquireExternalReference());
-  std::cout << "big balls 4";
-  auto dev_ptr = ext_ref->OpaqueDeviceMemoryDataPointer();
-  std::cout << "big balls 5";
-  ASSIGN_OR_RETURN_STATUS(chunk, manager->ToDeviceLayout(dev_ptr, size, b->on_device_shape(), b->on_device_shape()));
-  std::cout << "big balls 6";
-  //delete *chunk;
-  if (chunk.data()) {
-    chunk.deleter()(chunk.data());
-  }
   delete b;
 }
 
