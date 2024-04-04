@@ -43,12 +43,11 @@ impl PjRtLoadedExecutable {
         &self,
         args: &[L],
     ) -> Result<Vec<Vec<PjRtBuffer>>> {
-        let mut outputs = std::ptr::null_mut();
-        let args: Vec<_> = args.iter().map(|x| x.borrow().0).collect();
-        let status =
-            unsafe { c_lib::execute(self.exe, args.as_ptr(), args.len() as i32, &mut outputs) };
-        super::handle_status(status)?;
-        Ok(self.process_execute_outputs(outputs))
+        let mut buffers = vec![];
+        for x in args {
+            buffers.push(self.client.buffer_from_host_literal(None, x.borrow())?);
+        }
+        self.execute_b(&buffers)
     }
 
     pub fn execute_b<L: std::borrow::Borrow<PjRtBuffer>>(
@@ -62,7 +61,6 @@ impl PjRtLoadedExecutable {
         super::handle_status(status)?;
         Ok(self.process_execute_outputs(outputs))
     }
-
 }
 
 impl Drop for PjRtLoadedExecutable {
