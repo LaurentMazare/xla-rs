@@ -13,8 +13,7 @@ wget https://github.com/elixir-nx/xla/releases/download/v0.6.0/xla_extension-x86
 tar -xzvf xla_extension-x86_64-linux-gnu-cpu.tar.gz
 ```
 
-If the `xla_extension` directory is not in the main project directory, the path
-can be specified via the `XLA_EXTENSION_DIR` environment variable.
+The path for `xla_extension` must be specified via the `XLA_EXTENSION_DIR` environment variable.
 
 ## Generating some Text Samples with LLaMA
 
@@ -36,7 +35,7 @@ python examples/llama/convert_checkpoint.py ..../LLaMA/7B/consolidated.00.pth
 cargo run --example llama --release
 ```
 
-## Generating some Text Samples with GPT2 
+## Generating some Text Samples with GPT2
 
 One of the featured examples is GPT2. In order to run it, one should first
 download the tokenization configuration file as well as the weights before

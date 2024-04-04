@@ -20,6 +20,7 @@
 #include "xla/service/hlo_parser.h"
 #include "xla/shape_util.h"
 #include "xla/statusor.h"
+//#include "xla_extension/include/xla/xla_data.pb.h"
 #pragma GCC diagnostic pop
 using namespace xla;
 
@@ -80,7 +81,7 @@ status pjrt_buffer_to_literal_sync(pjrt_buffer, literal *);
 status pjrt_buffer_copy_raw_to_host_sync(pjrt_buffer, void *, size_t, size_t);
 shape pjrt_buffer_on_device_shape(pjrt_buffer);
 status pjrt_buffer_copy_to_device(pjrt_buffer, pjrt_device, pjrt_buffer *);
-void pjrt_buffer_free(pjrt_buffer);
+status pjrt_buffer_free(pjrt_buffer);
 
 xla_builder xla_builder_create(const char *);
 void xla_builder_free(xla_builder);
@@ -160,16 +161,31 @@ xla_op op_select(const xla_op, const xla_op, const xla_op);
 xla_op op_rng_uniform(const xla_op, const xla_op, int, int, const int64_t *);
 xla_op op_rng_normal(const xla_op, const xla_op, int, int, const int64_t *);
 xla_op op_slice_in_dim(const xla_op, int64_t, int64_t, int64_t, int64_t);
+xla_op op_dynamic_slice(const xla_op, const xla_op *, const int64_t *, size_t);
 xla_op op_concat_in_dim(const xla_op, const xla_op *, size_t, int64_t);
 xla_op op_tuple(const xla_builder, const xla_op *, size_t);
 xla_op op_get_tuple_element(const xla_op, int64_t);
 xla_op op_gather(const xla_op, const xla_op, const int64_t *, size_t,
                  const int64_t *, size_t, const int64_t *, size_t,
                  const int64_t *, const int64_t *, size_t);
+xla_op op_scatter(const xla_op,
+                  const xla_op,
+                  const xla_op,
+                  const xla_computation,
+                  const int64_t *,
+                  size_t,
+                  const int64_t *,
+                  size_t,
+                  const int64_t *,
+                  size_t,
+                  const int64_t *,
+                  bool,
+                  bool);
 xla_op op_convert_element_type(const xla_op, int);
 xla_op op_dimensions_size(const xla_op, int64_t);
 xla_op op_reduce(const xla_op, const xla_op, const xla_computation,
                  const int64_t *, size_t);
+xla_op op_reduce_multiple(const xla_op *, const xla_op *, const xla_computation, const int64_t *, size_t, size_t);
 xla_op op_internal_error(const xla_builder, const char *);
 xla_op op_unknown_error(const xla_builder, const char *);
 xla_op op_invalid_argument_error(const xla_builder, const char *);
@@ -239,6 +255,7 @@ void status_free(status);
 char *status_error_message(status);
 
 #define FOR_EACH_NATIVE_TYPE(_)                                                \
+  _(uint8_t, U8)                                                               \
   _(int32_t, S32)                                                              \
   _(int64_t, S64)                                                              \
   _(uint32_t, U32)                                                             \

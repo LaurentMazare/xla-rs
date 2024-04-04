@@ -138,7 +138,9 @@ status pjrt_buffer_copy_raw_to_host_sync(pjrt_buffer b, void *dst,
   return nullptr;
 }
 
-void pjrt_buffer_free(pjrt_buffer b) { delete b; }
+status pjrt_buffer_free(pjrt_buffer b) {
+  delete b;
+}
 
 int pjrt_device_id(pjrt_device d) { return d->id(); }
 
@@ -665,6 +667,19 @@ xla_op op_slice_in_dim(const xla_op arg, int64_t start, int64_t stop,
   END_PROTECT_OP(arg)
 }
 
+xla_op op_dynamic_slice(const xla_op arg, const xla_op *starts, const int64_t *sizes, size_t ndims) {
+  BEGIN_PROTECT_OP
+  std::vector<XlaOp> starts_ = {};
+  for (size_t i = 0; i < ndims; ++i) {
+    starts_.push_back(*starts[i]);
+  }
+  return new XlaOp(
+    DynamicSlice(*arg,
+                 absl::Span<const XlaOp>(starts_),
+                 absl::Span<const int64_t>(sizes, ndims)));
+  END_PROTECT_OP(arg)
+}
+
 xla_op op_concat_in_dim(const xla_op arg, const xla_op *args, size_t nargs,
                         int64_t dim) {
   BEGIN_PROTECT_OP
@@ -718,6 +733,38 @@ xla_op op_gather(const xla_op arg1, const xla_op arg2,
   END_PROTECT_OP(arg1)
 }
 
+xla_op op_scatter(const xla_op arg,
+                  const xla_op indices,
+                  const xla_op updates,
+                  const xla_computation update_comp,
+                  const int64_t *update_window_dims,
+                  size_t n_update_window_dims,
+                  const int64_t *inserted_window_dims,
+                  size_t n_inserted_window_dims,
+                  const int64_t *scatter_dims_to_operand_dims,
+                  size_t n_scatter_dims_to_operand_dims,
+                  const int64_t *set_index_vector_dim,
+                  bool indices_sorted,
+                  bool unique_indices) {
+  BEGIN_PROTECT_OP
+  ScatterDimensionNumbers dn;
+  for (size_t i = 0; i < n_update_window_dims; ++i) {
+    dn.add_update_window_dims(update_window_dims[i]);
+  }
+  for (size_t i = 0; i < n_inserted_window_dims; ++i) {
+    dn.add_inserted_window_dims(inserted_window_dims[i]);
+  }
+  for (size_t i = 0; i < n_scatter_dims_to_operand_dims; ++i) {
+    dn.add_scatter_dims_to_operand_dims(scatter_dims_to_operand_dims[i]);
+  }
+  if (set_index_vector_dim) {
+    dn.set_index_vector_dim(*set_index_vector_dim);
+  }
+  return new XlaOp(Scatter(*arg, *indices, *updates, *update_comp,
+                           dn, indices_sorted, unique_indices));
+  END_PROTECT_OP(arg)
+}
+
 xla_op op_convert_element_type(const xla_op arg, int pr_type) {
   BEGIN_PROTECT_OP
   return new XlaOp(ConvertElementType(*arg, (PrimitiveType)pr_type));
@@ -737,6 +784,24 @@ xla_op op_reduce(const xla_op arg, const xla_op init,
   return new XlaOp(
       Reduce(*arg, *init, *comp, absl::Span<const int64_t>(dims, ndims)));
   END_PROTECT_OP(arg)
+}
+
+xla_op op_reduce_multiple(const xla_op *args, const xla_op *inits,
+                 const xla_computation comp, const int64_t *dims,
+                 size_t ndims, size_t n_args) {
+  BEGIN_PROTECT_OP
+  std::vector<XlaOp> args_ = {};
+  std::vector<XlaOp> inits_ = {};
+  for (size_t i = 0; i < n_args; ++i) {
+    args_.push_back(*args[i]);
+    inits_.push_back(*inits[i]);
+  }
+  return new XlaOp(
+      Reduce(args[0]->builder(),
+             absl::Span<const XlaOp>(args_),
+             absl::Span<const XlaOp>(inits_),
+             *comp, absl::Span<const int64_t>(dims, ndims)));
+  END_PROTECT_OP(args[0])
 }
 
 xla_op op_internal_error(const xla_builder b, const char *error) {
