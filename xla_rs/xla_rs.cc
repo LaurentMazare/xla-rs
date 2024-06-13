@@ -42,8 +42,9 @@ status pjrt_gpu_client_create(pjrt_client *output, double memory_fraction,
                               bool preallocate) {
   xla::GpuAllocatorConfig allocator = {.memory_fraction = memory_fraction,
                                        .preallocate = preallocate};
-  ASSIGN_OR_RETURN_STATUS(
-      client, xla::GetStreamExecutorGpuClient(false, allocator, 0, 0));
+  xla::GpuClientOptions options;
+  options.allocator_config = allocator;
+  ASSIGN_OR_RETURN_STATUS(client, xla::GetStreamExecutorGpuClient(options));
   *output = new std::shared_ptr(std::move(client));
   return nullptr;
 }
