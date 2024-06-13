@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum OS {
     Linux,
+    #[allow(clippy::enum_variant_names)]
     MacOS,
     Windows,
 }
