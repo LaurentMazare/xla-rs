@@ -80,7 +80,7 @@ fn main() {
     // "DSO missing from command line" error
     // undefined reference to symbol '_ZStlsIcSt11char_traitsIcESaIcEERSt13basic_ostreamIT_T0_ES7_RKNSt7__cxx1112basic_stringIS4_S5_T1_EE@@GLIBCXX_3.4.21'
     if os == OS::Linux {
-        println!("cargo:rustc-link-arg=-Wl,--copy-dt-needed-entries");
+        // println!("cargo:rustc-link-arg=-Wl,--copy-dt-needed-entries");
         println!("cargo:rustc-link-arg=-Wl,-lstdc++");
     }
     println!("cargo:rustc-link-search=native={}", xla_dir.join("lib").display());
