@@ -12,14 +12,15 @@ Run each block in a notebook cell (prefix shell commands with `!`, or use a
 
 Runtime → Change runtime type → **TPU**.
 
-## 1. Confirm the TPU is live and locate `libtpu.so`
-
-JAX is preinstalled on the TPU runtime and pulls in `libtpu`.
+## 1. Confirm the TPU is live
 
 ```bash
 python3 -c "import jax; print(jax.devices())"
-find / -name 'libtpu.so' 2>/dev/null | head        # note this path for step 6
 ```
+
+Note: do **not** use Colab's pip `libtpu` — the XLA TPU extension downloaded in
+step 4 bundles its own version-matched `libtpu.so` under
+`xla_extension/lib/`, which is what step 6 points at.
 
 ## 2. Install the Rust toolchain
 
@@ -54,7 +55,9 @@ cd xla-rs
 
 ```bash
 export XLA_EXTENSION_DIR=/content/xla_extension
-export TPU_LIBRARY_PATH=$(find / -name 'libtpu.so' 2>/dev/null | head -1)
+# Use the libtpu bundled with the extension (matched to its XLA build), not a
+# pip-installed one.
+export TPU_LIBRARY_PATH=/content/xla_extension/lib/libtpu.so
 
 cargo run --example qwen35 --release --features hf-hub -- \
   --which 2b --prompt "What is the capital of France?" --sample-len 200
@@ -72,9 +75,10 @@ run and are cached afterwards.
   `xla::GetCApiClient("tpu")` in `xla_rs/xla_rs.cc`) compiles and links, but has
   not been exercised on real TPU hardware. `GetCApiClient("tpu")` may need
   further tweaks (e.g. `InitializePjrtPlugin`, create-options).
-- **`libtpu` version compatibility** is the main risk: the `libtpu` bundled by
-  Colab's JAX must be PJRT C-API-compatible with the elixir-nx XLA 0.10.0 build.
-  If client creation errors, pin a matching version (`pip install libtpu==<ver>`)
-  and re-point `TPU_LIBRARY_PATH`.
+- **Use the bundled `libtpu`.** The extension ships a `libtpu.so` matched to its
+  XLA build (abseil LTS `20250814`, ~late 2025) under `xla_extension/lib/`.
+  Pointing `TPU_LIBRARY_PATH` at Colab's pip `libtpu` (e.g. `0.0.21`) instead can
+  trigger a fatal `InitGoogle() has not finished yet` abort during client
+  creation. If you must use a pip `libtpu`, match it to that XLA vintage.
 - If a shared library fails to load at runtime, add its directory to
   `LD_LIBRARY_PATH` (the CUDA build needed the same for NCCL/nvshmem).
