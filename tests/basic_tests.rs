@@ -19,6 +19,55 @@ fn add_op() -> Result<()> {
 }
 
 #[test]
+fn matmul_op() -> Result<()> {
+    let client = xla::PjRtClient::cpu()?;
+
+    // Batched lhs [2, 2, 3] multiplied by an unbatched rhs [3, 2], the usual
+    // `x @ w` pattern. Following numpy/jax semantics, the rhs batch dimensions
+    // get broadcasted and the result has shape [2, 2, 2].
+    let builder = xla::XlaBuilder::new("test");
+    let x = builder.parameter(0, f32::TY, &[2, 2, 3], "x")?;
+    let w = builder.parameter(1, f32::TY, &[3, 2], "w")?;
+    let exe = x.matmul(&w)?.build()?.compile(&client)?;
+    let x =
+        xla::Literal::vec1(&(1..=12).map(|v| v as f32).collect::<Vec<_>>()).reshape(&[2, 2, 3])?;
+    let w = xla::Literal::vec1(&[1f32, 0., 0., 1., 1., 1.]).reshape(&[3, 2])?;
+    let result = exe.execute::<xla::Literal>(&[x, w])?[0][0].to_literal_sync()?;
+    assert_eq!(result.array_shape()?, xla::ArrayShape::new::<f32>(vec![2, 2, 2]));
+    // Each row [a, b, c] maps to [a + c, b + c].
+    assert_eq!(result.to_vec::<f32>()?, [4., 5., 10., 11., 16., 17., 22., 23.]);
+
+    // Matrix times vector, the result is squeezed to shape [2].
+    let builder = xla::XlaBuilder::new("test");
+    let x = builder.parameter(0, f32::TY, &[2, 3], "x")?;
+    let v = builder.parameter(1, f32::TY, &[3], "v")?;
+    let exe = x.matmul(&v)?.build()?.compile(&client)?;
+    let x = xla::Literal::vec1(&[1f32, 2., 3., 4., 5., 6.]).reshape(&[2, 3])?;
+    let v = xla::Literal::vec1(&[1f32, 1., 1.]);
+    let result = exe.execute::<xla::Literal>(&[x, v])?[0][0].to_literal_sync()?;
+    assert_eq!(result.to_vec::<f32>()?, [6., 15.]);
+
+    // Vector times batched matrix, numpy semantics give shape [2, 2].
+    let builder = xla::XlaBuilder::new("test");
+    let v = builder.parameter(0, f32::TY, &[3], "v")?;
+    let x = builder.parameter(1, f32::TY, &[2, 3, 2], "x")?;
+    let exe = v.matmul(&x)?.build()?.compile(&client)?;
+    let v = xla::Literal::vec1(&[1f32, 1., 1.]);
+    let x =
+        xla::Literal::vec1(&(1..=12).map(|v| v as f32).collect::<Vec<_>>()).reshape(&[2, 3, 2])?;
+    let result = exe.execute::<xla::Literal>(&[v, x])?[0][0].to_literal_sync()?;
+    assert_eq!(result.array_shape()?, xla::ArrayShape::new::<f32>(vec![2, 2]));
+    assert_eq!(result.to_vec::<f32>()?, [9., 12., 27., 30.]);
+
+    // Incompatible contraction dimensions have to be rejected.
+    let builder = xla::XlaBuilder::new("test");
+    let x = builder.parameter(0, f32::TY, &[2, 3], "x")?;
+    let w = builder.parameter(1, f32::TY, &[2, 4], "w")?;
+    assert!(x.matmul(&w).and_then(|op| op.build()).is_err());
+    Ok(())
+}
+
+#[test]
 fn sum_op() -> Result<()> {
     let client = xla::PjRtClient::cpu()?;
     let builder = xla::XlaBuilder::new("test");

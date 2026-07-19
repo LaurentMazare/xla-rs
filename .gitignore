@@ -18,3 +18,4 @@ Cargo.lock
 vocab.bpe
 llama-tokenizer.model
 llama-tokenizer.json
+.with_cuda.sh

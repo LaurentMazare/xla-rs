@@ -590,12 +590,13 @@ impl XlaOp {
     }
 
     /// Matrix multiplication, this is a specialized version of `dot_general` to be used for
-    /// matrix-matrix or matrix-vector multiplications.
+    /// matrix-matrix or matrix-vector multiplications. When one of the operands has fewer batch
+    /// dimensions than the other one, its batch dimensions are broadcasted.
     pub fn matmul(&self, rhs: &Self) -> Result<Self> {
         // Similar to the jax implementation but without the squeezing.
         // https://github.com/google/jax/blob/849e47f79ac64ccba1a762804217c00a9905025b/jax/_src/numpy/lax_numpy.py#L3028
         let lhs_shape = self.array_shape()?;
-        let rhs_shape = self.array_shape()?;
+        let rhs_shape = rhs.array_shape()?;
         let lhs_dims = lhs_shape.dims();
         let rhs_dims = rhs_shape.dims();
         let lhs_ndims = lhs_dims.len();
@@ -612,22 +613,14 @@ impl XlaOp {
         let lhs_batch_ndims = lhs_ndims.saturating_sub(2);
         let rhs_batch_ndims = rhs_ndims.saturating_sub(2);
         let max_ndims = usize::max(lhs_batch_ndims, rhs_batch_ndims);
-        let mut lhs_batch_dims = vec![];
-        let mut rhs_batch_dims = vec![];
+        // The batch dimensions that appear in both operands have to agree.
         for idx in 0..max_ndims {
             let lhs_idx = (idx + lhs_batch_ndims) as i64 - max_ndims as i64;
             let rhs_idx = (idx + rhs_batch_ndims) as i64 - max_ndims as i64;
-            // Only one of lhs_idx and rhs_idx can be negative.
-            if lhs_idx < 0 && rhs_idx < 0 {
-                panic!("internal error: negative dim idxs {lhs_dims:?} {rhs_dims:?}")
-            } else if lhs_idx < 0 && rhs_idx >= 0 {
-                rhs_batch_dims.push(rhs_idx)
-            } else if lhs_idx >= 0 && rhs_idx < 0 {
-                lhs_batch_dims.push(lhs_idx)
-            } else if lhs_dims[lhs_idx as usize] == rhs_dims[rhs_idx as usize] {
-                lhs_batch_dims.push(lhs_idx);
-                rhs_batch_dims.push(rhs_idx);
-            } else {
+            if lhs_idx >= 0
+                && rhs_idx >= 0
+                && lhs_dims[lhs_idx as usize] != rhs_dims[rhs_idx as usize]
+            {
                 Err(Error::MatMulIncorrectDims {
                     lhs_dims: lhs_dims.to_vec(),
                     rhs_dims: rhs_dims.to_vec(),
@@ -635,12 +628,27 @@ impl XlaOp {
                 })?
             }
         }
-        self.dot_general(
-            rhs,
+        // The operand with fewer batch dimensions gets broadcasted, this handles the common
+        // `x @ w` case where x has shape [batch, seq, in] and w has shape [in, out].
+        let missing_lhs = rhs_batch_ndims.saturating_sub(lhs_batch_ndims);
+        let missing_rhs = lhs_batch_ndims.saturating_sub(rhs_batch_ndims);
+        let (lhs, lhs_ndims) = if missing_lhs > 0 {
+            (self.broadcast(&rhs_dims[..missing_lhs])?, lhs_ndims + missing_lhs)
+        } else {
+            (self.clone(), lhs_ndims)
+        };
+        let (rhs, rhs_ndims) = if missing_rhs > 0 {
+            (rhs.broadcast(&lhs_dims[..missing_rhs])?, rhs_ndims + missing_rhs)
+        } else {
+            (rhs.clone(), rhs_ndims)
+        };
+        let batch_dims: Vec<i64> = (0..max_ndims as i64).collect();
+        lhs.dot_general(
+            &rhs,
             &[lhs_ndims as i64 - 1],
             &[rhs_ndims as i64 - 1 - i64::from(rhs_is_mat)],
-            &lhs_batch_dims,
-            &rhs_batch_dims,
+            &batch_dims,
+            &batch_dims,
         )
     }
 
