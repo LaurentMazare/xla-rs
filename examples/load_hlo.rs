@@ -26,8 +26,9 @@ fn main() -> Result<()> {
     let result = client.compile(&comp)?;
     let x = xla::Literal::vec1(&[1f32, 2f32, 3f32, 4f32]).reshape(&[2, 2])?;
     let y = xla::Literal::vec1(&[1f32, 1f32, 1f32, 1f32]).reshape(&[2, 2])?;
+    // The computation returns a one element tuple, tuple results get flattened
+    // into multiple output buffers so the result array is in the first buffer.
     let result = result.execute::<xla::Literal>(&[x, y])?[0][0].to_literal_sync()?;
-    let result = &result.to_tuple1()?;
     let shape = result.shape()?;
     println!("Result: {:?} {:?}", shape, result.to_vec::<f32>(),);
     Ok(())
