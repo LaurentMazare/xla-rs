@@ -62,7 +62,9 @@ status pjrt_tpu_client_create(pjrt_client *output,
   // (PJRT_Plugin_Initialize) must run before a client is created, otherwise
   // libtpu aborts trying to access the TPU device files before init.
   MAYBE_RETURN_STATUS(pjrt::InitializePjrtPlugin("tpu"));
-  ASSIGN_OR_RETURN_STATUS(client, xla::GetCApiClient("tpu"));
+  // Match EXLA (elixir-nx): register the plugin as "tpu" but create the client
+  // with the upper-case "TPU" device type.
+  ASSIGN_OR_RETURN_STATUS(client, xla::GetCApiClient("TPU"));
   *output = new std::shared_ptr(std::move(client));
   return nullptr;
 }
