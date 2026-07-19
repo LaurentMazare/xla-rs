@@ -50,20 +50,20 @@ f32 outputs of both implementations agree with the xla-rs bf16 tokens).
 
 Decode rate:
 
-|                          | 0.8B        | 2B         | 4B         |
-|--------------------------|-------------|------------|------------|
-| GPU bf16, xla-rs         | 176.0 tok/s | 78.1 tok/s | 40.1 tok/s |
-| GPU bf16, transformers   | 73.1 tok/s  | 68.8 tok/s | 51.1 tok/s |
-| CPU f32, xla-rs          | 15.9 tok/s  | 6.6 tok/s  | -          |
-| CPU f32, transformers    | 7.9 tok/s   | 3.9 tok/s  | -          |
+|                          | 0.8B        | 2B          | 4B         |
+|--------------------------|-------------|-------------|------------|
+| GPU bf16, xla-rs         | 341.8 tok/s | 153.7 tok/s | 73.3 tok/s |
+| GPU bf16, transformers   | 73.1 tok/s  | 68.8 tok/s  | 51.1 tok/s |
+| CPU f32, xla-rs          | 15.7 tok/s  | 6.7 tok/s   | -          |
+| CPU f32, transformers    | 7.9 tok/s   | 3.9 tok/s   | -          |
 
 Prefill (time to first token):
 
 |                          | 0.8B   | 2B     | 4B    |
 |--------------------------|--------|--------|-------|
-| GPU bf16, xla-rs         | 50 ms  | 58 ms  | 75 ms |
+| GPU bf16, xla-rs         | 56 ms  | 61 ms  | 77 ms |
 | GPU bf16, transformers   | 57 ms  | 58 ms  | 84 ms |
-| CPU f32, xla-rs          | 352 ms | 555 ms | -     |
+| CPU f32, xla-rs          | 348 ms | 557 ms | -     |
 | CPU f32, transformers    | 206 ms | 344 ms | -     |
 
 Note that the xla-rs prefill always processes the full padded 128 token

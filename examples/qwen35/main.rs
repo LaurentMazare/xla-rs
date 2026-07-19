@@ -191,15 +191,27 @@ fn delta_step(
 
     // s <- s * exp(g_t)
     let s = (s * bcast_h(exp_g_t)?)?;
-    // kv_mem = sum_dk(s * k_t)
-    let kv_mem = (&s * bcast_k(k_t)?)?.reduce_sum(&[1], false)?;
+    // The two contractions of the delta rule against the decayed state,
+    //   kv_mem = k_t . s and out_t = q_t . (s + outer(k_t, delta)),
+    // are computed as a single [h, 2, dk] x [h, dk, dv] batched matmul with
+    // out_t recovered as q_t . s + (q_t . k_t) * delta. A per-contraction
+    // formulation (matvec or multiply-reduce) gets strength-reduced by XLA
+    // into a reduce whose fusion compiles to a softmax-style triton kernel
+    // with a single block per head, badly underutilizing the gpu.
+    let q_r = q_t.reshape(&[h, 1, dk])?;
+    let k_r = k_t.reshape(&[h, 1, dk])?;
+    let qk = q_r.concat_in_dim(&[&k_r], 1)?;
+    let qs_ks = qk.dot_general(&s, &[2], &[1], &[0], &[0])?;
+    let qs = qs_ks.slice_in_dim1(0, 1, 1)?.reshape(&[h, dv])?;
+    let ks = qs_ks.slice_in_dim1(1, 2, 1)?.reshape(&[h, dv])?;
     // delta = (v_t - kv_mem) * beta_t
     let beta_b = beta_t.broadcast_in_dim(&[h, dv], &[0])?;
-    let delta = ((v_t - kv_mem)? * beta_b)?;
+    let delta = ((v_t - ks)? * beta_b)?;
     // s <- s + outer(k_t, delta)
     let s = (s + (bcast_k(k_t)? * bcast_v(&delta)?)?)?;
-    // out_t = sum_dk(s * q_t)
-    let o_t = (&s * bcast_k(q_t)?)?.reduce_sum(&[1], false)?;
+    // out_t = q_t . s (using the pre-update contraction, see above)
+    let qk_dot = (q_t * k_t)?.reduce_sum(&[1], false)?;
+    let o_t = (qs + (delta * qk_dot.broadcast_in_dim(&[h, dv], &[0])?)?)?;
     Ok((s, o_t))
 }
 
