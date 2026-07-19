@@ -81,7 +81,7 @@ impl PjRtClient {
     }
 
     /// A list of devices attached to this client.
-    pub fn devices(&self) -> Vec<PjRtDevice> {
+    pub fn devices(&self) -> Vec<PjRtDevice<'_>> {
         let device_count = self.device_count();
         let mut device_ptrs = vec![std::ptr::null_mut(); device_count];
         unsafe { c_lib::pjrt_client_devices(self.ptr(), device_ptrs.as_mut_ptr()) };
@@ -89,7 +89,7 @@ impl PjRtClient {
     }
 
     /// A list of devices that can be used by this client.
-    pub fn addressable_devices(&self) -> Vec<PjRtDevice> {
+    pub fn addressable_devices(&self) -> Vec<PjRtDevice<'_>> {
         let device_count = self.addressable_device_count();
         let mut device_ptrs = vec![std::ptr::null_mut(); device_count];
         unsafe { c_lib::pjrt_client_addressable_devices(self.ptr(), device_ptrs.as_mut_ptr()) };

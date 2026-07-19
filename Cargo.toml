@@ -1,6 +1,6 @@
 [package]
 name = "xla"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["laurent <laurent.mazare@gmail.com>"]
 edition = "2021"
 description = "Bindings for the XLA C++ library."
@@ -14,7 +14,7 @@ readme = "README.md"
 thiserror = "1"
 libc = "0.2"
 num-traits = "0.2"
-num-derive = "0.3"
+num-derive = "0.4"
 zip = "0.6.4"
 
 [build-dependencies]

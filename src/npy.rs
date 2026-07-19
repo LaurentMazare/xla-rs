@@ -95,15 +95,13 @@ impl Header {
         let mut parts: Vec<String> = vec![];
         let mut start_index = 0usize;
         let mut cnt_parenthesis = 0i64;
-        for (index, c) in header.chars().enumerate() {
+        for (index, c) in header.char_indices() {
             match c {
                 '(' => cnt_parenthesis += 1,
                 ')' => cnt_parenthesis -= 1,
-                ',' => {
-                    if cnt_parenthesis == 0 {
-                        parts.push(header[start_index..index].to_owned());
-                        start_index = index + 1;
-                    }
+                ',' if cnt_parenthesis == 0 => {
+                    parts.push(header[start_index..index].to_owned());
+                    start_index = index + 1;
                 }
                 _ => {}
             }

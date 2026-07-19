@@ -2,15 +2,15 @@
 Experimentation using the xla compiler from rust
 
 Pre-compiled binaries for the xla library can be downloaded from the
-[elixir-nx/xla repo](https://github.com/elixir-nx/xla/releases/tag/v0.8.0).
+[elixir-nx/xla repo](https://github.com/elixir-nx/xla/releases/tag/v0.10.0).
 These should be extracted at the root of this repository, resulting
 in a `xla_extension` subdirectory being created, the currently supported version
-is 0.8.0.
+is 0.10.0.
 
 For a linux platform, this can be done via:
 ```bash
-wget https://github.com/elixir-nx/xla/releases/download/v0.8.0/xla_extension-x86_64-linux-gnu-cpu.tar.gz
-tar -xzvf xla_extension-x86_64-linux-gnu-cpu.tar.gz
+wget https://github.com/elixir-nx/xla/releases/download/v0.10.0/xla_extension-0.10.0-x86_64-linux-gnu-cpu.tar.gz
+tar -xzvf xla_extension-0.10.0-x86_64-linux-gnu-cpu.tar.gz
 ```
 
 If the `xla_extension` directory is not in the main project directory, the path

@@ -181,8 +181,7 @@ impl CShape {
     pub(crate) fn shape(&self) -> Result<Shape> {
         fn from_ptr_rec(ptr: c_lib::shape) -> Result<Shape> {
             let ty = unsafe { c_lib::shape_element_type(ptr) };
-            let ty = super::FromPrimitive::from_i32(ty)
-                .ok_or_else(|| Error::UnexpectedElementType(ty))?;
+            let ty = super::FromPrimitive::from_i32(ty).ok_or(Error::UnexpectedElementType(ty))?;
             match ty {
                 PrimitiveType::Tuple => {
                     let elem_cnt = unsafe { c_lib::shape_tuple_shapes_size(ptr) };
