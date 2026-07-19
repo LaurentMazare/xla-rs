@@ -54,8 +54,8 @@ fn while_op2() -> Result<()> {
     let computation = w.build()?;
     let result = client.compile(&computation)?;
     let result = result.execute::<xla::Literal>(&[])?;
-    let mut result = result[0][0].to_literal_sync()?;
-    let result = result.decompose_tuple()?;
+    // Tuple results get flattened into multiple output buffers.
+    let result: Vec<_> = result[0].iter().map(|b| b.to_literal_sync()).collect::<Result<_>>()?;
     assert_eq!(result[0].element_count(), 1);
     assert_eq!(result[0].shape()?, xla::Shape::array::<i32>(vec![]));
     assert_eq!(result[0].to_vec::<i32>()?, [11]);

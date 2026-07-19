@@ -37,6 +37,12 @@ fn make_shared_lib<P: AsRef<Path>>(os: OS, xla_dir: P) {
                 .flag("-Wno-deprecated-declarations")
                 .flag("-DLLVM_ON_UNIX=1")
                 .flag("-DLLVM_VERSION_STRING=")
+                // The pre-built xla extension library is compiled in release
+                // mode. Some headers, e.g. tsl/concurrency/async_value.h,
+                // declare additional struct members in debug builds so NDEBUG
+                // has to be set to avoid ABI mismatches (which result in
+                // segfaults when running computations).
+                .flag("-DNDEBUG")
                 .file("xla_rs/xla_rs.cc")
                 .compile("xla_rs");
         }
@@ -46,6 +52,7 @@ fn make_shared_lib<P: AsRef<Path>>(os: OS, xla_dir: P) {
                 .pic(true)
                 .warnings(false)
                 .include(xla_dir.as_ref().join("include"))
+                .flag("/DNDEBUG")
                 .file("xla_rs/xla_rs.cc")
                 .compile("xla_rs");
         }

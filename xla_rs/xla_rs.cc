@@ -33,7 +33,9 @@
   }
 
 status pjrt_cpu_client_create(pjrt_client *output) {
-  ASSIGN_OR_RETURN_STATUS(client, xla::GetTfrtCpuClient(false));
+  CpuClientOptions options;
+  options.asynchronous = false;
+  ASSIGN_OR_RETURN_STATUS(client, xla::GetXlaPjrtCpuClient(std::move(options)));
   *output = new std::shared_ptr(std::move(client));
   return nullptr;
 }
@@ -96,12 +98,13 @@ status pjrt_buffer_from_host_buffer(const pjrt_client client,
                                     int pr_type, int dsize, const int64_t *ds,
                                     pjrt_buffer *output) {
   PjRtDevice *device_ = device == nullptr ? (*client)->devices()[0] : device;
+  ASSIGN_OR_RETURN_STATUS(memory_space, device_->default_memory_space());
   ASSIGN_OR_RETURN_STATUS(
       buffer,
       (*client)->BufferFromHostBuffer(
           d, (PrimitiveType)pr_type, absl::Span<const int64_t>(ds, dsize), {},
           PjRtClient::HostBufferSemantics::kImmutableOnlyDuringCall, []() {},
-          device_));
+          memory_space, /*device_layout=*/nullptr));
   *output = buffer.release();
   return nullptr;
 }
@@ -110,7 +113,9 @@ status pjrt_buffer_from_host_literal(const pjrt_client client,
                                      const pjrt_device device, const literal l,
                                      pjrt_buffer *output) {
   PjRtDevice *d = device == nullptr ? (*client)->devices()[0] : device;
-  ASSIGN_OR_RETURN_STATUS(buffer, (*client)->BufferFromHostLiteral(*l, d));
+  ASSIGN_OR_RETURN_STATUS(memory_space, d->default_memory_space());
+  ASSIGN_OR_RETURN_STATUS(buffer,
+                          (*client)->BufferFromHostLiteral(*l, memory_space));
   *output = buffer.release();
   return nullptr;
 }
@@ -128,7 +133,8 @@ shape pjrt_buffer_on_device_shape(pjrt_buffer b) {
 
 status pjrt_buffer_copy_to_device(pjrt_buffer b, pjrt_device device,
                                   pjrt_buffer *output) {
-  ASSIGN_OR_RETURN_STATUS(copied_b, b->CopyToDevice(device));
+  ASSIGN_OR_RETURN_STATUS(memory_space, device->default_memory_space());
+  ASSIGN_OR_RETURN_STATUS(copied_b, b->CopyToMemorySpace(memory_space));
   *output = copied_b.release();
   return nullptr;
 }
@@ -146,7 +152,7 @@ int pjrt_device_id(pjrt_device d) { return d->id(); }
 int pjrt_device_process_index(pjrt_device d) { return d->process_index(); }
 
 int pjrt_device_local_hardware_id(pjrt_device d) {
-  return d->local_hardware_id();
+  return d->local_hardware_id().value();
 }
 
 status pjrt_device_transfer_to_infeed(pjrt_device d, const literal l) {
@@ -872,7 +878,7 @@ status compile(const pjrt_client client, const xla_computation computation,
                pjrt_loaded_executable *output) {
   CompileOptions options;
   ASSIGN_OR_RETURN_STATUS(executable,
-                          (*client)->Compile(*computation, options));
+                          (*client)->CompileAndLoad(*computation, options));
   *output = executable.release();
   return nullptr;
 }
@@ -894,9 +900,10 @@ status execute(const pjrt_loaded_executable exe, const literal *inputs,
   options.strict_shape_checking = false;
   std::vector<PjRtBuffer *> input_buffer_ptrs;
   PjRtDevice *device = client->devices()[0];
+  ASSIGN_OR_RETURN_STATUS(memory_space, device->default_memory_space());
   for (int i = 0; i < ninputs; ++i) {
-    ASSIGN_OR_RETURN_STATUS(buffer,
-                            client->BufferFromHostLiteral(*inputs[i], device));
+    ASSIGN_OR_RETURN_STATUS(
+        buffer, client->BufferFromHostLiteral(*inputs[i], memory_space));
     // Wait for the transfer to have completed to avoid the literal potentially
     // getting out of scope before it has been transfered.
     MAYBE_RETURN_STATUS(buffer->GetReadyFuture().Await());
@@ -1033,7 +1040,7 @@ char *xla_computation_name(xla_computation c) {
 void xla_computation_free(xla_computation c) { delete c; }
 
 char *status_error_message(status s) {
-  return strdup(tsl::NullTerminatedMessage(*s));
+  return strdup(std::string(s->message()).c_str());
 }
 
 status hlo_module_proto_parse_and_return_unverified_module(

@@ -7,21 +7,24 @@
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #pragma GCC diagnostic ignored "-Winvalid-offsetof"
 #pragma GCC diagnostic ignored "-Wreturn-type"
+#include "absl/status/statusor.h"
 #include "xla/client/client_library.h"
-#include "xla/client/lib/constants.h"
-#include "xla/client/lib/matrix.h"
-#include "xla/client/xla_builder.h"
+#include "xla/hlo/builder/lib/constants.h"
+#include "xla/hlo/builder/lib/matrix.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/hlo/parser/hlo_parser.h"
 #include "xla/literal_util.h"
 #include "xla/pjrt/gpu/gpu_helpers.h"
 #include "xla/pjrt/gpu/se_gpu_pjrt_client.h"
 #include "xla/pjrt/pjrt_client.h"
 #include "xla/pjrt/pjrt_stream_executor_client.h"
-#include "xla/pjrt/tfrt_cpu_pjrt_client.h"
-#include "xla/service/hlo_parser.h"
+#include "xla/pjrt/plugin/xla_cpu/xla_cpu_pjrt_client.h"
+#include "xla/pjrt/plugin/xla_gpu/xla_gpu_client_options.h"
+#include "xla/service/hlo.pb.h"
 #include "xla/shape_util.h"
-#include "xla/statusor.h"
 #pragma GCC diagnostic pop
 using namespace xla;
+using Status = absl::Status;
 
 extern "C" {
 typedef std::shared_ptr<PjRtClient> *pjrt_client;
