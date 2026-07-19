@@ -26,7 +26,7 @@ name = "qwen35"
 required-features = ["hf-hub"]
 
 [build-dependencies]
-bindgen = "0.64"
+bindgen = "0.72"
 cc = "1.0"
 
 [dev-dependencies]
