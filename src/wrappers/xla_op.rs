@@ -491,6 +491,79 @@ impl XlaOp {
         self.wrap(op)
     }
 
+    /// The counterpart of `gather`, this writes the values from `updates` at the positions
+    /// specified by `scatter_indices`, combining them with the original values using the
+    /// `update_computation` (a computation with two scalar arguments, e.g. an addition).
+    ///
+    /// See the [semantics](https://www.tensorflow.org/xla/operation_semantics#scatter).
+    #[allow(clippy::too_many_arguments)]
+    pub fn scatter(
+        &self,
+        scatter_indices: &XlaOp,
+        updates: &XlaOp,
+        update_computation: &XlaComputation,
+        update_window_dims: &[i64],
+        inserted_window_dims: &[i64],
+        scatter_dims_to_operand_dims: &[i64],
+        index_vector_dim: i64,
+    ) -> Result<Self> {
+        let op = unsafe {
+            c_lib::op_scatter(
+                self.op,
+                scatter_indices.op,
+                updates.op,
+                update_computation.0,
+                update_window_dims.as_ptr(),
+                update_window_dims.len(),
+                inserted_window_dims.as_ptr(),
+                inserted_window_dims.len(),
+                scatter_dims_to_operand_dims.as_ptr(),
+                scatter_dims_to_operand_dims.len(),
+                index_vector_dim,
+            )
+        };
+        self.wrap(op)
+    }
+
+    /// Pad the operand with the `padding_value`. The padding configuration contains for each
+    /// dimension a triplet with the low edge padding, the high edge padding, and the interior
+    /// padding (the number of padding values to be added between any two elements).
+    ///
+    /// See the [semantics](https://www.tensorflow.org/xla/operation_semantics#pad).
+    pub fn pad(&self, padding_value: &XlaOp, padding_config: &[(i64, i64, i64)]) -> Result<Self> {
+        let low: Vec<_> = padding_config.iter().map(|p| p.0).collect();
+        let high: Vec<_> = padding_config.iter().map(|p| p.1).collect();
+        let interior: Vec<_> = padding_config.iter().map(|p| p.2).collect();
+        let op = unsafe {
+            c_lib::op_pad(
+                self.op,
+                padding_value.op,
+                padding_config.len(),
+                low.as_ptr(),
+                high.as_ptr(),
+                interior.as_ptr(),
+            )
+        };
+        self.wrap(op)
+    }
+
+    /// Pad the operand with the `padding_value` on a single dimension, `pad_low` values are added
+    /// at the beginning of the dimension and `pad_high` at the end. The dimension index can be
+    /// specified as a negative value, e.g. -1 for the last dimension.
+    pub fn pad_in_dim(
+        &self,
+        padding_value: &XlaOp,
+        dim: i64,
+        pad_low: i64,
+        pad_high: i64,
+    ) -> Result<Self> {
+        let dim = self.normalize_index(dim)?;
+        let rank = self.rank()?;
+        let mut padding_config = vec![(0i64, 0i64, 0i64); rank];
+        padding_config[dim as usize] = (pad_low, pad_high, 0);
+        self.pad(padding_value, &padding_config)
+    }
+
     pub fn take(&self, indices: &XlaOp, axis: i64) -> Result<Self> {
         let axis = self.normalize_index(axis)?;
         let shape = self.array_shape()?;

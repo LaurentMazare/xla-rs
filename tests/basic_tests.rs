@@ -68,6 +68,91 @@ fn matmul_op() -> Result<()> {
 }
 
 #[test]
+fn pad_op() -> Result<()> {
+    let client = xla::PjRtClient::cpu()?;
+
+    // Pad a [2, 2] matrix with one row at the top and one column on the right.
+    let builder = xla::XlaBuilder::new("test");
+    let x = builder.parameter(0, f32::TY, &[2, 2], "x")?;
+    let zero = builder.zero(xla::ElementType::F32)?;
+    let exe = x.pad(&zero, &[(1, 0, 0), (0, 1, 0)])?.build()?.compile(&client)?;
+    let x = xla::Literal::vec1(&[1f32, 2., 3., 4.]).reshape(&[2, 2])?;
+    let result = exe.execute::<xla::Literal>(&[x])?[0][0].to_literal_sync()?;
+    assert_eq!(result.array_shape()?, xla::ArrayShape::new::<f32>(vec![3, 3]));
+    assert_eq!(result.to_vec::<f32>()?, [0., 0., 0., 1., 2., 0., 3., 4., 0.]);
+
+    // Interior padding inserts values between the original elements.
+    let builder = xla::XlaBuilder::new("test");
+    let x = builder.parameter(0, f32::TY, &[3], "x")?;
+    let zero = builder.zero(xla::ElementType::F32)?;
+    let exe = x.pad(&zero, &[(0, 0, 1)])?.build()?.compile(&client)?;
+    let x = xla::Literal::vec1(&[1f32, 2., 3.]);
+    let result = exe.execute::<xla::Literal>(&[x])?[0][0].to_literal_sync()?;
+    assert_eq!(result.to_vec::<f32>()?, [1., 0., 2., 0., 3.]);
+
+    // Single dimension padding with a negative dimension index.
+    let builder = xla::XlaBuilder::new("test");
+    let x = builder.parameter(0, f32::TY, &[2, 2], "x")?;
+    let zero = builder.zero(xla::ElementType::F32)?;
+    let exe = x.pad_in_dim(&zero, -1, 1, 1)?.build()?.compile(&client)?;
+    let x = xla::Literal::vec1(&[1f32, 2., 3., 4.]).reshape(&[2, 2])?;
+    let result = exe.execute::<xla::Literal>(&[x])?[0][0].to_literal_sync()?;
+    assert_eq!(result.array_shape()?, xla::ArrayShape::new::<f32>(vec![2, 4]));
+    assert_eq!(result.to_vec::<f32>()?, [0., 1., 2., 0., 0., 3., 4., 0.]);
+    Ok(())
+}
+
+#[test]
+fn scatter_op() -> Result<()> {
+    let client = xla::PjRtClient::cpu()?;
+
+    // Scatter-add the updates [1, 2] at positions 0 and 2 of a [4] vector.
+    let add = {
+        let builder = xla::XlaBuilder::new("add");
+        let x = builder.parameter(0, f32::TY, &[], "x")?;
+        let y = builder.parameter(1, f32::TY, &[], "y")?;
+        (x + y)?.build()?
+    };
+    let builder = xla::XlaBuilder::new("test");
+    let operand = builder.parameter(0, f32::TY, &[4], "operand")?;
+    let indices = builder.parameter(1, i64::TY, &[2], "indices")?;
+    let updates = builder.parameter(2, f32::TY, &[2], "updates")?;
+    let exe =
+        operand.scatter(&indices, &updates, &add, &[], &[0], &[0], 1)?.build()?.compile(&client)?;
+    let operand = xla::Literal::vec1(&[10f32, 20., 30., 40.]);
+    let indices = xla::Literal::vec1(&[0i64, 2]);
+    let updates = xla::Literal::vec1(&[1f32, 2.]);
+    let result =
+        exe.execute::<xla::Literal>(&[operand, indices, updates])?[0][0].to_literal_sync()?;
+    assert_eq!(result.to_vec::<f32>()?, [11., 20., 32., 40.]);
+
+    // Scatter rows [2] at positions 2 and 0 of a [3, 2] matrix, replacing the
+    // original values.
+    let replace = {
+        let builder = xla::XlaBuilder::new("replace");
+        let _x = builder.parameter(0, f32::TY, &[], "x")?;
+        let y = builder.parameter(1, f32::TY, &[], "y")?;
+        // The update computation only keeps the update value.
+        y.build()?
+    };
+    let builder = xla::XlaBuilder::new("test");
+    let operand = builder.parameter(0, f32::TY, &[3, 2], "operand")?;
+    let indices = builder.parameter(1, i64::TY, &[2], "indices")?;
+    let updates = builder.parameter(2, f32::TY, &[2, 2], "updates")?;
+    let exe = operand
+        .scatter(&indices, &updates, &replace, &[1], &[0], &[0], 1)?
+        .build()?
+        .compile(&client)?;
+    let operand = xla::Literal::vec1(&[0f32; 6]).reshape(&[3, 2])?;
+    let indices = xla::Literal::vec1(&[2i64, 0]);
+    let updates = xla::Literal::vec1(&[1f32, 2., 3., 4.]).reshape(&[2, 2])?;
+    let result =
+        exe.execute::<xla::Literal>(&[operand, indices, updates])?[0][0].to_literal_sync()?;
+    assert_eq!(result.to_vec::<f32>()?, [3., 4., 0., 0., 1., 2.]);
+    Ok(())
+}
+
+#[test]
 fn sum_op() -> Result<()> {
     let client = xla::PjRtClient::cpu()?;
     let builder = xla::XlaBuilder::new("test");

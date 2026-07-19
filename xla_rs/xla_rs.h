@@ -169,6 +169,11 @@ xla_op op_get_tuple_element(const xla_op, int64_t);
 xla_op op_gather(const xla_op, const xla_op, const int64_t *, size_t,
                  const int64_t *, size_t, const int64_t *, size_t,
                  const int64_t *, const int64_t *, size_t);
+xla_op op_scatter(const xla_op, const xla_op, const xla_op,
+                  const xla_computation, const int64_t *, size_t,
+                  const int64_t *, size_t, const int64_t *, size_t, int64_t);
+xla_op op_pad(const xla_op, const xla_op, size_t, const int64_t *,
+              const int64_t *, const int64_t *);
 xla_op op_convert_element_type(const xla_op, int);
 xla_op op_dimensions_size(const xla_op, int64_t);
 xla_op op_reduce(const xla_op, const xla_op, const xla_computation,

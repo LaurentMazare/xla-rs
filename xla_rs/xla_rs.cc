@@ -725,6 +725,47 @@ xla_op op_gather(const xla_op arg1, const xla_op arg2,
   END_PROTECT_OP(arg1)
 }
 
+xla_op op_scatter(const xla_op operand, const xla_op scatter_indices,
+                  const xla_op updates, const xla_computation update_comp,
+                  const int64_t *update_window_dims,
+                  size_t n_update_window_dims,
+                  const int64_t *inserted_window_dims,
+                  size_t n_inserted_window_dims,
+                  const int64_t *scatter_dims_to_operand_dims,
+                  size_t n_scatter_dims_to_operand_dims,
+                  int64_t index_vector_dim) {
+  BEGIN_PROTECT_OP
+  ScatterDimensionNumbers dn;
+  for (size_t i = 0; i < n_update_window_dims; ++i) {
+    dn.add_update_window_dims(update_window_dims[i]);
+  }
+  for (size_t i = 0; i < n_inserted_window_dims; ++i) {
+    dn.add_inserted_window_dims(inserted_window_dims[i]);
+  }
+  for (size_t i = 0; i < n_scatter_dims_to_operand_dims; ++i) {
+    dn.add_scatter_dims_to_operand_dims(scatter_dims_to_operand_dims[i]);
+  }
+  dn.set_index_vector_dim(index_vector_dim);
+  return new XlaOp(
+      Scatter(*operand, *scatter_indices, *updates, *update_comp, dn));
+  END_PROTECT_OP(operand)
+}
+
+xla_op op_pad(const xla_op arg, const xla_op padding_value, size_t n_dims,
+              const int64_t *edge_padding_low, const int64_t *edge_padding_high,
+              const int64_t *interior_padding) {
+  BEGIN_PROTECT_OP
+  PaddingConfig config;
+  for (size_t i = 0; i < n_dims; ++i) {
+    auto dim = config.add_dimensions();
+    dim->set_edge_padding_low(edge_padding_low[i]);
+    dim->set_edge_padding_high(edge_padding_high[i]);
+    dim->set_interior_padding(interior_padding[i]);
+  }
+  return new XlaOp(Pad(*arg, *padding_value, config));
+  END_PROTECT_OP(arg)
+}
+
 xla_op op_convert_element_type(const xla_op arg, int pr_type) {
   BEGIN_PROTECT_OP
   return new XlaOp(ConvertElementType(*arg, (PrimitiveType)pr_type));
