@@ -51,14 +51,17 @@ status pjrt_gpu_client_create(pjrt_client *output, double memory_fraction,
   return nullptr;
 }
 
-/*
 status pjrt_tpu_client_create(pjrt_client *output,
                               int max_inflight_computations) {
-  ASSIGN_OR_RETURN_STATUS(client, xla::GetTpuClient(max_inflight_computations));
+  (void)max_inflight_computations;
+  const char *env = std::getenv("TPU_LIBRARY_PATH");
+  std::string library_path = env != nullptr ? env : "libtpu.so";
+  ASSIGN_OR_RETURN_STATUS(api, pjrt::LoadPjrtPlugin("tpu", library_path));
+  (void)api;
+  ASSIGN_OR_RETURN_STATUS(client, xla::GetCApiClient("tpu"));
   *output = new std::shared_ptr(std::move(client));
   return nullptr;
 }
-*/
 
 int pjrt_client_device_count(pjrt_client c) { return (*c)->device_count(); }
 

@@ -21,6 +21,8 @@
 #include "xla/pjrt/pjrt_stream_executor_client.h"
 #include "xla/pjrt/plugin/xla_cpu/xla_cpu_pjrt_client.h"
 #include "xla/pjrt/plugin/xla_gpu/xla_gpu_client_options.h"
+#include "xla/pjrt/pjrt_api.h"
+#include "xla/pjrt/c_api_client/pjrt_c_api_client.h"
 #include "xla/service/hlo.pb.h"
 #include "xla/shape_util.h"
 #pragma GCC diagnostic pop
@@ -55,7 +57,7 @@ typedef struct _hlo_module_proto *hlo_module_proto;
 
 status pjrt_cpu_client_create(pjrt_client *);
 status pjrt_gpu_client_create(pjrt_client *, double, bool);
-// status pjrt_tpu_client_create(pjrt_client *, int);
+status pjrt_tpu_client_create(pjrt_client *, int);
 void pjrt_client_free(pjrt_client);
 int pjrt_client_device_count(pjrt_client);
 int pjrt_client_addressable_device_count(pjrt_client);

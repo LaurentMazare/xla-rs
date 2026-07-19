@@ -26,7 +26,7 @@ use var_store::{VarBuilder, NUM_NON_WEIGHT_ARGS};
 
 // Fixed context size the computations get compiled for, also the kv-cache
 // length.
-const CONTEXT_SIZE: usize = 128;
+const CONTEXT_SIZE: usize = 4096;
 
 // Configuration shared by all the Qwen3.5 model sizes.
 const FULL_ATTENTION_INTERVAL: usize = 4;
