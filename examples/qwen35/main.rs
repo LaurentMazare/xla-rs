@@ -975,6 +975,12 @@ fn main() -> Result<()> {
         .into_iter()
         .next()
         .ok_or_else(|| anyhow!("no execution result"))?;
+    // Sync on the first generated token so that the prefill can be timed
+    // separately from the decode loop. The token stays on the device and gets
+    // re-read (cheaply) in the first loop iteration below.
+    prefill_outputs[0].to_literal_sync()?;
+    println!("prefill ({} tokens) in {:?}", tokens.len(), start.elapsed());
+    let start = std::time::Instant::now();
 
     // Decode: one token at a time, the state buffers stay on the device. The
     // generated token is also chained on the device: the next step is
@@ -1010,7 +1016,14 @@ fn main() -> Result<()> {
             _ => break,
         }
     }
-    println!("generated {generated} tokens in {:?}", start.elapsed());
+    // The first token comes from the prefill, so the decode loop ran
+    // generated - 1 steps.
+    let decode_steps = generated - 1;
+    let dt = start.elapsed();
+    if decode_steps > 0 {
+        let tok_s = decode_steps as f64 / dt.as_secs_f64();
+        println!("decoded {decode_steps} tokens in {dt:?} -> {tok_s:.1} tok/s");
+    }
     println!("generated ids: {:?}", &tokens[tokens.len() - generated..]);
 
     let all_ids: Vec<u32> = tokens.iter().map(|&t| t as u32).collect();

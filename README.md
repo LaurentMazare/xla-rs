@@ -39,21 +39,38 @@ cargo run --example qwen35 --release --features hf-hub -- \
 
 ### Comparison with transformers
 
-Greedy generation of 60 tokens, measured after compilation and weight loading,
-on a RTX 4080 SUPER (16GB) for the GPU rows and a Ryzen 9 7950X (16 cores) for
-the CPU rows. The generated tokens are identical between the two
-implementations for all the configurations below, except 0.8B on GPU bf16
-where transformers diverges after 9 tokens because of bf16 rounding (the f32
-outputs of both implementations agree with the xla-rs bf16 tokens).
+Greedy generation of 60 tokens from a 16 token prompt, measured after
+compilation and weight loading, on a RTX 4080 SUPER (16GB) for the GPU rows
+and a Ryzen 9 7950X (16 cores) for the CPU rows. Prefill is the time to the
+first generated token, the decode rate covers the remaining 59 tokens. GPU
+numbers are the median of 3 runs. The generated tokens are identical between
+the two implementations for all the configurations below, except 0.8B on GPU
+bf16 where transformers diverges after 9 tokens because of bf16 rounding (the
+f32 outputs of both implementations agree with the xla-rs bf16 tokens).
+
+Decode rate:
 
 |                          | 0.8B        | 2B         | 4B         |
 |--------------------------|-------------|------------|------------|
-| GPU bf16, xla-rs         | 158.0 tok/s | 74.8 tok/s | 41.7 tok/s |
-| GPU bf16, transformers   | 69.9 tok/s  | 65.4 tok/s | 46.8 tok/s |
-| CPU f32, xla-rs          | 14.7 tok/s  | 6.5 tok/s  | -          |
-| CPU f32, transformers    | 7.6 tok/s   | 3.7 tok/s  | -          |
+| GPU bf16, xla-rs         | 176.0 tok/s | 78.1 tok/s | 40.1 tok/s |
+| GPU bf16, transformers   | 73.1 tok/s  | 68.8 tok/s | 51.1 tok/s |
+| CPU f32, xla-rs          | 15.9 tok/s  | 6.6 tok/s  | -          |
+| CPU f32, transformers    | 7.9 tok/s   | 3.9 tok/s  | -          |
 
-The 4B model in f32 does not fit in the 32GB of RAM of the benchmark machine.
+Prefill (time to first token):
+
+|                          | 0.8B   | 2B     | 4B    |
+|--------------------------|--------|--------|-------|
+| GPU bf16, xla-rs         | 50 ms  | 58 ms  | 75 ms |
+| GPU bf16, transformers   | 57 ms  | 58 ms  | 84 ms |
+| CPU f32, xla-rs          | 352 ms | 555 ms | -     |
+| CPU f32, transformers    | 206 ms | 344 ms | -     |
+
+Note that the xla-rs prefill always processes the full padded 128 token
+context (with a sequential scan for the DeltaNet layers), while transformers
+only processes the 16 prompt tokens, which explains the slower xla-rs prefill
+on cpu. The 4B model in f32 does not fit in the 32GB of RAM of the benchmark
+machine.
 Versions: xla-rs with xla_extension 0.10.0 (CUDA 13.0 build), transformers
 5.14.1 with torch 2.13.0 (cu130 on gpu, cpu wheel on cpu). The transformers
 numbers use the plain torch DeltaNet path, the fused flash-linear-attention
