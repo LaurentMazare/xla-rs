@@ -840,18 +840,111 @@ fn build_decode(builder: &XlaBuilder, vb: &VarBuilder, cfg: &Config) -> Result<X
     Ok(builder.tuple(&outputs)?.build()?)
 }
 
+// hf-hub does not report download progress unless a handler is registered, so
+// a first run (which fetches several GB of weights) otherwise looks frozen.
+// This handler prints a single self-updating percentage line per file to
+// stderr, covering both the plain per-file stream and the xet aggregate path
+// (the safetensors shards go through xet).
+struct DownloadProgress {
+    label: String,
+    total: std::sync::atomic::AtomicU64,
+    done: std::sync::atomic::AtomicU64,
+}
+
+impl DownloadProgress {
+    fn new(label: impl Into<String>) -> Self {
+        use std::sync::atomic::AtomicU64;
+        Self { label: label.into(), total: AtomicU64::new(0), done: AtomicU64::new(0) }
+    }
+
+    fn render(&self) {
+        use std::io::Write;
+        use std::sync::atomic::Ordering;
+        let done = self.done.load(Ordering::Relaxed);
+        let total = self.total.load(Ordering::Relaxed);
+        if total > 0 {
+            let pct = 100.0 * done as f64 / total as f64;
+            eprint!(
+                "\r  {}: {pct:5.1}% ({} / {})    ",
+                self.label,
+                human_bytes(done),
+                human_bytes(total)
+            );
+        } else {
+            eprint!("\r  {}: {}    ", self.label, human_bytes(done));
+        }
+        let _ = std::io::stderr().flush();
+    }
+}
+
+impl hf_hub::progress::ProgressHandler for DownloadProgress {
+    fn on_progress(&self, event: &hf_hub::progress::ProgressEvent) {
+        use hf_hub::progress::{DownloadEvent, ProgressEvent};
+        use std::sync::atomic::Ordering;
+        let ProgressEvent::Download(event) = event else { return };
+        match event {
+            DownloadEvent::Start { total_bytes, .. } => {
+                self.total.store(*total_bytes, Ordering::Relaxed);
+                self.render();
+            }
+            DownloadEvent::Progress { files } => {
+                if let Some(f) = files.iter().max_by_key(|f| f.bytes_completed) {
+                    if f.total_bytes > 0 {
+                        self.total.store(f.total_bytes, Ordering::Relaxed);
+                    }
+                    self.done.store(f.bytes_completed, Ordering::Relaxed);
+                    self.render();
+                }
+            }
+            DownloadEvent::AggregateProgress { bytes_completed, total_bytes, .. } => {
+                self.total.store(*total_bytes, Ordering::Relaxed);
+                self.done.store(*bytes_completed, Ordering::Relaxed);
+                self.render();
+            }
+            DownloadEvent::Complete => {
+                let total = self.total.load(Ordering::Relaxed);
+                if total > 0 {
+                    self.done.store(total, Ordering::Relaxed);
+                }
+                self.render();
+                eprintln!();
+            }
+        }
+    }
+}
+
+fn human_bytes(n: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut v = n as f64;
+    let mut i = 0;
+    while v >= 1024.0 && i + 1 < UNITS.len() {
+        v /= 1024.0;
+        i += 1;
+    }
+    format!("{v:.1} {}", UNITS[i])
+}
+
 // Download the tokenizer and weight shards from the hugging face hub, using
 // the local cache if they have already been fetched.
 fn hub_model_files(cfg: &Config) -> Result<(std::path::PathBuf, Vec<std::path::PathBuf>)> {
     let client = hf_hub::HFClientSync::new()?;
     let (owner, name) = cfg.repo.split_once('/').ok_or_else(|| anyhow!("invalid repo"))?;
     let repo = client.model(owner, name);
-    let tokenizer = repo.download_file().filename("tokenizer.json").send()?;
+    let tokenizer = repo
+        .download_file()
+        .filename("tokenizer.json")
+        .progress(DownloadProgress::new("tokenizer.json"))
+        .send()?;
     let mut weights = Vec::with_capacity(cfg.num_shards);
     for shard in 1..=cfg.num_shards {
         let filename =
             format!("model.safetensors-{:05}-of-{:05}.safetensors", shard, cfg.num_shards);
-        weights.push(repo.download_file().filename(&filename).send()?);
+        weights.push(
+            repo.download_file()
+                .filename(&filename)
+                .progress(DownloadProgress::new(filename.as_str()))
+                .send()?,
+        );
     }
     Ok((tokenizer, weights))
 }
