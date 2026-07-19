@@ -12,6 +12,44 @@ work.
 Run each block in a terminal, or in notebook cells (prefix with `!` / use a
 `%%bash` cell).
 
+## Quick start (one block)
+
+Select a TPU runtime first (Runtime → Change runtime type → **TPU**), then paste
+this whole block into a terminal. It is idempotent — it only downloads/clones
+what is missing and pulls the latest fixes:
+
+```bash
+# Rust toolchain
+[ -d "$HOME/.cargo" ] || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"
+
+# bindgen build dep
+apt-get install -y -q clang libclang-dev pkg-config >/dev/null 2>&1 || true
+
+# XLA TPU extension (download only if missing)
+if [ ! -f /content/xla_extension/lib/libxla_extension.so ]; then
+  cd /content
+  wget -q https://github.com/elixir-nx/xla/releases/download/v0.10.0/xla_extension-0.10.0-x86_64-linux-gnu-tpu.tar.gz
+  tar -xzf xla_extension-0.10.0-x86_64-linux-gnu-tpu.tar.gz
+fi
+
+# repo (clone if missing, else update)
+if [ -d /content/xla-rs ]; then cd /content/xla-rs && git pull; \
+else cd /content && git clone https://github.com/LaurentMazare/xla-rs.git; fi
+
+# THE key step: a libtpu whose PJRT version is >= the extension's framework (0.90)
+pip install -q --force-reinstall libtpu==0.0.44
+
+# build & run
+export XLA_EXTENSION_DIR=/content/xla_extension
+export TPU_LIBRARY_PATH=/usr/local/lib/python3.12/dist-packages/libtpu/libtpu.so
+cd /content/xla-rs
+cargo run --example qwen35 --release --features hf-hub -- \
+  --which 2b --prompt "What is the capital of France?" --sample-len 200
+```
+
+The step-by-step version below explains each piece and the troubleshooting.
+
 ## 0. Select the TPU runtime
 
 Runtime → Change runtime type → **TPU**.
