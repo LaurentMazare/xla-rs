@@ -25,7 +25,8 @@ weights directly and runs greedy generation with a kv-cache and DeltaNet state
 carry-over.
 
 The weights and tokenizer config are downloaded automatically from the hub
-(and cached locally):
+(and cached locally). Generation runs in bf16 by default, `--dtype f32` and
+`--dtype f16` are also supported:
 
 ```bash
 # Run the example, use --cpu to run on cpu rather than gpu.
