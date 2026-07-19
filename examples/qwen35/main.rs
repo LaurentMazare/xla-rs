@@ -840,33 +840,45 @@ fn main() -> Result<()> {
     let pos_buffer = client.buffer_from_host_buffer(&[tokens.len() as i32 - 1], &[], None)?;
     let mut inputs: Vec<&xla::PjRtBuffer> = vec![&token_buffer, &pos_buffer];
     inputs.extend(weight_buffers.iter());
-    let mut outputs = prefill_exe
+    let prefill_outputs = prefill_exe
         .execute_b(&inputs)?
         .into_iter()
         .next()
         .ok_or_else(|| anyhow!("no execution result"))?;
-    let mut next_token = outputs[0].to_literal_sync()?.to_vec::<i32>()?[0];
-    tokens.push(next_token);
-    let mut generated = 1usize;
 
-    // Decode: one token at a time, the state buffers stay on the device.
-    while generated < args.sample_len
-        && tokens.len() < CONTEXT_SIZE
-        && !stop_tokens.contains(&next_token)
-    {
-        let token_buffer = client.buffer_from_host_buffer(&[next_token], &[1], None)?;
-        let pos_buffer = client.buffer_from_host_buffer(&[tokens.len() as i32 - 1], &[], None)?;
-        let mut inputs: Vec<&xla::PjRtBuffer> = vec![&token_buffer, &pos_buffer];
-        inputs.extend(weight_buffers.iter());
-        inputs.extend(outputs[1..].iter());
-        outputs = decode_exe
-            .execute_b(&inputs)?
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow!("no execution result"))?;
-        next_token = outputs[0].to_literal_sync()?.to_vec::<i32>()?[0];
+    // Decode: one token at a time, the state buffers stay on the device. The
+    // generated token is also chained on the device: the next step is
+    // dispatched before the current token is read back, so that the host to
+    // device round-trip and the dispatch overlap with the device execution.
+    // The step dispatched when a stop token shows up is wasted, but harmless.
+    let prompt_len = tokens.len();
+    let mut generated = 0usize;
+    let mut in_flight = prefill_outputs;
+    loop {
+        // in_flight produces the token at position prompt_len + generated.
+        let pos = prompt_len + generated;
+        let next_outputs = if generated + 1 < args.sample_len && pos + 1 < CONTEXT_SIZE {
+            let pos_buffer = client.buffer_from_host_buffer(&[pos as i32], &[], None)?;
+            let mut inputs: Vec<&xla::PjRtBuffer> = vec![&in_flight[0], &pos_buffer];
+            inputs.extend(weight_buffers.iter());
+            inputs.extend(in_flight[1..].iter());
+            Some(
+                decode_exe
+                    .execute_b(&inputs)?
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| anyhow!("no execution result"))?,
+            )
+        } else {
+            None
+        };
+        let next_token = in_flight[0].to_literal_sync()?.to_vec::<i32>()?[0];
         tokens.push(next_token);
         generated += 1;
+        match next_outputs {
+            Some(o) if !stop_tokens.contains(&next_token) => in_flight = o,
+            _ => break,
+        }
     }
     println!("generated {generated} tokens in {:?}", start.elapsed());
     println!("generated ids: {:?}", &tokens[tokens.len() - generated..]);
