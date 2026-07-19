@@ -34,3 +34,20 @@ cargo run --example qwen35 --release --features hf-hub -- \
   --prompt "What is the capital of France? Answer in one word." \
   --sample-len 30
 ```
+
+### Comparison with transformers
+
+Greedy generation of 60 tokens, measured after compilation and weight loading.
+The generated tokens are identical between the two implementations for all the
+configurations below.
+
+| Device                       | Dtype | xla-rs      | transformers |
+|------------------------------|-------|-------------|--------------|
+| GPU (RTX 4080 SUPER, 16GB)   | bf16  | 75.1 tok/s  | 65.9 tok/s   |
+| GPU (RTX 4080 SUPER, 16GB)   | f32   | 64.9 tok/s  | 63.0 tok/s   |
+| CPU (Ryzen 9 7950X, 16 cores)| f32   | 6.6 tok/s   | 3.8 tok/s    |
+
+Versions: xla-rs with xla_extension 0.10.0 (CUDA 13.0 build), transformers
+5.14.1 with torch 2.13.0 (cu130 on gpu, cpu wheel on cpu). The transformers
+numbers use the plain torch DeltaNet path, the fused flash-linear-attention
+kernels are not installed.
