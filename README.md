@@ -16,40 +16,20 @@ tar -xzvf xla_extension-0.10.0-x86_64-linux-gnu-cpu.tar.gz
 If the `xla_extension` directory is not in the main project directory, the path
 can be specified via the `XLA_EXTENSION_DIR` environment variable.
 
-## Generating some Text Samples with LLaMA
+## Generating some Text Samples with Qwen3.5
 
-The [LLaMA large language model](https://github.com/facebookresearch/llama) can
-be used to generate text. The model weights are only available after completing
-[this form](https://forms.gle/jk851eBVbX1m5TAv5) and once downloaded can be
-converted to a format this crate can use.  This requires a GPU with 16GB of
-memory or 32GB of memory when running on cpu (using the -cpu flag).
+The [Qwen3.5-2B model](https://huggingface.co/Qwen/Qwen3.5-2B) can be used to
+generate text. It is a hybrid architecture mixing gated DeltaNet linear
+attention layers with full attention layers. The example loads the safetensors
+weights directly and runs greedy generation with a kv-cache and DeltaNet state
+carry-over.
 
-```bash
-# Download the tokenizer config.
-wget https://huggingface.co/hf-internal-testing/llama-tokenizer/raw/main/tokenizer.json -O llama-tokenizer.json
-
-# Extract the pre-trained weights, this requires the transformers python library to be installed.
-# This creates a npz file storing all the weights.
-python examples/llama/convert_checkpoint.py ..../LLaMA/7B/consolidated.00.pth
-
-# Run the example.
-cargo run --example llama --release
-```
-
-## Generating some Text Samples with GPT2 
-
-One of the featured examples is GPT2. In order to run it, one should first
-download the tokenization configuration file as well as the weights before
-running the example. In order to do this, run the following commands:
+The weights and tokenizer config are downloaded automatically from the hub
+(and cached locally):
 
 ```bash
-# Download the vocab file.
-wget https://openaipublic.blob.core.windows.net/gpt-2/encodings/main/vocab.bpe
-
-# Extract the pre-trained weights, this requires the transformers python library to be installed.
-# This creates a npz file storing all the weights.
-python examples/nanogpt/get_weights.py
-
-# Run the example.
-cargo run --example nanogpt --release
+# Run the example, use --cpu to run on cpu rather than gpu.
+cargo run --example qwen35 --release --features hf-hub -- \
+  --prompt "What is the capital of France? Answer in one word." \
+  --sample-len 30
 ```
