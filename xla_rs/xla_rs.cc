@@ -766,6 +766,60 @@ xla_op op_pad(const xla_op arg, const xla_op padding_value, size_t n_dims,
   END_PROTECT_OP(arg)
 }
 
+xla_op op_dynamic_slice(const xla_op operand, const xla_op *start_indices,
+                        size_t n_start_indices, const int64_t *slice_sizes,
+                        size_t n_slice_sizes) {
+  BEGIN_PROTECT_OP
+  std::vector<XlaOp> indices;
+  for (size_t i = 0; i < n_start_indices; ++i) {
+    indices.push_back(*start_indices[i]);
+  }
+  return new XlaOp(
+      DynamicSlice(*operand, absl::Span<const XlaOp>(indices),
+                   absl::Span<const int64_t>(slice_sizes, n_slice_sizes)));
+  END_PROTECT_OP(operand)
+}
+
+xla_op op_dynamic_update_slice(const xla_op operand, const xla_op update,
+                               const xla_op *start_indices,
+                               size_t n_start_indices) {
+  BEGIN_PROTECT_OP
+  std::vector<XlaOp> indices;
+  for (size_t i = 0; i < n_start_indices; ++i) {
+    indices.push_back(*start_indices[i]);
+  }
+  return new XlaOp(DynamicUpdateSlice(*operand, *update,
+                                      absl::Span<const XlaOp>(indices)));
+  END_PROTECT_OP(operand)
+}
+
+xla_op op_sort(const xla_op *operands, size_t n_operands,
+               const xla_computation comparator, int64_t dimension,
+               bool is_stable) {
+  BEGIN_PROTECT_OP
+  std::vector<XlaOp> operands_;
+  for (size_t i = 0; i < n_operands; ++i) {
+    operands_.push_back(*operands[i]);
+  }
+  return new XlaOp(Sort(absl::Span<const XlaOp>(operands_), *comparator,
+                        dimension, is_stable));
+  END_PROTECT_OP(operands[0])
+}
+
+xla_op op_top_k(const xla_op operand, int64_t k, bool largest) {
+  BEGIN_PROTECT_OP
+  return new XlaOp(TopK(*operand, k, largest));
+  END_PROTECT_OP(operand)
+}
+
+xla_op op_arg_min_max(const xla_op operand, int index_pr_type, int axis,
+                      bool is_min) {
+  BEGIN_PROTECT_OP
+  return new XlaOp(
+      ArgMinMax(*operand, (PrimitiveType)index_pr_type, axis, is_min));
+  END_PROTECT_OP(operand)
+}
+
 xla_op op_convert_element_type(const xla_op arg, int pr_type) {
   BEGIN_PROTECT_OP
   return new XlaOp(ConvertElementType(*arg, (PrimitiveType)pr_type));

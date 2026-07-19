@@ -5,7 +5,7 @@
 //!
 //! For details on the semantics, see
 //! [operation_semantics](https://www.tensorflow.org/xla/operation_semantics).
-use super::{ArrayShape, PrimitiveType, Shape, XlaBuilder, XlaComputation};
+use super::{ArrayShape, ElementType, PrimitiveType, Shape, XlaBuilder, XlaComputation};
 use crate::{c_lib, Error, Result};
 
 pub struct XlaOp {
@@ -562,6 +562,111 @@ impl XlaOp {
         let mut padding_config = vec![(0i64, 0i64, 0i64); rank];
         padding_config[dim as usize] = (pad_low, pad_high, 0);
         self.pad(padding_value, &padding_config)
+    }
+
+    /// Extract a slice with the specified `slice_sizes` at runtime computed offsets,
+    /// `start_indices` contains one scalar node per dimension of the operand. Start indices are
+    /// clamped so that the slice remains in bounds.
+    ///
+    /// See the [semantics](https://www.tensorflow.org/xla/operation_semantics#dynamicslice).
+    pub fn dynamic_slice<B: std::borrow::Borrow<XlaOp>>(
+        &self,
+        start_indices: &[B],
+        slice_sizes: &[i64],
+    ) -> Result<Self> {
+        let start_indices: Vec<_> = start_indices.iter().map(|op| op.borrow().op).collect();
+        let op = unsafe {
+            c_lib::op_dynamic_slice(
+                self.op,
+                start_indices.as_ptr(),
+                start_indices.len(),
+                slice_sizes.as_ptr(),
+                slice_sizes.len(),
+            )
+        };
+        self.wrap(op)
+    }
+
+    /// Overwrite the values of `self` with the values from `update` at the runtime computed
+    /// offsets, `start_indices` contains one scalar node per dimension of the operand. Start
+    /// indices are clamped so that the update remains in bounds.
+    ///
+    /// See the [semantics](https://www.tensorflow.org/xla/operation_semantics#dynamicupdateslice).
+    pub fn dynamic_update_slice<B: std::borrow::Borrow<XlaOp>>(
+        &self,
+        update: &XlaOp,
+        start_indices: &[B],
+    ) -> Result<Self> {
+        let start_indices: Vec<_> = start_indices.iter().map(|op| op.borrow().op).collect();
+        let op = unsafe {
+            c_lib::op_dynamic_update_slice(
+                self.op,
+                update.op,
+                start_indices.as_ptr(),
+                start_indices.len(),
+            )
+        };
+        self.wrap(op)
+    }
+
+    /// Sort the values on the target dimension using the specified comparator, a computation
+    /// with two scalar arguments returning a `PRED` value.
+    ///
+    /// See the [semantics](https://www.tensorflow.org/xla/operation_semantics#sort).
+    pub fn sort(&self, comparator: &XlaComputation, dim: i64, is_stable: bool) -> Result<Self> {
+        let dim = self.normalize_index(dim)?;
+        let operands = [self.op];
+        let op = unsafe {
+            c_lib::op_sort(operands.as_ptr(), operands.len(), comparator.0, dim, is_stable)
+        };
+        self.wrap(op)
+    }
+
+    fn sort_comparator(&self, ascending: bool) -> Result<XlaComputation> {
+        let builder = XlaBuilder::new("Comparator");
+        let ty = self.primitive_type()?.element_type()?;
+        let lhs = builder.parameter(0, ty, &[], "lhs")?;
+        let rhs = builder.parameter(1, ty, &[], "rhs")?;
+        let cmp = if ascending { lhs.lt(&rhs)? } else { lhs.gt(&rhs)? };
+        cmp.build()
+    }
+
+    /// Sort the values on the target dimension in ascending order.
+    pub fn sort_asc(&self, dim: i64, is_stable: bool) -> Result<Self> {
+        self.sort(&self.sort_comparator(true)?, dim, is_stable)
+    }
+
+    /// Sort the values on the target dimension in descending order.
+    pub fn sort_desc(&self, dim: i64, is_stable: bool) -> Result<Self> {
+        self.sort(&self.sort_comparator(false)?, dim, is_stable)
+    }
+
+    /// The `k` largest (or smallest when `largest` is false) values on the last dimension,
+    /// the result is a tuple node with the values as the first element and their `S32` indexes
+    /// as the second one, both can be extracted with `get_tuple_element`.
+    pub fn top_k(&self, k: i64, largest: bool) -> Result<Self> {
+        let op = unsafe { c_lib::op_top_k(self.op, k, largest) };
+        self.wrap(op)
+    }
+
+    /// The indexes of the maximum values on the target dimension, using the specified element
+    /// type for the resulting indexes. The target dimension is squeezed in the result.
+    pub fn argmax(&self, index_ty: ElementType, dim: i64) -> Result<Self> {
+        let dim = self.normalize_index(dim)?;
+        let op = unsafe {
+            c_lib::op_arg_min_max(self.op, index_ty.primitive_type() as i32, dim as i32, false)
+        };
+        self.wrap(op)
+    }
+
+    /// The indexes of the minimum values on the target dimension, using the specified element
+    /// type for the resulting indexes. The target dimension is squeezed in the result.
+    pub fn argmin(&self, index_ty: ElementType, dim: i64) -> Result<Self> {
+        let dim = self.normalize_index(dim)?;
+        let op = unsafe {
+            c_lib::op_arg_min_max(self.op, index_ty.primitive_type() as i32, dim as i32, true)
+        };
+        self.wrap(op)
     }
 
     pub fn take(&self, indices: &XlaOp, axis: i64) -> Result<Self> {

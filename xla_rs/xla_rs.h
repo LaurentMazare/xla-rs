@@ -9,6 +9,7 @@
 #pragma GCC diagnostic ignored "-Wreturn-type"
 #include "absl/status/statusor.h"
 #include "xla/client/client_library.h"
+#include "xla/hlo/builder/lib/arithmetic.h"
 #include "xla/hlo/builder/lib/constants.h"
 #include "xla/hlo/builder/lib/matrix.h"
 #include "xla/hlo/builder/xla_builder.h"
@@ -174,6 +175,13 @@ xla_op op_scatter(const xla_op, const xla_op, const xla_op,
                   const int64_t *, size_t, const int64_t *, size_t, int64_t);
 xla_op op_pad(const xla_op, const xla_op, size_t, const int64_t *,
               const int64_t *, const int64_t *);
+xla_op op_dynamic_slice(const xla_op, const xla_op *, size_t, const int64_t *,
+                        size_t);
+xla_op op_dynamic_update_slice(const xla_op, const xla_op, const xla_op *,
+                               size_t);
+xla_op op_sort(const xla_op *, size_t, const xla_computation, int64_t, bool);
+xla_op op_top_k(const xla_op, int64_t, bool);
+xla_op op_arg_min_max(const xla_op, int, int, bool);
 xla_op op_convert_element_type(const xla_op, int);
 xla_op op_dimensions_size(const xla_op, int64_t);
 xla_op op_reduce(const xla_op, const xla_op, const xla_computation,

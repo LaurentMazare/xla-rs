@@ -153,6 +153,99 @@ fn scatter_op() -> Result<()> {
 }
 
 #[test]
+fn sort_ops() -> Result<()> {
+    let client = xla::PjRtClient::cpu()?;
+
+    // Ascending sort on the last dimension.
+    let builder = xla::XlaBuilder::new("test");
+    let x = builder.parameter(0, f32::TY, &[4], "x")?;
+    let exe = x.sort_asc(-1, false)?.build()?.compile(&client)?;
+    let x = xla::Literal::vec1(&[3f32, 1., 4., 2.]);
+    let result = exe.execute::<xla::Literal>(&[x])?[0][0].to_literal_sync()?;
+    assert_eq!(result.to_vec::<f32>()?, [1., 2., 3., 4.]);
+
+    // Descending sort along the first dimension of a [2, 2] matrix.
+    let builder = xla::XlaBuilder::new("test");
+    let x = builder.parameter(0, f32::TY, &[2, 2], "x")?;
+    let exe = x.sort_desc(0, false)?.build()?.compile(&client)?;
+    let x = xla::Literal::vec1(&[1f32, 4., 3., 2.]).reshape(&[2, 2])?;
+    let result = exe.execute::<xla::Literal>(&[x])?[0][0].to_literal_sync()?;
+    assert_eq!(result.to_vec::<f32>()?, [3., 4., 1., 2.]);
+
+    // The largest three values together with their indexes.
+    let builder = xla::XlaBuilder::new("test");
+    let x = builder.parameter(0, f32::TY, &[5], "x")?;
+    let exe = x.top_k(3, true)?.build()?.compile(&client)?;
+    let x = xla::Literal::vec1(&[3f32, 1., 4., 1., 5.]);
+    let result = exe.execute::<xla::Literal>(&[x])?;
+    // The tuple result gets flattened into a values and an indexes buffer.
+    assert_eq!(result[0].len(), 2);
+    assert_eq!(result[0][0].to_literal_sync()?.to_vec::<f32>()?, [5., 4., 3.]);
+    assert_eq!(result[0][1].to_literal_sync()?.to_vec::<i32>()?, [4, 2, 0]);
+
+    // Indexes of the min/max values on the last dimension.
+    let builder = xla::XlaBuilder::new("test");
+    let x = builder.parameter(0, f32::TY, &[2, 3], "x")?;
+    let argmax = x.argmax(xla::ElementType::S32, -1)?;
+    let argmin = x.argmin(xla::ElementType::S32, -1)?;
+    let exe = builder.tuple(&[argmax, argmin])?.build()?.compile(&client)?;
+    let x = xla::Literal::vec1(&[1f32, 5., 2., 7., 3., 4.]).reshape(&[2, 3])?;
+    let result = exe.execute::<xla::Literal>(&[x])?;
+    assert_eq!(result[0][0].to_literal_sync()?.to_vec::<i32>()?, [1, 0]);
+    assert_eq!(result[0][1].to_literal_sync()?.to_vec::<i32>()?, [0, 1]);
+    Ok(())
+}
+
+#[test]
+fn dynamic_slice_op() -> Result<()> {
+    let client = xla::PjRtClient::cpu()?;
+
+    // Slice two values at a runtime provided offset.
+    let builder = xla::XlaBuilder::new("test");
+    let x = builder.parameter(0, f32::TY, &[5], "x")?;
+    let start = builder.parameter(1, i64::TY, &[], "start")?;
+    let exe = x.dynamic_slice(&[start], &[2])?.build()?.compile(&client)?;
+    let x = xla::Literal::vec1(&[10f32, 11., 12., 13., 14.]);
+    let start = xla::Literal::scalar(2i64);
+    let result = exe.execute::<xla::Literal>(&[x, start])?[0][0].to_literal_sync()?;
+    assert_eq!(result.to_vec::<f32>()?, [12., 13.]);
+
+    // Out of bound start indices get clamped.
+    let x = xla::Literal::vec1(&[10f32, 11., 12., 13., 14.]);
+    let start = xla::Literal::scalar(4i64);
+    let result = exe.execute::<xla::Literal>(&[x, start])?[0][0].to_literal_sync()?;
+    assert_eq!(result.to_vec::<f32>()?, [13., 14.]);
+
+    // A [2, 2] slice of a [3, 3] matrix at offset (1, 1).
+    let builder = xla::XlaBuilder::new("test");
+    let x = builder.parameter(0, f32::TY, &[3, 3], "x")?;
+    let one = builder.c0(1i64)?;
+    let exe = x.dynamic_slice(&[&one, &one], &[2, 2])?.build()?.compile(&client)?;
+    let x = xla::Literal::vec1(&(0..9).map(|v| v as f32).collect::<Vec<_>>()).reshape(&[3, 3])?;
+    let result = exe.execute::<xla::Literal>(&[x])?[0][0].to_literal_sync()?;
+    assert_eq!(result.to_vec::<f32>()?, [4., 5., 7., 8.]);
+    Ok(())
+}
+
+#[test]
+fn dynamic_update_slice_op() -> Result<()> {
+    let client = xla::PjRtClient::cpu()?;
+
+    // Overwrite two values at a runtime provided offset, the kv-cache update pattern.
+    let builder = xla::XlaBuilder::new("test");
+    let x = builder.parameter(0, f32::TY, &[5], "x")?;
+    let update = builder.parameter(1, f32::TY, &[2], "update")?;
+    let start = builder.parameter(2, i64::TY, &[], "start")?;
+    let exe = x.dynamic_update_slice(&update, &[start])?.build()?.compile(&client)?;
+    let x = xla::Literal::vec1(&[0f32, 1., 2., 3., 4.]);
+    let update = xla::Literal::vec1(&[20f32, 21.]);
+    let start = xla::Literal::scalar(2i64);
+    let result = exe.execute::<xla::Literal>(&[x, update, start])?[0][0].to_literal_sync()?;
+    assert_eq!(result.to_vec::<f32>()?, [0., 1., 20., 21., 4.]);
+    Ok(())
+}
+
+#[test]
 fn sum_op() -> Result<()> {
     let client = xla::PjRtClient::cpu()?;
     let builder = xla::XlaBuilder::new("test");
