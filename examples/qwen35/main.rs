@@ -26,7 +26,7 @@ use var_store::{VarBuilder, NUM_NON_WEIGHT_ARGS};
 
 // Fixed context size the computations get compiled for, also the kv-cache
 // length.
-const CONTEXT_SIZE: usize = 4096;
+const CONTEXT_SIZE: usize = 128;
 
 // Configuration shared by all the Qwen3.5 model sizes.
 const FULL_ATTENTION_INTERVAL: usize = 4;
@@ -1017,11 +1017,31 @@ struct Args {
     raw_prompt: bool,
 }
 
+// Selects an execution device. Unless `--cpu` forces CPU, prefer an
+// accelerator whose runtime is actually available: try TPU first, then GPU,
+// then fall back to CPU. The client constructors return an error when their
+// runtime is missing (e.g. no libtpu.so, or no CUDA device), so the same
+// binary works against the cpu, cuda, or tpu xla_extension builds.
+fn make_client(force_cpu: bool) -> Result<PjRtClient> {
+    if force_cpu {
+        return Ok(PjRtClient::cpu()?);
+    }
+    match PjRtClient::tpu(1) {
+        Ok(client) => return Ok(client),
+        Err(err) => eprintln!("tpu client unavailable, trying gpu ({err})"),
+    }
+    match PjRtClient::gpu(0.90, false) {
+        Ok(client) => return Ok(client),
+        Err(err) => eprintln!("gpu client unavailable, falling back to cpu ({err})"),
+    }
+    Ok(PjRtClient::cpu()?)
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
     xla::set_tf_min_log_level(xla::TfLogLevel::Warning);
     let cfg = args.which.config();
-    let client = if args.cpu { PjRtClient::cpu()? } else { PjRtClient::gpu(0.90, false)? };
+    let client = make_client(args.cpu)?;
     println!(
         "platform: {} {}, model: {}, dtype: {:?}",
         client.platform_name(),
