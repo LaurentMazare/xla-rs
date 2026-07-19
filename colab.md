@@ -1,11 +1,15 @@
 # Running the Qwen3.5 example on a Colab TPU
 
 These steps build `xla-rs` and run the `qwen35` example on a TPU-enabled Google
-Colab notebook. Everything needed (the TPU PjRt client and the device
-auto-detection) is already on `main`, so a plain clone is enough — no source
-edits required.
+Colab notebook. The TPU PjRt client and the device auto-detection are already on
+`main`, so a plain clone is enough — no source edits required.
 
-Run each block in a notebook cell (prefix shell commands with `!`, or use a
+The one thing that matters beyond the build: the **`libtpu.so` PJRT version must
+be at least as new as the extension's framework version** (see step 6). Colab's
+stock libtpu is often too old; upgrading it to the latest is what makes this
+work.
+
+Run each block in a terminal, or in notebook cells (prefix with `!` / use a
 `%%bash` cell).
 
 ## 0. Select the TPU runtime
@@ -17,10 +21,6 @@ Runtime → Change runtime type → **TPU**.
 ```bash
 python3 -c "import jax; print(jax.devices())"
 ```
-
-Note: do **not** use Colab's pip `libtpu` — the XLA TPU extension downloaded in
-step 4 bundles its own version-matched `libtpu.so` under
-`xla_extension/lib/`, which is what step 6 points at.
 
 ## 2. Install the Rust toolchain
 
@@ -48,37 +48,68 @@ tar -xzf xla_extension-0.10.0-x86_64-linux-gnu-tpu.tar.gz     # -> /content/xla_
 ```bash
 cd /content
 git clone https://github.com/LaurentMazare/xla-rs.git
-cd xla-rs
 ```
 
-## 6. Build and run
+## 6. Get a new-enough libtpu (the key step)
+
+The extension is compiled against a specific PJRT C-API version — its
+"framework" version (`0.90` for xla_extension 0.10.0). The `libtpu.so` you run
+against must report a PJRT API version **>= that framework version**, otherwise
+client init or HLO compilation fails. Two traps:
+
+- The `libtpu.so` **bundled** inside the extension (`xla_extension/lib/`) is
+  stale build scaffolding (PJRT `0.38`). Do **not** use it — it's too old for
+  both the extension and Colab's TPU driver (`Couldn't allocate MSIX interrupts`).
+- Colab's **stock** pip libtpu can also lag the framework (e.g. PJRT `0.75` vs
+  `0.90`), which surfaces as `reshape.NNN instruction contains invalid operand id(s)`.
+
+So force-install the **latest** pip libtpu, which is newer than the framework
+(`0.0.44` reports PJRT `0.113`):
+
+```bash
+pip install -q --force-reinstall libtpu==0.0.44
+```
+
+Optionally verify it (reads the PJRT version straight out of the `.so`):
+
+```bash
+python3 - <<'PY'
+import ctypes
+so = "/usr/local/lib/python3.12/dist-packages/libtpu/libtpu.so"
+lib = ctypes.CDLL(so); lib.GetPjrtApi.restype = ctypes.c_void_p
+p = lib.GetPjrtApi(); maj, mino = (ctypes.c_int * 2).from_address(p + 32)
+print(f"{so}: PJRT API {maj}.{mino}")   # want >= framework (0.90 for xla 0.10.0)
+PY
+```
+
+## 7. Build and run
 
 ```bash
 export XLA_EXTENSION_DIR=/content/xla_extension
-# Use the libtpu bundled with the extension (matched to its XLA build), not a
-# pip-installed one.
-export TPU_LIBRARY_PATH=/content/xla_extension/lib/libtpu.so
-
+export TPU_LIBRARY_PATH=/usr/local/lib/python3.12/dist-packages/libtpu/libtpu.so
+cd /content/xla-rs
 cargo run --example qwen35 --release --features hf-hub -- \
   --which 2b --prompt "What is the capital of France?" --sample-len 200
 ```
 
 No `--tpu` flag is needed: the example's `make_client` tries the TPU client
-first and only falls back to GPU/CPU if the TPU runtime is unavailable. On
-success it prints `platform: tpu ...`. Use `--which 2b` for a quick first test
-(single weight shard); the weights download from the Hugging Face hub on first
-run and are cached afterwards.
+first and falls back to GPU/CPU only if it is unavailable. On success it prints
+`platform: tpu ...`. Use `--which 2b` for a quick first test (single weight
+shard); weights download from the Hugging Face hub on first run and are cached.
 
-## Caveats
+## Troubleshooting
 
-- **Runtime-untested.** The TPU shim (`pjrt::LoadPjrtPlugin` +
-  `xla::GetCApiClient("tpu")` in `xla_rs/xla_rs.cc`) compiles and links, but has
-  not been exercised on real TPU hardware. `GetCApiClient("tpu")` may need
-  further tweaks (e.g. `InitializePjrtPlugin`, create-options).
-- **Use the bundled `libtpu`.** The extension ships a `libtpu.so` matched to its
-  XLA build (abseil LTS `20250814`, ~late 2025) under `xla_extension/lib/`.
-  Pointing `TPU_LIBRARY_PATH` at Colab's pip `libtpu` (e.g. `0.0.21`) instead can
-  trigger a fatal `InitGoogle() has not finished yet` abort during client
-  creation. If you must use a pip `libtpu`, match it to that XLA vintage.
-- If a shared library fails to load at runtime, add its directory to
-  `LD_LIBRARY_PATH` (the CUDA build needed the same for NCCL/nvshmem).
+- **`Couldn't allocate MSIX interrupts` / `IRQ ... NORESIZE`** — the libtpu is
+  too old (or too new) for Colab's TPU driver. The latest pip libtpu (step 6)
+  matches current Colab.
+- **`reshape.NNN instruction contains invalid operand id(s)`** — the libtpu's
+  PJRT/HLO is older than the extension's; upgrade libtpu (step 6).
+- **`InitGoogle() has not finished yet` abort** — an old/mismatched libtpu; use
+  the latest pip one.
+- **TPU already in use** — a crashed run can hold the chip. Free it with
+  `sudo fuser -k /dev/vfio/* /dev/accel* 2>/dev/null; sudo rm -f /tmp/libtpu_lockfile`,
+  or Runtime → Restart session (keeps everything under `/content`). Run the Rust
+  binary *before* any `import jax` cell, since that also grabs the TPU.
+- The device string passed to `GetCApiClient` is upper-case `"TPU"` (matching
+  EXLA); the plugin is loaded/initialized as lower-case `"tpu"`.
+```
