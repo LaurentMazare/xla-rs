@@ -41,19 +41,28 @@ impl VarBuilder {
         self.vars.borrow().len()
     }
 
-    /// Load the declared weights from a safetensors file, in declaration order.
+    /// Load the declared weights from safetensors shards, in declaration order.
     pub fn load_buffers<P: AsRef<std::path::Path>>(
         &self,
-        path: P,
+        paths: &[P],
         client: &PjRtClient,
     ) -> Result<Vec<PjRtBuffer>> {
-        let file = std::fs::File::open(path.as_ref())?;
-        let mmap = unsafe { memmap2::Mmap::map(&file)? };
-        let st = safetensors::SafeTensors::deserialize(&mmap)?;
+        let mut mmaps = Vec::with_capacity(paths.len());
+        for path in paths.iter() {
+            let file = std::fs::File::open(path.as_ref())?;
+            mmaps.push(unsafe { memmap2::Mmap::map(&file)? });
+        }
+        let sts = mmaps
+            .iter()
+            .map(|m| safetensors::SafeTensors::deserialize(m))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         let vars = self.vars.borrow();
         let mut buffers = Vec::with_capacity(vars.len());
         for (name, dims) in vars.iter() {
-            let view = st.tensor(name)?;
+            let view = sts
+                .iter()
+                .find_map(|st| st.tensor(name).ok())
+                .ok_or_else(|| anyhow::anyhow!("cannot find tensor {name} in the shards"))?;
             let view_dims: Vec<i64> = view.shape().iter().map(|d| *d as i64).collect();
             if view_dims != *dims {
                 bail!("shape mismatch for {name}: expected {dims:?}, got {view_dims:?}")

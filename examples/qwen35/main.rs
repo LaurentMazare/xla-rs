@@ -28,27 +28,94 @@ use var_store::{VarBuilder, NUM_NON_WEIGHT_ARGS};
 // length.
 const CONTEXT_SIZE: usize = 128;
 
-// Configuration for Qwen3.5-2B (text model part).
-const HIDDEN_SIZE: i64 = 2048;
-const INTERMEDIATE_SIZE: i64 = 6144;
-const NUM_LAYERS: usize = 24;
+// Configuration shared by all the Qwen3.5 model sizes.
 const FULL_ATTENTION_INTERVAL: usize = 4;
 const VOCAB_SIZE: i64 = 248320;
 const RMS_NORM_EPS: f32 = 1e-6;
 // Full attention.
-const NUM_HEADS: i64 = 8;
-const NUM_KV_HEADS: i64 = 2;
 const HEAD_DIM: i64 = 256;
 const ROPE_THETA: f64 = 1e7;
 const ROTARY_DIM: i64 = 64; // partial_rotary_factor 0.25
                             // Linear attention (gated DeltaNet).
-const LIN_NUM_HEADS: i64 = 16;
 const LIN_KEY_DIM: i64 = 128;
 const LIN_VALUE_DIM: i64 = 128;
 const CONV_KERNEL_SIZE: i64 = 4;
-const CONV_DIM: i64 = 2 * LIN_NUM_HEADS * LIN_KEY_DIM + LIN_NUM_HEADS * LIN_VALUE_DIM;
 
 const T: i64 = CONTEXT_SIZE as i64;
+
+// Per-size configuration. The DeltaNet layers of the larger models use more
+// value heads than key heads, the q/k heads are then repeated to match.
+#[derive(Clone, Copy, Debug)]
+struct Config {
+    repo: &'static str,
+    hidden_size: i64,
+    intermediate_size: i64,
+    num_layers: usize,
+    num_heads: i64,
+    num_kv_heads: i64,
+    lin_num_k_heads: i64,
+    lin_num_v_heads: i64,
+    tie_embeddings: bool,
+    num_shards: usize,
+}
+
+impl Config {
+    fn conv_dim(&self) -> i64 {
+        2 * self.lin_num_k_heads * LIN_KEY_DIM + self.lin_num_v_heads * LIN_VALUE_DIM
+    }
+}
+
+const CONFIG_0_8B: Config = Config {
+    repo: "Qwen/Qwen3.5-0.8B",
+    hidden_size: 1024,
+    intermediate_size: 3584,
+    num_layers: 24,
+    num_heads: 8,
+    num_kv_heads: 2,
+    lin_num_k_heads: 16,
+    lin_num_v_heads: 16,
+    tie_embeddings: true,
+    num_shards: 1,
+};
+
+const CONFIG_2B: Config = Config {
+    repo: "Qwen/Qwen3.5-2B",
+    hidden_size: 2048,
+    intermediate_size: 6144,
+    num_layers: 24,
+    num_heads: 8,
+    num_kv_heads: 2,
+    lin_num_k_heads: 16,
+    lin_num_v_heads: 16,
+    tie_embeddings: true,
+    num_shards: 1,
+};
+
+const CONFIG_4B: Config = Config {
+    repo: "Qwen/Qwen3.5-4B",
+    hidden_size: 2560,
+    intermediate_size: 9216,
+    num_layers: 32,
+    num_heads: 16,
+    num_kv_heads: 4,
+    lin_num_k_heads: 16,
+    lin_num_v_heads: 32,
+    tie_embeddings: true,
+    num_shards: 2,
+};
+
+const CONFIG_9B: Config = Config {
+    repo: "Qwen/Qwen3.5-9B",
+    hidden_size: 4096,
+    intermediate_size: 12288,
+    num_layers: 32,
+    num_heads: 16,
+    num_kv_heads: 4,
+    lin_num_k_heads: 16,
+    lin_num_v_heads: 32,
+    tie_embeddings: false,
+    num_shards: 4,
+};
 
 fn linear(x: &XlaOp, w: &XlaOp) -> Result<XlaOp> {
     // x: [..., in], w: [out, in] -> [..., out]
@@ -92,12 +159,11 @@ struct Mlp {
 }
 
 impl Mlp {
-    fn new(vb: &VarBuilder, p: &str) -> Result<Self> {
-        let gate_proj =
-            vb.var(&format!("{p}.gate_proj.weight"), &[INTERMEDIATE_SIZE, HIDDEN_SIZE])?;
-        let up_proj = vb.var(&format!("{p}.up_proj.weight"), &[INTERMEDIATE_SIZE, HIDDEN_SIZE])?;
-        let down_proj =
-            vb.var(&format!("{p}.down_proj.weight"), &[HIDDEN_SIZE, INTERMEDIATE_SIZE])?;
+    fn new(vb: &VarBuilder, p: &str, cfg: &Config) -> Result<Self> {
+        let (h, i) = (cfg.hidden_size, cfg.intermediate_size);
+        let gate_proj = vb.var(&format!("{p}.gate_proj.weight"), &[i, h])?;
+        let up_proj = vb.var(&format!("{p}.up_proj.weight"), &[i, h])?;
+        let down_proj = vb.var(&format!("{p}.down_proj.weight"), &[h, i])?;
         Ok(Self { gate_proj, up_proj, down_proj })
     }
 
@@ -116,8 +182,8 @@ fn delta_step(
     v_t: &XlaOp,
     exp_g_t: &XlaOp,
     beta_t: &XlaOp,
+    h: i64,
 ) -> Result<(XlaOp, XlaOp)> {
-    let h = LIN_NUM_HEADS;
     let (dk, dv) = (LIN_KEY_DIM, LIN_VALUE_DIM);
     let bcast_h = |x: &XlaOp| x.broadcast_in_dim(&[h, dk, dv], &[0]);
     let bcast_k = |x: &XlaOp| x.broadcast_in_dim(&[h, dk, dv], &[0, 1]);
@@ -148,20 +214,26 @@ struct GatedDeltaNet {
     dt_bias: XlaOp,
     norm: XlaOp,
     out_proj: XlaOp,
+    k_heads: i64,
+    v_heads: i64,
+    conv_dim: i64,
 }
 
 impl GatedDeltaNet {
-    fn new(vb: &VarBuilder, p: &str) -> Result<Self> {
-        let value_dim = LIN_NUM_HEADS * LIN_VALUE_DIM;
-        let in_proj_qkv = vb.var(&format!("{p}.in_proj_qkv.weight"), &[CONV_DIM, HIDDEN_SIZE])?;
-        let in_proj_z = vb.var(&format!("{p}.in_proj_z.weight"), &[value_dim, HIDDEN_SIZE])?;
-        let in_proj_b = vb.var(&format!("{p}.in_proj_b.weight"), &[LIN_NUM_HEADS, HIDDEN_SIZE])?;
-        let in_proj_a = vb.var(&format!("{p}.in_proj_a.weight"), &[LIN_NUM_HEADS, HIDDEN_SIZE])?;
-        let conv1d = vb.var(&format!("{p}.conv1d.weight"), &[CONV_DIM, 1, CONV_KERNEL_SIZE])?;
-        let a_log = vb.var(&format!("{p}.A_log"), &[LIN_NUM_HEADS])?;
-        let dt_bias = vb.var(&format!("{p}.dt_bias"), &[LIN_NUM_HEADS])?;
+    fn new(vb: &VarBuilder, p: &str, cfg: &Config) -> Result<Self> {
+        let (kh, vh) = (cfg.lin_num_k_heads, cfg.lin_num_v_heads);
+        let conv_dim = cfg.conv_dim();
+        let hidden = cfg.hidden_size;
+        let value_dim = vh * LIN_VALUE_DIM;
+        let in_proj_qkv = vb.var(&format!("{p}.in_proj_qkv.weight"), &[conv_dim, hidden])?;
+        let in_proj_z = vb.var(&format!("{p}.in_proj_z.weight"), &[value_dim, hidden])?;
+        let in_proj_b = vb.var(&format!("{p}.in_proj_b.weight"), &[vh, hidden])?;
+        let in_proj_a = vb.var(&format!("{p}.in_proj_a.weight"), &[vh, hidden])?;
+        let conv1d = vb.var(&format!("{p}.conv1d.weight"), &[conv_dim, 1, CONV_KERNEL_SIZE])?;
+        let a_log = vb.var(&format!("{p}.A_log"), &[vh])?;
+        let dt_bias = vb.var(&format!("{p}.dt_bias"), &[vh])?;
         let norm = vb.var(&format!("{p}.norm.weight"), &[LIN_VALUE_DIM])?;
-        let out_proj = vb.var(&format!("{p}.out_proj.weight"), &[HIDDEN_SIZE, value_dim])?;
+        let out_proj = vb.var(&format!("{p}.out_proj.weight"), &[hidden, value_dim])?;
         Ok(Self {
             in_proj_qkv,
             in_proj_z,
@@ -172,22 +244,25 @@ impl GatedDeltaNet {
             dt_bias,
             norm,
             out_proj,
+            k_heads: kh,
+            v_heads: vh,
+            conv_dim,
         })
     }
 
     // Depthwise causal conv1d (kernel 4, no bias) over the time dimension,
-    // followed by a silu activation. x: [t, CONV_DIM].
+    // followed by a silu activation. x: [t, conv_dim].
     fn causal_conv(&self, x: &XlaOp, t: i64) -> Result<XlaOp> {
         let b = x.builder();
-        let w = self.conv1d.reshape(&[CONV_DIM, CONV_KERNEL_SIZE])?;
+        let w = self.conv1d.reshape(&[self.conv_dim, CONV_KERNEL_SIZE])?;
         let zero = b.c0(0f32)?.convert(x.ty()?)?;
         let mut out = None;
         for j in 0..CONV_KERNEL_SIZE {
             // shifted[i] = x[i - (k - 1 - j)]
             let shift = CONV_KERNEL_SIZE - 1 - j;
             let shifted = x.pad_in_dim(&zero, 0, shift, 0)?.slice_in_dim1(0, t, 0)?;
-            let w_j = w.slice_in_dim1(j, j + 1, 1)?.reshape(&[CONV_DIM])?;
-            let w_j = w_j.broadcast_in_dim(&[t, CONV_DIM], &[1])?;
+            let w_j = w.slice_in_dim1(j, j + 1, 1)?.reshape(&[self.conv_dim])?;
+            let w_j = w_j.broadcast_in_dim(&[t, self.conv_dim], &[1])?;
             let contrib = (shifted * w_j)?;
             out = match out {
                 None => Some(contrib),
@@ -199,30 +274,37 @@ impl GatedDeltaNet {
 
     // Split the post-conv activations into l2-normalized q/k and v, [t, h, d].
     // The values are converted to f32 as the whole recurrence is computed in
-    // f32, as in the reference implementation.
+    // f32, as in the reference implementation. When there are more value heads
+    // than key heads, the q/k heads are repeated (interleaved) to match.
     fn split_qkv(&self, mixed_qkv: &XlaOp, t: i64) -> Result<(XlaOp, XlaOp, XlaOp)> {
         let b = mixed_qkv.builder();
-        let h = LIN_NUM_HEADS;
+        let (kh, vh) = (self.k_heads, self.v_heads);
         let (dk, dv) = (LIN_KEY_DIM, LIN_VALUE_DIM);
-        let key_dim = h * dk;
-        let value_dim = h * dv;
-        let f32_at = |start: i64, stop: i64, d: i64| -> Result<XlaOp> {
+        let key_dim = kh * dk;
+        let value_dim = vh * dv;
+        let f32_at = |start: i64, stop: i64, h: i64, d: i64| -> Result<XlaOp> {
             let x = mixed_qkv.slice_in_dim1(start, stop, 1)?.reshape(&[t, h, d])?;
             Ok(x.convert(PrimitiveType::F32)?)
         };
-        let q = f32_at(0, key_dim, dk)?;
-        let k = f32_at(key_dim, 2 * key_dim, dk)?;
-        let v = f32_at(2 * key_dim, 2 * key_dim + value_dim, dv)?;
+        let q = f32_at(0, key_dim, kh, dk)?;
+        let k = f32_at(key_dim, 2 * key_dim, kh, dk)?;
+        let v = f32_at(2 * key_dim, 2 * key_dim + value_dim, vh, dv)?;
         // In-kernel l2 normalization of q/k plus query scaling.
         let q = (l2_norm(&q)? * b.c0(1f32 / (dk as f32).sqrt())?)?;
         let k = l2_norm(&k)?;
-        Ok((q, k, v))
+        let repeat = |x: XlaOp| -> Result<XlaOp> {
+            if kh == vh {
+                return Ok(x);
+            }
+            Ok(x.broadcast_in_dim(&[t, kh, vh / kh, dk], &[0, 1, 3])?.reshape(&[t, vh, dk])?)
+        };
+        Ok((repeat(q)?, repeat(k)?, v))
     }
 
     // The z/beta/exp(g) projections computed from the layer input, [t, ...].
     // z keeps the input dtype, beta and exp(g) are in f32 for the recurrence.
     fn gates(&self, x: &XlaOp, t: i64) -> Result<(XlaOp, XlaOp, XlaOp)> {
-        let h = LIN_NUM_HEADS;
+        let h = self.v_heads;
         let z = linear(x, &self.in_proj_z)?.reshape(&[t, h, LIN_VALUE_DIM])?;
         let beta = linear(x, &self.in_proj_b)?.logistic()?.convert(PrimitiveType::F32)?;
         // g = -exp(A_log) * softplus(a + dt_bias), computed in f32.
@@ -239,7 +321,7 @@ impl GatedDeltaNet {
     // (coming from the recurrence), the result uses the dtype of z.
     fn output(&self, out: &XlaOp, z: &XlaOp, t: i64) -> Result<XlaOp> {
         let b = out.builder();
-        let h = LIN_NUM_HEADS;
+        let h = self.v_heads;
         let dv = LIN_VALUE_DIM;
         let dt = z.ty()?;
         let mean2 = (out * out)?.reduce_mean(&[-1], true)?;
@@ -265,7 +347,7 @@ impl GatedDeltaNet {
         beta: &XlaOp,
         n: &XlaOp,
     ) -> Result<(XlaOp, XlaOp)> {
-        let h = LIN_NUM_HEADS;
+        let h = self.v_heads;
         let (dk, dv) = (LIN_KEY_DIM, LIN_VALUE_DIM);
         let state_shape = Shape::tuple(vec![
             Shape::array_with_type(ElementType::S32, vec![]), // t
@@ -305,7 +387,7 @@ impl GatedDeltaNet {
             let exp_g_t = exp_g.dynamic_slice(&[&t, &zero], &[1, h])?.reshape(&[h])?;
             let beta_t = beta.dynamic_slice(&[&t, &zero], &[1, h])?.reshape(&[h])?;
 
-            let (s, o_t) = delta_step(&s, &q_t, &k_t, &v_t, &exp_g_t, &beta_t)?;
+            let (s, o_t) = delta_step(&s, &q_t, &k_t, &v_t, &exp_g_t, &beta_t, h)?;
             let out = out.dynamic_update_slice(&o_t.reshape(&[1, h, dv])?, &[&t, &zero, &zero])?;
             let t = (t + b.c0(1i32)?)?;
             b.tuple(&[t, s, out, q, k, v, exp_g, beta, n])?.build()?
@@ -350,7 +432,8 @@ impl GatedDeltaNet {
         let zero_f = b.c0(0f32)?.convert(pre_conv.ty()?)?;
         let zero_i = b.c0(0i32)?;
         let padded = pre_conv.pad_in_dim(&zero_f, 0, CONV_KERNEL_SIZE - 1, 0)?;
-        let conv_state = padded.dynamic_slice(&[&n, &zero_i], &[CONV_KERNEL_SIZE - 1, CONV_DIM])?;
+        let conv_state =
+            padded.dynamic_slice(&[&n, &zero_i], &[CONV_KERNEL_SIZE - 1, self.conv_dim])?;
         Ok((y, s, conv_state))
     }
 
@@ -363,13 +446,13 @@ impl GatedDeltaNet {
         s: &XlaOp,
         conv_state: &XlaOp,
     ) -> Result<(XlaOp, XlaOp, XlaOp)> {
-        let h = LIN_NUM_HEADS;
+        let h = self.v_heads;
         let (dk, dv) = (LIN_KEY_DIM, LIN_VALUE_DIM);
         let pre_conv = linear(x, &self.in_proj_qkv)?;
         let window = conv_state.concat_in_dim(&[&pre_conv], 0)?;
         let new_conv_state = window.slice_in_dim1(1, CONV_KERNEL_SIZE, 0)?;
         // out[c] = sum_j window[j, c] * w[c, j]
-        let w = self.conv1d.reshape(&[CONV_DIM, CONV_KERNEL_SIZE])?.swap_dims(0, 1)?;
+        let w = self.conv1d.reshape(&[self.conv_dim, CONV_KERNEL_SIZE])?.swap_dims(0, 1)?;
         let mixed_qkv = (window * w)?.reduce_sum(&[0], true)?.silu()?;
         let (q, k, v) = self.split_qkv(&mixed_qkv, 1)?;
         let (z, beta, exp_g) = self.gates(x, 1)?;
@@ -380,6 +463,7 @@ impl GatedDeltaNet {
             &v.reshape(&[h, dv])?,
             &exp_g.reshape(&[h])?,
             &beta.reshape(&[h])?,
+            h,
         )?;
         let y = self.output(&o_t.reshape(&[1, h, dv])?, &z, 1)?;
         Ok((y, s, new_conv_state))
@@ -394,22 +478,23 @@ struct Attention {
     o_proj: XlaOp,
     q_norm: XlaOp,
     k_norm: XlaOp,
+    n_heads: i64,
+    n_kv_heads: i64,
 }
 
 impl Attention {
-    fn new(vb: &VarBuilder, p: &str) -> Result<Self> {
+    fn new(vb: &VarBuilder, p: &str, cfg: &Config) -> Result<Self> {
+        let (nh, nkv) = (cfg.num_heads, cfg.num_kv_heads);
+        let hidden = cfg.hidden_size;
         // The query projection produces both the queries and the output gate,
         // interleaved per head.
-        let q_proj =
-            vb.var(&format!("{p}.q_proj.weight"), &[2 * NUM_HEADS * HEAD_DIM, HIDDEN_SIZE])?;
-        let k_proj =
-            vb.var(&format!("{p}.k_proj.weight"), &[NUM_KV_HEADS * HEAD_DIM, HIDDEN_SIZE])?;
-        let v_proj =
-            vb.var(&format!("{p}.v_proj.weight"), &[NUM_KV_HEADS * HEAD_DIM, HIDDEN_SIZE])?;
-        let o_proj = vb.var(&format!("{p}.o_proj.weight"), &[HIDDEN_SIZE, NUM_HEADS * HEAD_DIM])?;
+        let q_proj = vb.var(&format!("{p}.q_proj.weight"), &[2 * nh * HEAD_DIM, hidden])?;
+        let k_proj = vb.var(&format!("{p}.k_proj.weight"), &[nkv * HEAD_DIM, hidden])?;
+        let v_proj = vb.var(&format!("{p}.v_proj.weight"), &[nkv * HEAD_DIM, hidden])?;
+        let o_proj = vb.var(&format!("{p}.o_proj.weight"), &[hidden, nh * HEAD_DIM])?;
         let q_norm = vb.var(&format!("{p}.q_norm.weight"), &[HEAD_DIM])?;
         let k_norm = vb.var(&format!("{p}.k_norm.weight"), &[HEAD_DIM])?;
-        Ok(Self { q_proj, k_proj, v_proj, o_proj, q_norm, k_norm })
+        Ok(Self { q_proj, k_proj, v_proj, o_proj, q_norm, k_norm, n_heads: nh, n_kv_heads: nkv })
     }
 
     // Rotate the first ROTARY_DIM dims of [t, h, HEAD_DIM] q or k values,
@@ -436,19 +521,20 @@ impl Attention {
         sin: &XlaOp,
         t: i64,
     ) -> Result<(XlaOp, XlaOp, XlaOp, XlaOp)> {
+        let (nh, nkv) = (self.n_heads, self.n_kv_heads);
         // Queries and gate, interleaved per head on the last dim.
-        let q_and_gate = linear(x, &self.q_proj)?.reshape(&[t, NUM_HEADS, 2 * HEAD_DIM])?;
+        let q_and_gate = linear(x, &self.q_proj)?.reshape(&[t, nh, 2 * HEAD_DIM])?;
         let q = q_and_gate.slice_in_dim1(0, HEAD_DIM, 2)?;
         let gate = q_and_gate.slice_in_dim1(HEAD_DIM, 2 * HEAD_DIM, 2)?;
-        let gate = gate.reshape(&[t, NUM_HEADS * HEAD_DIM])?;
+        let gate = gate.reshape(&[t, nh * HEAD_DIM])?;
 
         let q = rms_norm(&q, &self.q_norm)?;
-        let k = linear(x, &self.k_proj)?.reshape(&[t, NUM_KV_HEADS, HEAD_DIM])?;
+        let k = linear(x, &self.k_proj)?.reshape(&[t, nkv, HEAD_DIM])?;
         let k = rms_norm(&k, &self.k_norm)?;
-        let v = linear(x, &self.v_proj)?.reshape(&[t, NUM_KV_HEADS, HEAD_DIM])?;
+        let v = linear(x, &self.v_proj)?.reshape(&[t, nkv, HEAD_DIM])?;
 
-        let q = self.apply_rope(&q, cos, sin, t, NUM_HEADS)?;
-        let k = self.apply_rope(&k, cos, sin, t, NUM_KV_HEADS)?;
+        let q = self.apply_rope(&q, cos, sin, t, nh)?;
+        let k = self.apply_rope(&k, cos, sin, t, nkv)?;
         Ok((q, k, v, gate))
     }
 
@@ -466,13 +552,14 @@ impl Attention {
         s: i64,
     ) -> Result<XlaOp> {
         let b = q.builder();
+        let (nh, nkv) = (self.n_heads, self.n_kv_heads);
         // [t, h, d] -> [h, t, d], and repeat the kv heads for GQA.
         let q = q.swap_dims(0, 1)?;
         let repeat_kv = |x: &XlaOp| -> Result<XlaOp> {
             let x = x.swap_dims(0, 1)?;
-            let groups = NUM_HEADS / NUM_KV_HEADS;
-            Ok(x.broadcast_in_dim(&[NUM_KV_HEADS, groups, s, HEAD_DIM], &[0, 2, 3])?
-                .reshape(&[NUM_HEADS, s, HEAD_DIM])?)
+            let groups = nh / nkv;
+            Ok(x.broadcast_in_dim(&[nkv, groups, s, HEAD_DIM], &[0, 2, 3])?
+                .reshape(&[nh, s, HEAD_DIM])?)
         };
         let k = repeat_kv(k)?;
         let v = repeat_kv(v)?;
@@ -480,11 +567,11 @@ impl Attention {
         let dt = q.ty()?;
         let scale = b.c0(1f32 / (HEAD_DIM as f32).sqrt())?.convert(dt)?;
         let scores = (q.dot_general(&k, &[2], &[2], &[0], &[0])? * scale)?;
-        let mask_b = mask.convert(dt)?.broadcast_in_dim(&[NUM_HEADS, t, s], &[1, 2])?;
+        let mask_b = mask.convert(dt)?.broadcast_in_dim(&[nh, t, s], &[1, 2])?;
         // The softmax is computed in f32 as in the reference implementation.
         let probs = (scores + mask_b)?.convert(PrimitiveType::F32)?.softmax(-1)?.convert(dt)?;
         let ctx = probs.dot_general(&v, &[2], &[1], &[0], &[0])?;
-        let ctx = ctx.swap_dims(0, 1)?.reshape(&[t, NUM_HEADS * HEAD_DIM])?;
+        let ctx = ctx.swap_dims(0, 1)?.reshape(&[t, nh * HEAD_DIM])?;
 
         let gated = (ctx * gate.logistic()?)?;
         linear(&gated, &self.o_proj)
@@ -545,30 +632,39 @@ struct Model {
     embed: XlaOp,
     layers: Vec<DecoderLayer>,
     final_ln: XlaOp,
+    lm_head: Option<XlaOp>,
 }
 
 impl Model {
     // Weight declaration order must be identical between the prefill and the
     // decode builders as they share a single buffer list.
-    fn new(vb: &VarBuilder) -> Result<Self> {
-        let embed =
-            vb.var("model.language_model.embed_tokens.weight", &[VOCAB_SIZE, HIDDEN_SIZE])?;
-        let mut layers = Vec::with_capacity(NUM_LAYERS);
-        for layer_idx in 0..NUM_LAYERS {
+    fn new(vb: &VarBuilder, cfg: &Config) -> Result<Self> {
+        let hidden = cfg.hidden_size;
+        let embed = vb.var("model.language_model.embed_tokens.weight", &[VOCAB_SIZE, hidden])?;
+        let mut layers = Vec::with_capacity(cfg.num_layers);
+        for layer_idx in 0..cfg.num_layers {
             let p = format!("model.language_model.layers.{layer_idx}");
-            let input_ln = vb.var(&format!("{p}.input_layernorm.weight"), &[HIDDEN_SIZE])?;
-            let post_ln =
-                vb.var(&format!("{p}.post_attention_layernorm.weight"), &[HIDDEN_SIZE])?;
+            let input_ln = vb.var(&format!("{p}.input_layernorm.weight"), &[hidden])?;
+            let post_ln = vb.var(&format!("{p}.post_attention_layernorm.weight"), &[hidden])?;
             let mixer = if (layer_idx + 1) % FULL_ATTENTION_INTERVAL == 0 {
-                Mixer::Attn(Attention::new(vb, &format!("{p}.self_attn"))?)
+                Mixer::Attn(Attention::new(vb, &format!("{p}.self_attn"), cfg)?)
             } else {
-                Mixer::Lin(GatedDeltaNet::new(vb, &format!("{p}.linear_attn"))?)
+                Mixer::Lin(GatedDeltaNet::new(vb, &format!("{p}.linear_attn"), cfg)?)
             };
-            let mlp = Mlp::new(vb, &format!("{p}.mlp"))?;
+            let mlp = Mlp::new(vb, &format!("{p}.mlp"), cfg)?;
             layers.push(DecoderLayer { input_ln, post_ln, mixer, mlp });
         }
-        let final_ln = vb.var("model.language_model.norm.weight", &[HIDDEN_SIZE])?;
-        Ok(Self { embed, layers, final_ln })
+        let final_ln = vb.var("model.language_model.norm.weight", &[hidden])?;
+        let lm_head = if cfg.tie_embeddings {
+            None
+        } else {
+            Some(vb.var("lm_head.weight", &[VOCAB_SIZE, hidden])?)
+        };
+        Ok(Self { embed, layers, final_ln, lm_head })
+    }
+
+    fn lm_head(&self) -> &XlaOp {
+        self.lm_head.as_ref().unwrap_or(&self.embed)
     }
 }
 
@@ -608,15 +704,15 @@ fn causal_mask(builder: &XlaBuilder) -> Result<XlaOp> {
 
 // The prefill computation: full padded context in, next token plus all the
 // per-layer states out.
-fn build_prefill(builder: &XlaBuilder, vb: &VarBuilder) -> Result<XlaComputation> {
+fn build_prefill(builder: &XlaBuilder, vb: &VarBuilder, cfg: &Config) -> Result<XlaComputation> {
     let tokens = builder.parameter(0, ElementType::S32, &[T], "tokens")?;
     let last_pos = builder.parameter(1, ElementType::S32, &[], "last_pos")?;
-    let model = Model::new(vb)?;
+    let model = Model::new(vb, cfg)?;
     let (cos, sin) = rope_tables(builder)?;
     let mask = causal_mask(builder)?;
 
     let mut x = model.embed.take(&tokens, 0)?;
-    let mut states = Vec::with_capacity(2 * NUM_LAYERS);
+    let mut states = Vec::with_capacity(2 * cfg.num_layers);
     for layer in model.layers.iter() {
         let residual = x.clone();
         let x_norm = rms_norm(&x, &layer.input_ln)?;
@@ -639,11 +735,11 @@ fn build_prefill(builder: &XlaBuilder, vb: &VarBuilder) -> Result<XlaComputation
     }
 
     let x = rms_norm(&x, &model.final_ln)?;
-    // Only the logits for the last position are needed, the lm head reuses the
-    // embedding weights (tie_word_embeddings).
+    // Only the logits for the last position are needed. On the models with
+    // tie_word_embeddings the lm head reuses the embedding weights.
     let zero = builder.c0(0i32)?;
-    let x_last = x.dynamic_slice(&[&last_pos, &zero], &[1, HIDDEN_SIZE])?;
-    let logits = linear(&x_last, &model.embed)?.convert(PrimitiveType::F32)?;
+    let x_last = x.dynamic_slice(&[&last_pos, &zero], &[1, cfg.hidden_size])?;
+    let logits = linear(&x_last, model.lm_head())?.convert(PrimitiveType::F32)?;
     let next_token = logits.argmax(ElementType::S32, -1)?;
 
     let mut outputs = vec![next_token];
@@ -655,10 +751,10 @@ fn build_prefill(builder: &XlaBuilder, vb: &VarBuilder) -> Result<XlaComputation
 // per-layer states in, next token plus the updated states out. The states are
 // passed as parameters after the weights so that the weight parameter indices
 // match the prefill computation.
-fn build_decode(builder: &XlaBuilder, vb: &VarBuilder) -> Result<XlaComputation> {
+fn build_decode(builder: &XlaBuilder, vb: &VarBuilder, cfg: &Config) -> Result<XlaComputation> {
     let token = builder.parameter(0, ElementType::S32, &[1], "token")?;
     let pos = builder.parameter(1, ElementType::S32, &[], "pos")?;
-    let model = Model::new(vb)?;
+    let model = Model::new(vb, cfg)?;
 
     let mut param_idx = (NUM_NON_WEIGHT_ARGS + vb.num_vars()) as i64;
     let mut state_param = |name: String, ty: ElementType, dims: &[i64]| -> Result<XlaOp> {
@@ -667,24 +763,24 @@ fn build_decode(builder: &XlaBuilder, vb: &VarBuilder) -> Result<XlaComputation>
         Ok(op)
     };
     let dtype = vb.dtype();
-    let mut states = Vec::with_capacity(2 * NUM_LAYERS);
+    let mut states = Vec::with_capacity(2 * cfg.num_layers);
     for (layer_idx, layer) in model.layers.iter().enumerate() {
         match &layer.mixer {
             Mixer::Attn(_) => {
-                let dims = [T, NUM_KV_HEADS, HEAD_DIM];
+                let dims = [T, cfg.num_kv_heads, HEAD_DIM];
                 states.push(state_param(format!("layers.{layer_idx}.k_cache"), dtype, &dims)?);
                 states.push(state_param(format!("layers.{layer_idx}.v_cache"), dtype, &dims)?);
             }
             Mixer::Lin(_) => {
                 // The recurrent state is kept in f32, the conv state holds raw
                 // conv inputs and uses the model dtype.
-                let s_dims = [LIN_NUM_HEADS, LIN_KEY_DIM, LIN_VALUE_DIM];
+                let s_dims = [cfg.lin_num_v_heads, LIN_KEY_DIM, LIN_VALUE_DIM];
                 states.push(state_param(
                     format!("layers.{layer_idx}.state"),
                     ElementType::F32,
                     &s_dims,
                 )?);
-                let c_dims = [CONV_KERNEL_SIZE - 1, CONV_DIM];
+                let c_dims = [CONV_KERNEL_SIZE - 1, cfg.conv_dim()];
                 states.push(state_param(format!("layers.{layer_idx}.conv_state"), dtype, &c_dims)?);
             }
         }
@@ -698,7 +794,7 @@ fn build_decode(builder: &XlaBuilder, vb: &VarBuilder) -> Result<XlaComputation>
     let mask = mask.dynamic_slice(&[&pos, &zero], &[1, T])?;
 
     let mut x = model.embed.take(&token, 0)?;
-    let mut new_states = Vec::with_capacity(2 * NUM_LAYERS);
+    let mut new_states = Vec::with_capacity(2 * cfg.num_layers);
     for (layer_idx, layer) in model.layers.iter().enumerate() {
         let residual = x.clone();
         let x_norm = rms_norm(&x, &layer.input_ln)?;
@@ -724,7 +820,7 @@ fn build_decode(builder: &XlaBuilder, vb: &VarBuilder) -> Result<XlaComputation>
     }
 
     let x = rms_norm(&x, &model.final_ln)?;
-    let logits = linear(&x, &model.embed)?.convert(PrimitiveType::F32)?;
+    let logits = linear(&x, model.lm_head())?.convert(PrimitiveType::F32)?;
     let next_token = logits.argmax(ElementType::S32, -1)?;
 
     let mut outputs = vec![next_token];
@@ -732,14 +828,19 @@ fn build_decode(builder: &XlaBuilder, vb: &VarBuilder) -> Result<XlaComputation>
     Ok(builder.tuple(&outputs)?.build()?)
 }
 
-// Download the tokenizer and weights from the hugging face hub, using the
-// local cache if they have already been fetched.
-fn hub_model_files() -> Result<(std::path::PathBuf, std::path::PathBuf)> {
+// Download the tokenizer and weight shards from the hugging face hub, using
+// the local cache if they have already been fetched.
+fn hub_model_files(cfg: &Config) -> Result<(std::path::PathBuf, Vec<std::path::PathBuf>)> {
     let client = hf_hub::HFClientSync::new()?;
-    let repo = client.model("Qwen", "Qwen3.5-2B");
+    let (owner, name) = cfg.repo.split_once('/').ok_or_else(|| anyhow!("invalid repo"))?;
+    let repo = client.model(owner, name);
     let tokenizer = repo.download_file().filename("tokenizer.json").send()?;
-    let weights =
-        repo.download_file().filename("model.safetensors-00001-of-00001.safetensors").send()?;
+    let mut weights = Vec::with_capacity(cfg.num_shards);
+    for shard in 1..=cfg.num_shards {
+        let filename =
+            format!("model.safetensors-{:05}-of-{:05}.safetensors", shard, cfg.num_shards);
+        weights.push(repo.download_file().filename(&filename).send()?);
+    }
     Ok((tokenizer, weights))
 }
 
@@ -760,11 +861,38 @@ impl Dtype {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, clap::ValueEnum)]
+enum Which {
+    #[value(name = "0.8b")]
+    W0_8b,
+    #[value(name = "2b")]
+    W2b,
+    #[value(name = "4b")]
+    W4b,
+    #[value(name = "9b")]
+    W9b,
+}
+
+impl Which {
+    fn config(self) -> &'static Config {
+        match self {
+            Self::W0_8b => &CONFIG_0_8B,
+            Self::W2b => &CONFIG_2B,
+            Self::W4b => &CONFIG_4B,
+            Self::W9b => &CONFIG_9B,
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 struct Args {
     /// Run on cpu rather than on gpu.
     #[arg(long)]
     cpu: bool,
+
+    /// The model size to run.
+    #[arg(long, value_enum, default_value_t = Which::W2b)]
+    which: Which,
 
     /// The dtype used for the weights and most of the computation, the norms,
     /// the attention softmax, and the DeltaNet recurrence always run in f32.
@@ -787,15 +915,17 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
     xla::set_tf_min_log_level(xla::TfLogLevel::Warning);
+    let cfg = args.which.config();
     let client = if args.cpu { PjRtClient::cpu()? } else { PjRtClient::gpu(0.90, false)? };
     println!(
-        "platform: {} {}, dtype: {:?}",
+        "platform: {} {}, model: {}, dtype: {:?}",
         client.platform_name(),
         client.platform_version(),
+        cfg.repo,
         args.dtype
     );
 
-    let (tokenizer_path, weights_path) = hub_model_files()?;
+    let (tokenizer_path, weights_paths) = hub_model_files(cfg)?;
     let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path)
         .map_err(|e| anyhow!("cannot load tokenizer: {e}"))?;
     let prompt = if args.raw_prompt {
@@ -817,10 +947,10 @@ fn main() -> Result<()> {
     let start = std::time::Instant::now();
     let prefill_builder = XlaBuilder::new("qwen35-prefill");
     let vb = VarBuilder::new(&prefill_builder, args.dtype.element_type());
-    let prefill = build_prefill(&prefill_builder, &vb)?;
+    let prefill = build_prefill(&prefill_builder, &vb, cfg)?;
     let decode_builder = XlaBuilder::new("qwen35-decode");
     let decode_vb = VarBuilder::new(&decode_builder, args.dtype.element_type());
-    let decode = build_decode(&decode_builder, &decode_vb)?;
+    let decode = build_decode(&decode_builder, &decode_vb, cfg)?;
     println!("built the computations in {:?}", start.elapsed());
 
     let start = std::time::Instant::now();
@@ -829,7 +959,7 @@ fn main() -> Result<()> {
     println!("compiled the executables in {:?}", start.elapsed());
 
     let start = std::time::Instant::now();
-    let weight_buffers = vb.load_buffers(&weights_path, &client)?;
+    let weight_buffers = vb.load_buffers(&weights_paths, &client)?;
     println!("loaded {} weights in {:?}", weight_buffers.len(), start.elapsed());
 
     let start = std::time::Instant::now();
