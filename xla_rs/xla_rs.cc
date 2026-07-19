@@ -58,6 +58,10 @@ status pjrt_tpu_client_create(pjrt_client *output,
   std::string library_path = env != nullptr ? env : "libtpu.so";
   ASSIGN_OR_RETURN_STATUS(api, pjrt::LoadPjrtPlugin("tpu", library_path));
   (void)api;
+  // LoadPjrtPlugin only calls SetPjrtApi; the plugin's own init
+  // (PJRT_Plugin_Initialize) must run before a client is created, otherwise
+  // libtpu aborts trying to access the TPU device files before init.
+  MAYBE_RETURN_STATUS(pjrt::InitializePjrtPlugin("tpu"));
   ASSIGN_OR_RETURN_STATUS(client, xla::GetCApiClient("tpu"));
   *output = new std::shared_ptr(std::move(client));
   return nullptr;
