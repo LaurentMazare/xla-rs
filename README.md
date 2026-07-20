@@ -113,22 +113,33 @@ which scopes the `xla_gpu_load_autotune_results_from` and
 same options can also be set process-wide through the `XLA_FLAGS` environment
 variable).
 
-## Gemma 4 E2B
+## Gemma 4 E2B and E4B
 
 The gemma4 example runs the text model of
-[Gemma 4 E2B](https://huggingface.co/google/gemma-4-E2B-it), a MatFormer-style
-hybrid where four out of five decoder layers use sliding-window attention, the
-last twenty layers reuse the k/v states of earlier layers, and a per-layer
-embedding is mixed into the residual stream after each mlp. Generation runs in
-bf16 with the same prefill/decode split and on-device kv-cache as the qwen35
-example, and the `--autotune-cache` flag is supported too.
+[Gemma 4 E2B](https://huggingface.co/google/gemma-4-E2B-it) or
+[E4B](https://huggingface.co/google/gemma-4-E4B-it) (`--which e2b|e4b`),
+MatFormer-style hybrids where most decoder layers use sliding-window
+attention, the last layers reuse the k/v states of earlier layers, and a
+per-layer embedding (PLE) is mixed into the residual stream after each mlp.
+Generation runs in bf16 with the same prefill/decode split and on-device
+kv-cache as the qwen35 example, and the `--autotune-cache` flag is supported
+too.
 
-The repository is gated on the hub: accept the license on the model page and
-make a token available via `HF_TOKEN` or `~/.cache/huggingface/token` for the
-initial download.
+The PLE table is the "effective" in the E model names: it holds roughly half
+of the parameters (2.4B of E2B's 4.6B, 2.9B of E4B's 7.5B) but is only ever
+read one row per token, so the example keeps it in host memory and gathers
+the rows for the current tokens on the cpu, passing them to the computations
+as an input. This halves the device memory (4.5GB of weights for E2B, 9.2GB
+for E4B) and is what lets E4B run on a 16GB gpu in bf16, at the cost of a
+host round-trip per decode step (a few percent decode rate on E2B).
+
+The repositories are gated on the hub: accept the license on the model page
+and make a token available via `HF_TOKEN` or `~/.cache/huggingface/token` for
+the initial download.
 
 ```bash
 cargo run --example gemma4 --release --features hf-hub -- \
+  --which e4b \
   --prompt "What is the capital of France? Answer in one word."
 ```
 
@@ -139,16 +150,24 @@ compilation, weight loading, and the one-time kernel loading of the first
 execution, on the same RTX 4080 SUPER (16GB) and with the same versions as the
 qwen35 benchmark above. Prefill is the time to the first generated token
 (median of 5), the decode rate covers the remaining 105 tokens (median of 3
-runs):
+runs), and the memory column is the peak gpu usage of the xla-rs run:
 
-|                          | prefill | decode      |
-|--------------------------|---------|-------------|
-| GPU bf16, xla-rs         | 12 ms   | 118.0 tok/s |
-| GPU bf16, transformers   | 25 ms   | 46.1 tok/s  |
+|                          | E2B         | E4B        |
+|--------------------------|-------------|------------|
+| prefill, xla-rs          | 13 ms       | 24 ms      |
+| prefill, transformers    | 25 ms       | -          |
+| decode, xla-rs           | 110.1 tok/s | 48.0 tok/s |
+| decode, transformers     | 46.1 tok/s  | -          |
+| gpu memory, xla-rs       | 8.5 GB      | 14.7 GB    |
 
-The generated tokens are identical between the two implementations on the
-prompts tested. One caveat: on the benchmark prompt the very first token is a
-near-tie (the top-2 logits are 0.11 apart in a f32 reference run, about one
-bf16 ulp at that magnitude), so bf16-level numeric changes such as a different
-autotuned gemm kernel can flip it and the continuations then diverge while
-staying equally valid.
+The transformers E4B column is empty as the full bf16 text model (15GB of
+weights with the PLE table on the device) does not leave enough room on a
+16GB gpu; splitting it across gpu and cpu with accelerate works for checking
+outputs but is not a meaningful speed comparison. The generated tokens are
+identical between the two implementations on the prompts tested (E4B was
+checked against a gpu+cpu split run). One caveat: on E2B the very first token
+of the benchmark prompt is a near-tie (the top-2 logits are 0.11 apart in a
+f32 reference run, about one bf16 ulp at that magnitude), so bf16-level
+numeric changes such as a different autotuned gemm kernel or the PLE
+offload's slightly different graph can flip it and the continuations then
+diverge while staying equally valid.

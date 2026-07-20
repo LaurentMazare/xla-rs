@@ -1,16 +1,22 @@
-// Inference example for the Gemma 4 E2B model,
+// Inference example for the Gemma 4 E2B and E4B models,
 // https://huggingface.co/google/gemma-4-E2B-it (text model part only).
 //
-// Gemma 4 E2B is a MatFormer-style hybrid: four out of five decoder layers
-// use sliding-window attention (window 512) and the remaining ones use full
-// attention with a wider 512 head dim and a different rope configuration. The
-// last 20 layers do not have their own k/v projections and instead reuse the
-// keys/values of the last non-shared layer of the same attention type, and
-// use a double-width mlp. Each token also gets a per-layer embedding (PLE)
-// that is mixed into the residual stream after the mlp of every layer.
+// The Gemma 4 E models are MatFormer-style hybrids: most decoder layers use
+// sliding-window attention (window 512, four out of five layers on E2B, five
+// out of six on E4B) and the remaining ones use full attention with a wider
+// 512 head dim and a different rope configuration. The last layers (20 on
+// E2B, 18 on E4B) do not have their own k/v projections and instead reuse
+// the keys/values of the last non-shared layer of the same attention type
+// (and use a double-width mlp on E2B). Each token also gets a per-layer
+// embedding (PLE) that is mixed into the residual stream after the mlp of
+// every layer.
 //
-// Only the E2B size is supported: the larger Gemma 4 models do not fit in
-// bf16 on a 16GB gpu, so everything runs in bf16.
+// The PLE table is the "E" in the model names: it accounts for around half
+// of the parameters (2.4B on E2B, 2.9B on E4B) but is only ever read one row
+// per token, so it is kept in host memory and the rows for the current
+// tokens are gathered on the cpu and passed to the computations as an input.
+// This keeps the device weights at 4.5GB for E2B and 9.2GB for E4B, which is
+// how E4B fits on a 16GB gpu in bf16 (everything runs in bf16).
 //
 // The structure mirrors the qwen35 example: a prefill computation processes
 // the whole padded context and returns the first token plus the per-layer k/v
@@ -32,23 +38,14 @@ use var_store::{VarBuilder, NUM_NON_WEIGHT_ARGS};
 const CONTEXT_SIZE: usize = 128;
 const T: i64 = CONTEXT_SIZE as i64;
 
-// Gemma 4 E2B text config.
-const HIDDEN_SIZE: i64 = 1536;
-const NUM_LAYERS: usize = 35;
+// Dims shared between the E2B and E4B text configs.
 const NUM_HEADS: i64 = 8;
-const NUM_KV_HEADS: i64 = 1;
 const HEAD_DIM: i64 = 256; // sliding attention layers
 const GLOBAL_HEAD_DIM: i64 = 512; // full attention layers
-const INTERMEDIATE_SIZE: i64 = 6144; // doubled on the kv-shared layers
 const VOCAB_SIZE: i64 = 262144;
 const PLE_DIM: i64 = 256; // hidden_size_per_layer_input
 const RMS_NORM_EPS: f32 = 1e-6;
 const FINAL_LOGIT_SOFTCAP: f32 = 30.0;
-// Every fifth layer uses full attention, the others sliding attention.
-const FULL_ATTENTION_INTERVAL: usize = 5;
-// The last 20 layers reuse the k/v of the last non-shared layer of the same
-// attention type (the checkpoint contains k/v weights for them, unused).
-const FIRST_KV_SHARED_LAYER: usize = 15;
 // Rope: sliding layers use the default parametrization with theta 1e4, full
 // attention layers use a "proportional" one with theta 1e6 where only the
 // first partial_rotary_factor=0.25 fraction of the angles is rotated (the
@@ -57,31 +54,72 @@ const LOCAL_ROPE_THETA: f64 = 1e4;
 const GLOBAL_ROPE_THETA: f64 = 1e6;
 const GLOBAL_PARTIAL_ROTARY_FACTOR: f64 = 0.25;
 
-fn is_full_attention(layer_idx: usize) -> bool {
-    (layer_idx + 1) % FULL_ATTENTION_INTERVAL == 0
+// The dims that differ between the model sizes.
+struct Config {
+    repo: &'static str,
+    hidden_size: i64,
+    num_layers: usize,
+    num_kv_heads: i64,
+    intermediate_size: i64,
+    // The kv-shared layers use a double-width mlp on E2B but not on E4B.
+    double_wide_shared_mlp: bool,
+    // Every n-th layer uses full attention, the others sliding attention.
+    full_attention_interval: usize,
+    // Layers from this index on reuse the k/v of the last non-shared layer
+    // of the same attention type (the checkpoint contains k/v weights for
+    // them, unused).
+    first_kv_shared_layer: usize,
 }
 
-fn is_kv_shared(layer_idx: usize) -> bool {
-    layer_idx >= FIRST_KV_SHARED_LAYER
-}
+const CONFIG_E2B: Config = Config {
+    repo: "gemma-4-E2B-it",
+    hidden_size: 1536,
+    num_layers: 35,
+    num_kv_heads: 1,
+    intermediate_size: 6144,
+    double_wide_shared_mlp: true,
+    full_attention_interval: 5,
+    first_kv_shared_layer: 15,
+};
 
-// The last non-shared layer of the same attention type, providing the k/v
-// states for the kv-shared layers: 13 for sliding, 14 for full attention.
-fn kv_donor(layer_idx: usize) -> usize {
-    let mut donor = 0;
-    for i in 0..FIRST_KV_SHARED_LAYER {
-        if is_full_attention(i) == is_full_attention(layer_idx) {
-            donor = i
-        }
+const CONFIG_E4B: Config = Config {
+    repo: "gemma-4-E4B-it",
+    hidden_size: 2560,
+    num_layers: 42,
+    num_kv_heads: 2,
+    intermediate_size: 10240,
+    double_wide_shared_mlp: false,
+    full_attention_interval: 6,
+    first_kv_shared_layer: 24,
+};
+
+impl Config {
+    fn is_full_attention(&self, layer_idx: usize) -> bool {
+        (layer_idx + 1) % self.full_attention_interval == 0
     }
-    donor
-}
 
-fn head_dim(layer_idx: usize) -> i64 {
-    if is_full_attention(layer_idx) {
-        GLOBAL_HEAD_DIM
-    } else {
-        HEAD_DIM
+    fn is_kv_shared(&self, layer_idx: usize) -> bool {
+        layer_idx >= self.first_kv_shared_layer
+    }
+
+    // The last non-shared layer of the same attention type, providing the k/v
+    // states for the kv-shared layers.
+    fn kv_donor(&self, layer_idx: usize) -> usize {
+        let mut donor = 0;
+        for i in 0..self.first_kv_shared_layer {
+            if self.is_full_attention(i) == self.is_full_attention(layer_idx) {
+                donor = i
+            }
+        }
+        donor
+    }
+
+    fn head_dim(&self, layer_idx: usize) -> i64 {
+        if self.is_full_attention(layer_idx) {
+            GLOBAL_HEAD_DIM
+        } else {
+            HEAD_DIM
+        }
     }
 }
 
@@ -135,11 +173,16 @@ struct Mlp {
 }
 
 impl Mlp {
-    fn new(vb: &VarBuilder, p: &str, layer_idx: usize) -> Result<Self> {
-        let i = if is_kv_shared(layer_idx) { 2 * INTERMEDIATE_SIZE } else { INTERMEDIATE_SIZE };
-        let gate_proj = vb.var(&format!("{p}.gate_proj.weight"), &[i, HIDDEN_SIZE])?;
-        let up_proj = vb.var(&format!("{p}.up_proj.weight"), &[i, HIDDEN_SIZE])?;
-        let down_proj = vb.var(&format!("{p}.down_proj.weight"), &[HIDDEN_SIZE, i])?;
+    fn new(vb: &VarBuilder, p: &str, layer_idx: usize, cfg: &Config) -> Result<Self> {
+        let h = cfg.hidden_size;
+        let i = if cfg.double_wide_shared_mlp && cfg.is_kv_shared(layer_idx) {
+            2 * cfg.intermediate_size
+        } else {
+            cfg.intermediate_size
+        };
+        let gate_proj = vb.var(&format!("{p}.gate_proj.weight"), &[i, h])?;
+        let up_proj = vb.var(&format!("{p}.up_proj.weight"), &[i, h])?;
+        let down_proj = vb.var(&format!("{p}.down_proj.weight"), &[h, i])?;
         Ok(Self { gate_proj, up_proj, down_proj })
     }
 
@@ -149,35 +192,35 @@ impl Mlp {
     }
 }
 
-// Attention with a single k/v head broadcast over the 8 query heads, rms
-// norms on q/k (learned scale) and v (no scale), rope applied after the
-// norms, and no 1/sqrt(d) scaling (the q norm takes care of the scale). The
-// kv-shared layers only have q/o projections.
+// Attention with one or two k/v heads (E2B/E4B) broadcast over the 8 query
+// heads, rms norms on q/k (learned scale) and v (no scale), rope applied
+// after the norms, and no 1/sqrt(d) scaling (the q norm takes care of the
+// scale). The kv-shared layers only have q/o projections.
 struct Attention {
     q_proj: XlaOp,
     q_norm: XlaOp,
     o_proj: XlaOp,
     kv: Option<(XlaOp, XlaOp, XlaOp)>, // k_proj, k_norm, v_proj
     hd: i64,
+    kvh: i64,
 }
 
 impl Attention {
-    fn new(vb: &VarBuilder, p: &str, layer_idx: usize) -> Result<Self> {
-        let hd = head_dim(layer_idx);
-        let q_proj = vb.var(&format!("{p}.q_proj.weight"), &[NUM_HEADS * hd, HIDDEN_SIZE])?;
+    fn new(vb: &VarBuilder, p: &str, layer_idx: usize, cfg: &Config) -> Result<Self> {
+        let hd = cfg.head_dim(layer_idx);
+        let (h, kvh) = (cfg.hidden_size, cfg.num_kv_heads);
+        let q_proj = vb.var(&format!("{p}.q_proj.weight"), &[NUM_HEADS * hd, h])?;
         let q_norm = vb.var(&format!("{p}.q_norm.weight"), &[hd])?;
-        let o_proj = vb.var(&format!("{p}.o_proj.weight"), &[HIDDEN_SIZE, NUM_HEADS * hd])?;
-        let kv = if is_kv_shared(layer_idx) {
+        let o_proj = vb.var(&format!("{p}.o_proj.weight"), &[h, NUM_HEADS * hd])?;
+        let kv = if cfg.is_kv_shared(layer_idx) {
             None
         } else {
-            let k_proj =
-                vb.var(&format!("{p}.k_proj.weight"), &[NUM_KV_HEADS * hd, HIDDEN_SIZE])?;
+            let k_proj = vb.var(&format!("{p}.k_proj.weight"), &[kvh * hd, h])?;
             let k_norm = vb.var(&format!("{p}.k_norm.weight"), &[hd])?;
-            let v_proj =
-                vb.var(&format!("{p}.v_proj.weight"), &[NUM_KV_HEADS * hd, HIDDEN_SIZE])?;
+            let v_proj = vb.var(&format!("{p}.v_proj.weight"), &[kvh * hd, h])?;
             Some((k_proj, k_norm, v_proj))
         };
-        Ok(Self { q_proj, q_norm, o_proj, kv, hd })
+        Ok(Self { q_proj, q_norm, o_proj, kv, hd, kvh })
     }
 
     // Rope over the full head dim: cos/sin are [t, hd] tables (with cos=1,
@@ -204,10 +247,10 @@ impl Attention {
     // available on the non-shared layers.
     fn kv(&self, x: &XlaOp, cos: &XlaOp, sin: &XlaOp, t: i64) -> Result<(XlaOp, XlaOp)> {
         let (k_proj, k_norm, v_proj) = self.kv.as_ref().ok_or_else(|| anyhow!("kv on shared"))?;
-        let k = linear(x, k_proj)?.reshape(&[t, NUM_KV_HEADS, self.hd])?;
+        let k = linear(x, k_proj)?.reshape(&[t, self.kvh, self.hd])?;
         let k = rms_norm(&k, k_norm)?;
-        let k = self.apply_rope(&k, cos, sin, t, NUM_KV_HEADS)?;
-        let v = linear(x, v_proj)?.reshape(&[t, NUM_KV_HEADS, self.hd])?;
+        let k = self.apply_rope(&k, cos, sin, t, self.kvh)?;
+        let v = linear(x, v_proj)?.reshape(&[t, self.kvh, self.hd])?;
         let v = rms_norm_no_scale(&v)?;
         Ok((k, v))
     }
@@ -225,12 +268,13 @@ impl Attention {
         s: i64,
     ) -> Result<XlaOp> {
         let hd = self.hd;
-        // [t, h, d] -> [h, t, d], and broadcast the single kv head.
+        let kvh = self.kvh;
+        // [t, h, d] -> [h, t, d], and broadcast the kv heads over the groups.
         let q = q.swap_dims(0, 1)?;
         let repeat_kv = |x: &XlaOp| -> Result<XlaOp> {
             let x = x.swap_dims(0, 1)?;
-            let groups = NUM_HEADS / NUM_KV_HEADS;
-            Ok(x.broadcast_in_dim(&[NUM_KV_HEADS, groups, s, hd], &[0, 2, 3])?
+            let groups = NUM_HEADS / kvh;
+            Ok(x.broadcast_in_dim(&[kvh, groups, s, hd], &[0, 2, 3])?
                 .reshape(&[NUM_HEADS, s, hd])?)
         };
         let k = repeat_kv(k)?;
@@ -256,17 +300,18 @@ struct DecoderLayer {
     ple_proj: XlaOp,
     ple_norm: XlaOp,
     layer_scalar: XlaOp,
+    h: i64,
 }
 
 impl DecoderLayer {
-    fn new(vb: &VarBuilder, p: &str, layer_idx: usize) -> Result<Self> {
-        let h = HIDDEN_SIZE;
+    fn new(vb: &VarBuilder, p: &str, layer_idx: usize, cfg: &Config) -> Result<Self> {
+        let h = cfg.hidden_size;
         let input_ln = vb.var(&format!("{p}.input_layernorm.weight"), &[h])?;
         let post_attn_ln = vb.var(&format!("{p}.post_attention_layernorm.weight"), &[h])?;
         let pre_ff_ln = vb.var(&format!("{p}.pre_feedforward_layernorm.weight"), &[h])?;
         let post_ff_ln = vb.var(&format!("{p}.post_feedforward_layernorm.weight"), &[h])?;
-        let attn = Attention::new(vb, &format!("{p}.self_attn"), layer_idx)?;
-        let mlp = Mlp::new(vb, &format!("{p}.mlp"), layer_idx)?;
+        let attn = Attention::new(vb, &format!("{p}.self_attn"), layer_idx, cfg)?;
+        let mlp = Mlp::new(vb, &format!("{p}.mlp"), layer_idx, cfg)?;
         let ple_gate = vb.var(&format!("{p}.per_layer_input_gate.weight"), &[PLE_DIM, h])?;
         let ple_proj = vb.var(&format!("{p}.per_layer_projection.weight"), &[h, PLE_DIM])?;
         let ple_norm = vb.var(&format!("{p}.post_per_layer_input_norm.weight"), &[h])?;
@@ -282,6 +327,7 @@ impl DecoderLayer {
             ple_proj,
             ple_norm,
             layer_scalar,
+            h,
         })
     }
 
@@ -303,73 +349,73 @@ impl DecoderLayer {
         let g = gelu_tanh(&linear(&x, &self.ple_gate)?)?;
         let y = linear(&(g * ple_input)?, &self.ple_proj)?;
         let x = (&x + rms_norm(&y, &self.ple_norm)?)?;
-        let scalar = self.layer_scalar.reshape(&[1])?.broadcast_in_dim(&[t, HIDDEN_SIZE], &[1])?;
+        let scalar = self.layer_scalar.reshape(&[1])?.broadcast_in_dim(&[t, self.h], &[1])?;
         Ok((x * scalar)?)
     }
 }
 
 struct Model {
     embed: XlaOp,
-    embed_per_layer: XlaOp,
     ple_projection: XlaOp,
     ple_projection_norm: XlaOp,
     layers: Vec<DecoderLayer>,
     final_ln: XlaOp,
+    hidden_size: i64,
+    num_layers: usize,
 }
 
 impl Model {
     // Weight declaration order must be identical between the prefill and the
-    // decode builders as they share a single buffer list.
-    fn new(vb: &VarBuilder) -> Result<Self> {
+    // decode builders as they share a single buffer list. The per-layer
+    // embedding table is not declared here: it stays in host memory and the
+    // gathered rows come in through a computation parameter.
+    fn new(vb: &VarBuilder, cfg: &Config) -> Result<Self> {
+        let (h, n) = (cfg.hidden_size, cfg.num_layers);
         let pre = "model.language_model";
-        let embed = vb.var(&format!("{pre}.embed_tokens.weight"), &[VOCAB_SIZE, HIDDEN_SIZE])?;
-        let embed_per_layer = vb.var(
-            &format!("{pre}.embed_tokens_per_layer.weight"),
-            &[VOCAB_SIZE, NUM_LAYERS as i64 * PLE_DIM],
-        )?;
-        let ple_projection = vb.var(
-            &format!("{pre}.per_layer_model_projection.weight"),
-            &[NUM_LAYERS as i64 * PLE_DIM, HIDDEN_SIZE],
-        )?;
+        let embed = vb.var(&format!("{pre}.embed_tokens.weight"), &[VOCAB_SIZE, h])?;
+        let ple_projection =
+            vb.var(&format!("{pre}.per_layer_model_projection.weight"), &[n as i64 * PLE_DIM, h])?;
         let ple_projection_norm =
             vb.var(&format!("{pre}.per_layer_projection_norm.weight"), &[PLE_DIM])?;
-        let mut layers = Vec::with_capacity(NUM_LAYERS);
-        for layer_idx in 0..NUM_LAYERS {
+        let mut layers = Vec::with_capacity(n);
+        for layer_idx in 0..n {
             let p = format!("{pre}.layers.{layer_idx}");
-            layers.push(DecoderLayer::new(vb, &p, layer_idx)?);
+            layers.push(DecoderLayer::new(vb, &p, layer_idx, cfg)?);
         }
-        let final_ln = vb.var(&format!("{pre}.norm.weight"), &[HIDDEN_SIZE])?;
-        Ok(Self { embed, embed_per_layer, ple_projection, ple_projection_norm, layers, final_ln })
+        let final_ln = vb.var(&format!("{pre}.norm.weight"), &[h])?;
+        Ok(Self {
+            embed,
+            ple_projection,
+            ple_projection_norm,
+            layers,
+            final_ln,
+            hidden_size: h,
+            num_layers: n,
+        })
     }
 
     // Scaled token embeddings [t, HIDDEN]. The sqrt(hidden) scale is rounded
     // to bf16 as in the reference implementation.
     fn embed(&self, tokens: &XlaOp, dt: PrimitiveType) -> Result<XlaOp> {
         let b = tokens.builder();
-        let scale = b.c0((HIDDEN_SIZE as f32).sqrt())?.convert(dt)?;
+        let scale = b.c0((self.hidden_size as f32).sqrt())?.convert(dt)?;
         let x = self.embed.take(tokens, 0)?;
         let scale = scale.broadcast_in_dim(x.array_shape()?.dims(), &[])?;
         Ok((x * scale)?)
     }
 
-    // Combined per-layer inputs [t, NUM_LAYERS, PLE_DIM]: the scaled PLE
-    // token embedding plus the normalized projection of the (scaled) token
-    // embedding, averaged with a 1/sqrt(2) factor.
-    fn per_layer_inputs(
-        &self,
-        tokens: &XlaOp,
-        x: &XlaOp,
-        t: i64,
-        dt: PrimitiveType,
-    ) -> Result<XlaOp> {
-        let b = tokens.builder();
-        let n = NUM_LAYERS as i64;
-        let ple = self.embed_per_layer.take(tokens, 0)?;
+    // Combined per-layer inputs [t, num_layers, PLE_DIM]: the scaled PLE
+    // token embedding (raw table rows gathered on the host, [t, n*PLE_DIM])
+    // plus the normalized projection of the (scaled) token embedding,
+    // averaged with a 1/sqrt(2) factor.
+    fn per_layer_inputs(&self, ple: &XlaOp, x: &XlaOp, t: i64, dt: PrimitiveType) -> Result<XlaOp> {
+        let b = ple.builder();
+        let n = self.num_layers as i64;
         let ple_scale = b.c0((PLE_DIM as f32).sqrt())?.convert(dt)?;
         let ple_scale = ple_scale.broadcast_in_dim(&[t, n * PLE_DIM], &[])?;
         let ple = ((ple * ple_scale)?).reshape(&[t, n, PLE_DIM])?;
         let proj = linear(x, &self.ple_projection)?;
-        let proj_scale = b.c0(1f32 / (HIDDEN_SIZE as f32).sqrt())?.convert(dt)?;
+        let proj_scale = b.c0(1f32 / (self.hidden_size as f32).sqrt())?.convert(dt)?;
         let proj_scale = proj_scale.broadcast_in_dim(&[t, n * PLE_DIM], &[])?;
         let proj = ((proj * proj_scale)?).reshape(&[t, n, PLE_DIM])?;
         let proj = rms_norm(&proj, &self.ple_projection_norm)?;
@@ -444,30 +490,32 @@ fn causal_mask(builder: &XlaBuilder) -> Result<XlaOp> {
     Ok(builder.c1(&mask_data)?.reshape(&[T, T])?)
 }
 
-// The prefill computation: full padded context in, next token plus the k/v
-// caches of the non-shared layers out.
-fn build_prefill(builder: &XlaBuilder, vb: &VarBuilder) -> Result<XlaComputation> {
+// The prefill computation: full padded context and its host-gathered PLE
+// rows in, next token plus the k/v caches of the non-shared layers out.
+fn build_prefill(builder: &XlaBuilder, vb: &VarBuilder, cfg: &Config) -> Result<XlaComputation> {
     let tokens = builder.parameter(0, ElementType::S32, &[T], "tokens")?;
     let last_pos = builder.parameter(1, ElementType::S32, &[], "last_pos")?;
-    let model = Model::new(vb)?;
+    let n = cfg.num_layers as i64;
+    let ple_rows = builder.parameter(2, vb.dtype(), &[T, n * PLE_DIM], "ple_rows")?;
+    let model = Model::new(vb, cfg)?;
     let dt = vb.dtype().primitive_type();
     let (cos_l, sin_l) = rope_tables(builder, false)?;
     let (cos_g, sin_g) = rope_tables(builder, true)?;
     let mask = causal_mask(builder)?;
 
     let mut x = model.embed(&tokens, dt)?;
-    let ple_inputs = model.per_layer_inputs(&tokens, &x, T, dt)?;
-    let mut states = Vec::with_capacity(2 * FIRST_KV_SHARED_LAYER);
+    let ple_inputs = model.per_layer_inputs(&ple_rows, &x, T, dt)?;
+    let mut states = Vec::with_capacity(2 * cfg.first_kv_shared_layer);
     // Post-rope k and post-norm v of the donor layers, reused by the shared
     // layers of the same attention type.
-    let mut donor_kv: Vec<Option<(XlaOp, XlaOp)>> = vec![None; NUM_LAYERS];
+    let mut donor_kv: Vec<Option<(XlaOp, XlaOp)>> = vec![None; cfg.num_layers];
     for (layer_idx, layer) in model.layers.iter().enumerate() {
         let (cos, sin) =
-            if is_full_attention(layer_idx) { (&cos_g, &sin_g) } else { (&cos_l, &sin_l) };
+            if cfg.is_full_attention(layer_idx) { (&cos_g, &sin_g) } else { (&cos_l, &sin_l) };
         let x_norm = rms_norm(&x, &layer.input_ln)?;
         let q = layer.attn.q(&x_norm, cos, sin, T)?;
-        let (k, v) = if is_kv_shared(layer_idx) {
-            donor_kv[kv_donor(layer_idx)].clone().ok_or_else(|| anyhow!("missing donor kv"))?
+        let (k, v) = if cfg.is_kv_shared(layer_idx) {
+            donor_kv[cfg.kv_donor(layer_idx)].clone().ok_or_else(|| anyhow!("missing donor kv"))?
         } else {
             let (k, v) = layer.attn.kv(&x_norm, cos, sin, T)?;
             states.push(k.clone());
@@ -482,7 +530,7 @@ fn build_prefill(builder: &XlaBuilder, vb: &VarBuilder) -> Result<XlaComputation
     }
 
     let zero = builder.c0(0i32)?;
-    let x_last = x.dynamic_slice(&[&last_pos, &zero], &[1, HIDDEN_SIZE])?;
+    let x_last = x.dynamic_slice(&[&last_pos, &zero], &[1, cfg.hidden_size])?;
     let next_token = model.logits_argmax(&x_last)?;
 
     let mut outputs = vec![next_token];
@@ -490,21 +538,23 @@ fn build_prefill(builder: &XlaBuilder, vb: &VarBuilder) -> Result<XlaComputation
     Ok(builder.tuple(&outputs)?.build()?)
 }
 
-// The decode computation: a single token at a given position plus the k/v
-// caches in, next token plus the updated caches out. The caches are passed as
-// parameters after the weights so that the weight parameter indices match the
-// prefill computation.
-fn build_decode(builder: &XlaBuilder, vb: &VarBuilder) -> Result<XlaComputation> {
+// The decode computation: a single token at a given position, its
+// host-gathered PLE row, plus the k/v caches in, next token plus the updated
+// caches out. The caches are passed as parameters after the weights so that
+// the weight parameter indices match the prefill computation.
+fn build_decode(builder: &XlaBuilder, vb: &VarBuilder, cfg: &Config) -> Result<XlaComputation> {
     let token = builder.parameter(0, ElementType::S32, &[1], "token")?;
     let pos = builder.parameter(1, ElementType::S32, &[], "pos")?;
-    let model = Model::new(vb)?;
+    let n = cfg.num_layers as i64;
+    let ple_rows = builder.parameter(2, vb.dtype(), &[1, n * PLE_DIM], "ple_rows")?;
+    let model = Model::new(vb, cfg)?;
     let dt = vb.dtype().primitive_type();
 
     let mut param_idx = (NUM_NON_WEIGHT_ARGS + vb.num_vars()) as i64;
     let dtype = vb.dtype();
-    let mut caches: Vec<Option<(XlaOp, XlaOp)>> = vec![None; NUM_LAYERS];
-    for layer_idx in 0..FIRST_KV_SHARED_LAYER {
-        let dims = [T, NUM_KV_HEADS, head_dim(layer_idx)];
+    let mut caches: Vec<Option<(XlaOp, XlaOp)>> = vec![None; cfg.num_layers];
+    for layer_idx in 0..cfg.first_kv_shared_layer {
+        let dims = [T, cfg.num_kv_heads, cfg.head_dim(layer_idx)];
         let k =
             builder.parameter(param_idx, dtype, &dims, &format!("layers.{layer_idx}.k_cache"))?;
         let v = builder.parameter(
@@ -524,18 +574,18 @@ fn build_decode(builder: &XlaBuilder, vb: &VarBuilder) -> Result<XlaComputation>
     let mask = mask.dynamic_slice(&[&pos, &zero], &[1, T])?;
 
     let mut x = model.embed(&token, dt)?;
-    let ple_inputs = model.per_layer_inputs(&token, &x, 1, dt)?;
-    let mut new_states = Vec::with_capacity(2 * FIRST_KV_SHARED_LAYER);
+    let ple_inputs = model.per_layer_inputs(&ple_rows, &x, 1, dt)?;
+    let mut new_states = Vec::with_capacity(2 * cfg.first_kv_shared_layer);
     for (layer_idx, layer) in model.layers.iter().enumerate() {
-        let hd = head_dim(layer_idx);
+        let hd = cfg.head_dim(layer_idx);
         let (cos, sin) =
-            if is_full_attention(layer_idx) { (&cos_g, &sin_g) } else { (&cos_l, &sin_l) };
+            if cfg.is_full_attention(layer_idx) { (&cos_g, &sin_g) } else { (&cos_l, &sin_l) };
         let cos = cos.dynamic_slice(&[&pos, &zero], &[1, hd])?;
         let sin = sin.dynamic_slice(&[&pos, &zero], &[1, hd])?;
         let x_norm = rms_norm(&x, &layer.input_ln)?;
         let q = layer.attn.q(&x_norm, &cos, &sin, 1)?;
-        let (k_cache, v_cache) = if is_kv_shared(layer_idx) {
-            caches[kv_donor(layer_idx)].clone().ok_or_else(|| anyhow!("missing donor cache"))?
+        let (k_cache, v_cache) = if cfg.is_kv_shared(layer_idx) {
+            caches[cfg.kv_donor(layer_idx)].clone().ok_or_else(|| anyhow!("missing donor cache"))?
         } else {
             let (k, v) = layer.attn.kv(&x_norm, &cos, &sin, 1)?;
             let (k_cache, v_cache) = caches[layer_idx].clone().unwrap();
@@ -563,9 +613,9 @@ fn build_decode(builder: &XlaBuilder, vb: &VarBuilder) -> Result<XlaComputation>
 // repositories are gated: the hugging face token from the standard locations
 // (HF_TOKEN or ~/.cache/huggingface/token) is used, and the license has to be
 // accepted on the model page first.
-fn hub_model_files() -> Result<(std::path::PathBuf, Vec<std::path::PathBuf>)> {
+fn hub_model_files(repo: &str) -> Result<(std::path::PathBuf, Vec<std::path::PathBuf>)> {
     let client = hf_hub::HFClientSync::new()?;
-    let repo = client.model("google", "gemma-4-E2B-it");
+    let repo = client.model("google", repo);
     let tokenizer = repo
         .download_file()
         .filename("tokenizer.json")
@@ -579,8 +629,29 @@ fn hub_model_files() -> Result<(std::path::PathBuf, Vec<std::path::PathBuf>)> {
     Ok((tokenizer, vec![weights]))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, clap::ValueEnum)]
+enum Which {
+    #[value(name = "e2b")]
+    E2b,
+    #[value(name = "e4b")]
+    E4b,
+}
+
+impl Which {
+    fn config(self) -> &'static Config {
+        match self {
+            Self::E2b => &CONFIG_E2B,
+            Self::E4b => &CONFIG_E4B,
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 struct Args {
+    /// The model size to run.
+    #[arg(long, value_enum, default_value_t = Which::E2b)]
+    which: Which,
+
     /// Run on cpu rather than on gpu (still in bf16, mostly for debugging).
     #[arg(long)]
     cpu: bool,
@@ -629,14 +700,16 @@ fn main() -> Result<()> {
     };
     xla::set_tf_min_log_level(xla::TfLogLevel::Warning);
     xla::set_min_log_level(xla::TfLogLevel::Warning);
+    let cfg = args.which.config();
     let client = make_client(args.cpu)?;
     println!(
-        "platform: {} {}, model: google/gemma-4-E2B-it, dtype: bf16",
+        "platform: {} {}, model: google/{}, dtype: bf16",
         client.platform_name(),
         client.platform_version(),
+        cfg.repo,
     );
 
-    let (tokenizer_path, weights_paths) = hub_model_files()?;
+    let (tokenizer_path, weights_paths) = hub_model_files(cfg.repo)?;
     let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path)
         .map_err(|e| anyhow!("cannot load tokenizer: {e}"))?;
     let prompt = if args.raw_prompt {
@@ -658,10 +731,10 @@ fn main() -> Result<()> {
     let start = std::time::Instant::now();
     let prefill_builder = XlaBuilder::new("gemma4-prefill");
     let vb = VarBuilder::new(&prefill_builder, ElementType::Bf16);
-    let prefill = build_prefill(&prefill_builder, &vb)?;
+    let prefill = build_prefill(&prefill_builder, &vb, cfg)?;
     let decode_builder = XlaBuilder::new("gemma4-decode");
     let decode_vb = VarBuilder::new(&decode_builder, ElementType::Bf16);
-    let decode = build_decode(&decode_builder, &decode_vb)?;
+    let decode = build_decode(&decode_builder, &decode_vb, cfg)?;
     println!("built the computations in {:?}", start.elapsed());
 
     let start = std::time::Instant::now();
@@ -672,6 +745,12 @@ fn main() -> Result<()> {
 
     let start = std::time::Instant::now();
     let weight_buffers = vb.load_buffers(&weights_paths, &client)?;
+    let ple_table = var_store::PleTable::load(
+        &weights_paths,
+        "model.language_model.embed_tokens_per_layer.weight",
+        &[VOCAB_SIZE, cfg.num_layers as i64 * PLE_DIM],
+        ElementType::Bf16,
+    )?;
     println!("loaded {} weights in {:?}", weight_buffers.len(), start.elapsed());
 
     let start = std::time::Instant::now();
@@ -680,7 +759,8 @@ fn main() -> Result<()> {
     padded.resize(CONTEXT_SIZE, 0);
     let token_buffer = client.buffer_from_host_buffer(&padded, &[CONTEXT_SIZE], None)?;
     let pos_buffer = client.buffer_from_host_buffer(&[tokens.len() as i32 - 1], &[], None)?;
-    let mut inputs: Vec<&xla::PjRtBuffer> = vec![&token_buffer, &pos_buffer];
+    let ple_buffer = ple_table.gather_buffer(&client, &padded)?;
+    let mut inputs: Vec<&xla::PjRtBuffer> = vec![&token_buffer, &pos_buffer, &ple_buffer];
     inputs.extend(weight_buffers.iter());
     let prefill_outputs = prefill_exe
         .execute_b(&inputs)?
@@ -691,36 +771,35 @@ fn main() -> Result<()> {
     println!("prefill ({} tokens) in {:?}", tokens.len(), start.elapsed());
     let start = std::time::Instant::now();
 
-    // Decode: one token at a time, the cache buffers stay on the device, and
-    // the generated token is chained on the device as in the qwen35 example.
+    // Decode: one token at a time, the cache buffers stay on the device. The
+    // generated token has to come back to the host at every step (unlike in
+    // the qwen35 example where it is chained on the device) as the PLE row
+    // for the next step is gathered on the host.
     let prompt_len = tokens.len();
     let mut generated = 0usize;
     let mut in_flight = prefill_outputs;
     loop {
         // in_flight produces the token at position prompt_len + generated.
         let pos = prompt_len + generated;
-        let next_outputs = if generated + 1 < args.sample_len && pos + 1 < CONTEXT_SIZE {
-            let pos_buffer = client.buffer_from_host_buffer(&[pos as i32], &[], None)?;
-            let mut inputs: Vec<&xla::PjRtBuffer> = vec![&in_flight[0], &pos_buffer];
-            inputs.extend(weight_buffers.iter());
-            inputs.extend(in_flight[1..].iter());
-            Some(
-                decode_exe
-                    .execute_b(&inputs)?
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| anyhow!("no execution result"))?,
-            )
-        } else {
-            None
-        };
         let next_token = in_flight[0].to_literal_sync()?.to_vec::<i32>()?[0];
         tokens.push(next_token);
         generated += 1;
-        match next_outputs {
-            Some(o) if !stop_tokens.contains(&next_token) => in_flight = o,
-            _ => break,
+        if generated >= args.sample_len
+            || pos + 1 >= CONTEXT_SIZE
+            || stop_tokens.contains(&next_token)
+        {
+            break;
         }
+        let pos_buffer = client.buffer_from_host_buffer(&[pos as i32], &[], None)?;
+        let ple_buffer = ple_table.gather_buffer(&client, &[next_token])?;
+        let mut inputs: Vec<&xla::PjRtBuffer> = vec![&in_flight[0], &pos_buffer, &ple_buffer];
+        inputs.extend(weight_buffers.iter());
+        inputs.extend(in_flight[1..].iter());
+        in_flight = decode_exe
+            .execute_b(&inputs)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("no execution result"))?;
     }
     let decode_steps = generated - 1;
     let dt = start.elapsed();
