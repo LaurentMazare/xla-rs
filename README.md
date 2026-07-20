@@ -131,3 +131,24 @@ initial download.
 cargo run --example gemma4 --release --features hf-hub -- \
   --prompt "What is the capital of France? Answer in one word."
 ```
+
+### Comparison with transformers
+
+Greedy generation of 106 tokens from a 19 token prompt, measured after
+compilation, weight loading, and the one-time kernel loading of the first
+execution, on the same RTX 4080 SUPER (16GB) and with the same versions as the
+qwen35 benchmark above. Prefill is the time to the first generated token
+(median of 5), the decode rate covers the remaining 105 tokens (median of 3
+runs):
+
+|                          | prefill | decode      |
+|--------------------------|---------|-------------|
+| GPU bf16, xla-rs         | 12 ms   | 118.0 tok/s |
+| GPU bf16, transformers   | 25 ms   | 46.1 tok/s  |
+
+The generated tokens are identical between the two implementations on the
+prompts tested. One caveat: on the benchmark prompt the very first token is a
+near-tie (the top-2 logits are 0.11 apart in a f32 reference run, about one
+bf16 ulp at that magnitude), so bf16-level numeric changes such as a different
+autotuned gemm kernel can flip it and the continuations then diverge while
+staying equally valid.
