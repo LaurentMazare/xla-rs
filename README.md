@@ -112,3 +112,22 @@ which scopes the `xla_gpu_load_autotune_results_from` and
 `xla_gpu_dump_autotune_results_to` debug options to a single compilation (the
 same options can also be set process-wide through the `XLA_FLAGS` environment
 variable).
+
+## Gemma 4 E2B
+
+The gemma4 example runs the text model of
+[Gemma 4 E2B](https://huggingface.co/google/gemma-4-E2B-it), a MatFormer-style
+hybrid where four out of five decoder layers use sliding-window attention, the
+last twenty layers reuse the k/v states of earlier layers, and a per-layer
+embedding is mixed into the residual stream after each mlp. Generation runs in
+bf16 with the same prefill/decode split and on-device kv-cache as the qwen35
+example, and the `--autotune-cache` flag is supported too.
+
+The repository is gated on the hub: accept the license on the model page and
+make a token available via `HF_TOKEN` or `~/.cache/huggingface/token` for the
+initial download.
+
+```bash
+cargo run --example gemma4 --release --features hf-hub -- \
+  --prompt "What is the capital of France? Answer in one word."
+```
