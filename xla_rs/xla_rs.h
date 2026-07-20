@@ -9,6 +9,7 @@
 #pragma GCC diagnostic ignored "-Wreturn-type"
 #include "absl/status/statusor.h"
 #include "xla/client/client_library.h"
+#include "xla/debug_options_flags.h"
 #include "xla/hlo/builder/lib/arithmetic.h"
 #include "xla/hlo/builder/lib/constants.h"
 #include "xla/hlo/builder/lib/matrix.h"
@@ -218,6 +219,9 @@ status get_dimensions(const xla_builder, const xla_op, size_t *);
 status build(const xla_builder, const xla_op, xla_computation *);
 status compile(const pjrt_client, const xla_computation,
                pjrt_loaded_executable *);
+status compile_with_autotune_cache(const pjrt_client, const xla_computation,
+                                   const char *load_from, const char *dump_to,
+                                   pjrt_loaded_executable *);
 status execute(const pjrt_loaded_executable, const literal *, int,
                pjrt_buffer ***);
 status execute_b(const pjrt_loaded_executable, const pjrt_buffer *, int,

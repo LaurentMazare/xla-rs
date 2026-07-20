@@ -52,6 +52,37 @@ impl PjRtClient {
         Ok(PjRtLoadedExecutable { exe, client: self.clone() })
     }
 
+    /// Compile a computation with the gpu gemm autotuner results pinned to a
+    /// file: `load_from` reuses previously dumped results, making the kernel
+    /// selection deterministic and skipping the tuning, `dump_to` writes the
+    /// results of this compilation (cumulated with previously tuned
+    /// computations). These map to the `xla_gpu_load_autotune_results_from`
+    /// and `xla_gpu_dump_autotune_results_to` debug options, scoped to this
+    /// compilation rather than set process-wide through `XLA_FLAGS`.
+    pub fn compile_with_autotune_cache(
+        &self,
+        c: &XlaComputation,
+        load_from: Option<&str>,
+        dump_to: Option<&str>,
+    ) -> Result<PjRtLoadedExecutable> {
+        let load_from = load_from.map(|s| std::ffi::CString::new(s).unwrap());
+        let dump_to = dump_to.map(|s| std::ffi::CString::new(s).unwrap());
+        let as_ptr =
+            |s: &Option<std::ffi::CString>| s.as_ref().map_or(std::ptr::null(), |s| s.as_ptr());
+        let mut exe: c_lib::pjrt_loaded_executable = std::ptr::null_mut();
+        let status = unsafe {
+            c_lib::compile_with_autotune_cache(
+                self.ptr(),
+                c.0,
+                as_ptr(&load_from),
+                as_ptr(&dump_to),
+                &mut exe,
+            )
+        };
+        super::handle_status(status)?;
+        Ok(PjRtLoadedExecutable { exe, client: self.clone() })
+    }
+
     /// The number of devices that this client has detected, e.g. the number of GPUs.
     pub fn device_count(&self) -> usize {
         unsafe { c_lib::pjrt_client_device_count(self.ptr()) as usize }

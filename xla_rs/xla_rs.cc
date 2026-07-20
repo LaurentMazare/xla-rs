@@ -987,6 +987,33 @@ status compile(const pjrt_client client, const xla_computation computation,
   return nullptr;
 }
 
+// Compile with the gemm autotuner results pinned to a file: load_from reuses
+// previously dumped results (making the kernel selection deterministic and
+// skipping the tuning), dump_to writes the results of this compilation.
+// Either can be null. This maps to the xla_gpu_load_autotune_results_from /
+// xla_gpu_dump_autotune_results_to debug options, scoped to this compilation
+// rather than set process-wide through XLA_FLAGS. Other debug options keep
+// their XLA_FLAGS provided or default values.
+status compile_with_autotune_cache(const pjrt_client client,
+                                   const xla_computation computation,
+                                   const char *load_from, const char *dump_to,
+                                   pjrt_loaded_executable *output) {
+  CompileOptions options;
+  DebugOptions &debug_options =
+      *options.executable_build_options.mutable_debug_options();
+  debug_options = GetDebugOptionsFromFlags();
+  if (load_from != nullptr) {
+    debug_options.set_xla_gpu_load_autotune_results_from(load_from);
+  }
+  if (dump_to != nullptr) {
+    debug_options.set_xla_gpu_dump_autotune_results_to(dump_to);
+  }
+  ASSIGN_OR_RETURN_STATUS(executable,
+                          (*client)->CompileAndLoad(*computation, options));
+  *output = executable.release();
+  return nullptr;
+}
+
 status first_error(const xla_builder b) {
   MAYBE_RETURN_STATUS(b->first_error());
   return nullptr;

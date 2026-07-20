@@ -1015,6 +1015,15 @@ struct Args {
     /// Feed the raw prompt to the model rather than using the chat template.
     #[arg(long)]
     raw_prompt: bool,
+
+    /// Cache file for the gpu gemm autotuner results: loaded when the file
+    /// exists, written otherwise. The autotuner is nondeterministic across
+    /// compilations (up to ~10% on the decode rate), pinning its results makes
+    /// the performance reproducible and skips the tuning on later runs,
+    /// speeding up the compilation. Use one file per model size and gpu, and
+    /// delete the file to re-tune (e.g. after a low throughput run).
+    #[arg(long)]
+    autotune_cache: Option<std::path::PathBuf>,
 }
 
 // Selects an execution device. Unless `--cpu` forces CPU, prefer an
@@ -1039,6 +1048,20 @@ fn make_client(force_cpu: bool) -> Result<PjRtClient> {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    // Load the autotune cache when the file exists, dump it otherwise. The
+    // existence check happens once so that both computations get compiled
+    // consistently: the dump file is cumulative across compilations.
+    let (at_load, at_dump) = match &args.autotune_cache {
+        None => (None, None),
+        Some(path) => {
+            let path = path.to_str().ok_or_else(|| anyhow!("non-utf8 autotune-cache path"))?;
+            if std::path::Path::new(path).exists() {
+                (Some(path.to_string()), None)
+            } else {
+                (None, Some(path.to_string()))
+            }
+        }
+    };
     xla::set_tf_min_log_level(xla::TfLogLevel::Warning);
     let cfg = args.which.config();
     let client = make_client(args.cpu)?;
@@ -1079,8 +1102,9 @@ fn main() -> Result<()> {
     println!("built the computations in {:?}", start.elapsed());
 
     let start = std::time::Instant::now();
-    let prefill_exe = client.compile(&prefill)?;
-    let decode_exe = client.compile(&decode)?;
+    let (at_load, at_dump) = (at_load.as_deref(), at_dump.as_deref());
+    let prefill_exe = client.compile_with_autotune_cache(&prefill, at_load, at_dump)?;
+    let decode_exe = client.compile_with_autotune_cache(&decode, at_load, at_dump)?;
     println!("compiled the executables in {:?}", start.elapsed());
 
     let start = std::time::Instant::now();
