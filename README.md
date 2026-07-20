@@ -43,7 +43,8 @@ Greedy generation of 60 tokens from a 16 token prompt, measured after
 compilation and weight loading, on a RTX 4080 SUPER (16GB) for the GPU rows
 and a Ryzen 9 7950X (16 cores) for the CPU rows. Prefill is the time to the
 first generated token, the decode rate covers the remaining 59 tokens. GPU
-numbers are the median of 3 runs. The generated tokens are identical between
+numbers are the median of 3 runs, the spread mostly comes from the gemm
+autotuner (see the section below). The generated tokens are identical between
 the two implementations for all the configurations below, except 0.8B on GPU
 bf16 where transformers diverges after 9 tokens because of bf16 rounding (the
 f32 outputs of both implementations agree with the xla-rs bf16 tokens).
@@ -75,3 +76,39 @@ Versions: xla-rs with xla_extension 0.10.0 (CUDA 13.0 build), transformers
 5.14.1 with torch 2.13.0 (cu130 on gpu, cpu wheel on cpu). The transformers
 numbers use the plain torch DeltaNet path, the fused flash-linear-attention
 kernels are not installed.
+
+### Pinning the gpu autotune configuration
+
+The XLA gemm autotuner benchmarks candidate kernel configurations during
+compilation and its choices vary from compile to compile, which moves the gpu
+decode rate by up to ~10% on the larger models (63 to 73 tok/s across
+compiles of the 4B model). This is the main source of run-to-run variance in
+the benchmark above. The autotuner choices can be pinned to a file with the
+`--autotune-cache` flag: when the file does not exist the results of the
+compilation are written to it, when it exists they are reused, making the
+kernel selection deterministic and speeding up the compilation (~14s down to
+~4.5s for the 4B model) as all the gemm tuning is skipped:
+
+```bash
+cargo run --example qwen35 --release --features hf-hub -- \
+  --which 4b --autotune-cache qwen35-4b.pbtxt \
+  --prompt "What is the capital of France? Answer in one word."
+```
+
+Pinning reproduces whatever run produced the file, good or bad: if the run
+that wrote the cache showed a low decode rate, delete the file and rerun
+until the tuning run is fast, then keep that file. The cache is keyed by
+fusion, gpu, and xla version, so use one file per model size and regenerate
+it after changing the model code or the xla_extension build (stale entries
+are silently re-tuned, which brings the nondeterminism back). Two smaller
+things to be aware of: when loading, the first prefill pays ~130ms of
+one-time kernel loading that is otherwise hidden inside the autotuning phase,
+and `--xla_gpu_exhaustive_tiling_search` is not a good alternative as it
+selects kernels on isolated micro-benchmarks and ends up slower end-to-end.
+
+In the library this is exposed as
+`PjRtClient::compile_with_autotune_cache(computation, load_from, dump_to)`
+which scopes the `xla_gpu_load_autotune_results_from` and
+`xla_gpu_dump_autotune_results_to` debug options to a single compilation (the
+same options can also be set process-wide through the `XLA_FLAGS` environment
+variable).
