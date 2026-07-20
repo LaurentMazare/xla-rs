@@ -13,10 +13,13 @@
 //
 // The PLE table is the "E" in the model names: it accounts for around half
 // of the parameters (2.4B on E2B, 2.9B on E4B) but is only ever read one row
-// per token, so it is kept in host memory and the rows for the current
-// tokens are gathered on the cpu and passed to the computations as an input.
-// This keeps the device weights at 4.5GB for E2B and 9.2GB for E4B, which is
-// how E4B fits on a 16GB gpu in bf16 (everything runs in bf16).
+// per token, so by default it is kept in host memory and the rows for the
+// current tokens are gathered on the cpu and passed to the computations as
+// an input. This keeps the device weights at 4.5GB for E2B and 9.2GB for
+// E4B, which is how E4B fits on a 16GB gpu in bf16 (everything runs in
+// bf16). The --ple-on-device flag keeps the table in device memory instead,
+// which lets the decode loop chain the generated token on the device rather
+// than syncing it back to the host at every step.
 //
 // The structure mirrors the qwen35 example: a prefill computation processes
 // the whole padded context and returns the first token plus the per-layer k/v
@@ -30,7 +33,7 @@ extern crate xla;
 use xla::{ElementType, PjRtClient, PrimitiveType, XlaBuilder, XlaComputation, XlaOp};
 
 mod var_store;
-use var_store::{VarBuilder, NUM_NON_WEIGHT_ARGS};
+use var_store::VarBuilder;
 
 // Fixed context size the computations get compiled for, also the kv-cache
 // length. Must stay <= sliding_window (512) so that sliding attention
@@ -356,6 +359,9 @@ impl DecoderLayer {
 
 struct Model {
     embed: XlaOp,
+    // The on-device per-layer embedding table, None when it is kept on the
+    // host and the gathered rows come in through a computation parameter.
+    embed_per_layer: Option<XlaOp>,
     ple_projection: XlaOp,
     ple_projection_norm: XlaOp,
     layers: Vec<DecoderLayer>,
@@ -366,13 +372,19 @@ struct Model {
 
 impl Model {
     // Weight declaration order must be identical between the prefill and the
-    // decode builders as they share a single buffer list. The per-layer
-    // embedding table is not declared here: it stays in host memory and the
-    // gathered rows come in through a computation parameter.
-    fn new(vb: &VarBuilder, cfg: &Config) -> Result<Self> {
+    // decode builders as they share a single buffer list.
+    fn new(vb: &VarBuilder, cfg: &Config, ple_on_device: bool) -> Result<Self> {
         let (h, n) = (cfg.hidden_size, cfg.num_layers);
         let pre = "model.language_model";
         let embed = vb.var(&format!("{pre}.embed_tokens.weight"), &[VOCAB_SIZE, h])?;
+        let embed_per_layer = if ple_on_device {
+            Some(vb.var(
+                &format!("{pre}.embed_tokens_per_layer.weight"),
+                &[VOCAB_SIZE, n as i64 * PLE_DIM],
+            )?)
+        } else {
+            None
+        };
         let ple_projection =
             vb.var(&format!("{pre}.per_layer_model_projection.weight"), &[n as i64 * PLE_DIM, h])?;
         let ple_projection_norm =
@@ -385,6 +397,7 @@ impl Model {
         let final_ln = vb.var(&format!("{pre}.norm.weight"), &[h])?;
         Ok(Self {
             embed,
+            embed_per_layer,
             ple_projection,
             ple_projection_norm,
             layers,
@@ -405,12 +418,25 @@ impl Model {
     }
 
     // Combined per-layer inputs [t, num_layers, PLE_DIM]: the scaled PLE
-    // token embedding (raw table rows gathered on the host, [t, n*PLE_DIM])
-    // plus the normalized projection of the (scaled) token embedding,
-    // averaged with a 1/sqrt(2) factor.
-    fn per_layer_inputs(&self, ple: &XlaOp, x: &XlaOp, t: i64, dt: PrimitiveType) -> Result<XlaOp> {
-        let b = ple.builder();
+    // token embedding plus the normalized projection of the (scaled) token
+    // embedding, averaged with a 1/sqrt(2) factor. The raw PLE rows either
+    // come in pre-gathered from the host ([t, n*PLE_DIM]) or are gathered
+    // here from the on-device table.
+    fn per_layer_inputs(
+        &self,
+        tokens: &XlaOp,
+        ple_rows: Option<&XlaOp>,
+        x: &XlaOp,
+        t: i64,
+        dt: PrimitiveType,
+    ) -> Result<XlaOp> {
+        let b = tokens.builder();
         let n = self.num_layers as i64;
+        let ple = match (ple_rows, &self.embed_per_layer) {
+            (Some(rows), None) => rows.clone(),
+            (None, Some(table)) => table.take(tokens, 0)?,
+            _ => anyhow::bail!("exactly one of ple_rows and embed_per_layer must be set"),
+        };
         let ple_scale = b.c0((PLE_DIM as f32).sqrt())?.convert(dt)?;
         let ple_scale = ple_scale.broadcast_in_dim(&[t, n * PLE_DIM], &[])?;
         let ple = ((ple * ple_scale)?).reshape(&[t, n, PLE_DIM])?;
@@ -490,21 +516,31 @@ fn causal_mask(builder: &XlaBuilder) -> Result<XlaOp> {
     Ok(builder.c1(&mask_data)?.reshape(&[T, T])?)
 }
 
-// The prefill computation: full padded context and its host-gathered PLE
-// rows in, next token plus the k/v caches of the non-shared layers out.
-fn build_prefill(builder: &XlaBuilder, vb: &VarBuilder, cfg: &Config) -> Result<XlaComputation> {
+// The prefill computation: full padded context (and its host-gathered PLE
+// rows unless the table is on the device) in, next token plus the k/v caches
+// of the non-shared layers out.
+fn build_prefill(
+    builder: &XlaBuilder,
+    vb: &VarBuilder,
+    cfg: &Config,
+    ple_on_device: bool,
+) -> Result<XlaComputation> {
     let tokens = builder.parameter(0, ElementType::S32, &[T], "tokens")?;
     let last_pos = builder.parameter(1, ElementType::S32, &[], "last_pos")?;
     let n = cfg.num_layers as i64;
-    let ple_rows = builder.parameter(2, vb.dtype(), &[T, n * PLE_DIM], "ple_rows")?;
-    let model = Model::new(vb, cfg)?;
+    let ple_rows = if ple_on_device {
+        None
+    } else {
+        Some(builder.parameter(2, vb.dtype(), &[T, n * PLE_DIM], "ple_rows")?)
+    };
+    let model = Model::new(vb, cfg, ple_on_device)?;
     let dt = vb.dtype().primitive_type();
     let (cos_l, sin_l) = rope_tables(builder, false)?;
     let (cos_g, sin_g) = rope_tables(builder, true)?;
     let mask = causal_mask(builder)?;
 
     let mut x = model.embed(&tokens, dt)?;
-    let ple_inputs = model.per_layer_inputs(&ple_rows, &x, T, dt)?;
+    let ple_inputs = model.per_layer_inputs(&tokens, ple_rows.as_ref(), &x, T, dt)?;
     let mut states = Vec::with_capacity(2 * cfg.first_kv_shared_layer);
     // Post-rope k and post-norm v of the donor layers, reused by the shared
     // layers of the same attention type.
@@ -538,19 +574,29 @@ fn build_prefill(builder: &XlaBuilder, vb: &VarBuilder, cfg: &Config) -> Result<
     Ok(builder.tuple(&outputs)?.build()?)
 }
 
-// The decode computation: a single token at a given position, its
-// host-gathered PLE row, plus the k/v caches in, next token plus the updated
-// caches out. The caches are passed as parameters after the weights so that
-// the weight parameter indices match the prefill computation.
-fn build_decode(builder: &XlaBuilder, vb: &VarBuilder, cfg: &Config) -> Result<XlaComputation> {
+// The decode computation: a single token at a given position (and its
+// host-gathered PLE row unless the table is on the device), plus the k/v
+// caches in, next token plus the updated caches out. The caches are passed
+// as parameters after the weights so that the weight parameter indices match
+// the prefill computation.
+fn build_decode(
+    builder: &XlaBuilder,
+    vb: &VarBuilder,
+    cfg: &Config,
+    ple_on_device: bool,
+) -> Result<XlaComputation> {
     let token = builder.parameter(0, ElementType::S32, &[1], "token")?;
     let pos = builder.parameter(1, ElementType::S32, &[], "pos")?;
     let n = cfg.num_layers as i64;
-    let ple_rows = builder.parameter(2, vb.dtype(), &[1, n * PLE_DIM], "ple_rows")?;
-    let model = Model::new(vb, cfg)?;
+    let ple_rows = if ple_on_device {
+        None
+    } else {
+        Some(builder.parameter(2, vb.dtype(), &[1, n * PLE_DIM], "ple_rows")?)
+    };
+    let model = Model::new(vb, cfg, ple_on_device)?;
     let dt = vb.dtype().primitive_type();
 
-    let mut param_idx = (NUM_NON_WEIGHT_ARGS + vb.num_vars()) as i64;
+    let mut param_idx = vb.next_index() as i64;
     let dtype = vb.dtype();
     let mut caches: Vec<Option<(XlaOp, XlaOp)>> = vec![None; cfg.num_layers];
     for layer_idx in 0..cfg.first_kv_shared_layer {
@@ -574,7 +620,7 @@ fn build_decode(builder: &XlaBuilder, vb: &VarBuilder, cfg: &Config) -> Result<X
     let mask = mask.dynamic_slice(&[&pos, &zero], &[1, T])?;
 
     let mut x = model.embed(&token, dt)?;
-    let ple_inputs = model.per_layer_inputs(&ple_rows, &x, 1, dt)?;
+    let ple_inputs = model.per_layer_inputs(&token, ple_rows.as_ref(), &x, 1, dt)?;
     let mut new_states = Vec::with_capacity(2 * cfg.first_kv_shared_layer);
     for (layer_idx, layer) in model.layers.iter().enumerate() {
         let hd = cfg.head_dim(layer_idx);
@@ -651,6 +697,13 @@ struct Args {
     /// The model size to run.
     #[arg(long, value_enum, default_value_t = Which::E2b)]
     which: Which,
+
+    /// Keep the per-layer embedding table in device memory instead of
+    /// gathering its rows on the host. Uses an extra 4.8GB (E2B) or 5.8GB
+    /// (E4B, does not fit on a 16GB gpu) of device memory but restores the
+    /// on-device chaining of the generated token in the decode loop.
+    #[arg(long)]
+    ple_on_device: bool,
 
     /// Run on cpu rather than on gpu (still in bf16, mostly for debugging).
     #[arg(long)]
@@ -729,12 +782,15 @@ fn main() -> Result<()> {
         .collect();
 
     let start = std::time::Instant::now();
+    // Non-weight args: token ids and position, plus the host-gathered PLE
+    // rows unless the table lives on the device.
+    let non_weight_args = if args.ple_on_device { 2 } else { 3 };
     let prefill_builder = XlaBuilder::new("gemma4-prefill");
-    let vb = VarBuilder::new(&prefill_builder, ElementType::Bf16);
-    let prefill = build_prefill(&prefill_builder, &vb, cfg)?;
+    let vb = VarBuilder::new(&prefill_builder, ElementType::Bf16, non_weight_args);
+    let prefill = build_prefill(&prefill_builder, &vb, cfg, args.ple_on_device)?;
     let decode_builder = XlaBuilder::new("gemma4-decode");
-    let decode_vb = VarBuilder::new(&decode_builder, ElementType::Bf16);
-    let decode = build_decode(&decode_builder, &decode_vb, cfg)?;
+    let decode_vb = VarBuilder::new(&decode_builder, ElementType::Bf16, non_weight_args);
+    let decode = build_decode(&decode_builder, &decode_vb, cfg, args.ple_on_device)?;
     println!("built the computations in {:?}", start.elapsed());
 
     let start = std::time::Instant::now();
@@ -745,12 +801,16 @@ fn main() -> Result<()> {
 
     let start = std::time::Instant::now();
     let weight_buffers = vb.load_buffers(&weights_paths, &client)?;
-    let ple_table = var_store::PleTable::load(
-        &weights_paths,
-        "model.language_model.embed_tokens_per_layer.weight",
-        &[VOCAB_SIZE, cfg.num_layers as i64 * PLE_DIM],
-        ElementType::Bf16,
-    )?;
+    let ple_table = if args.ple_on_device {
+        None
+    } else {
+        Some(var_store::PleTable::load(
+            &weights_paths,
+            "model.language_model.embed_tokens_per_layer.weight",
+            &[VOCAB_SIZE, cfg.num_layers as i64 * PLE_DIM],
+            ElementType::Bf16,
+        )?)
+    };
     println!("loaded {} weights in {:?}", weight_buffers.len(), start.elapsed());
 
     let start = std::time::Instant::now();
@@ -759,8 +819,12 @@ fn main() -> Result<()> {
     padded.resize(CONTEXT_SIZE, 0);
     let token_buffer = client.buffer_from_host_buffer(&padded, &[CONTEXT_SIZE], None)?;
     let pos_buffer = client.buffer_from_host_buffer(&[tokens.len() as i32 - 1], &[], None)?;
-    let ple_buffer = ple_table.gather_buffer(&client, &padded)?;
-    let mut inputs: Vec<&xla::PjRtBuffer> = vec![&token_buffer, &pos_buffer, &ple_buffer];
+    let ple_buffer = match &ple_table {
+        Some(table) => Some(table.gather_buffer(&client, &padded)?),
+        None => None,
+    };
+    let mut inputs: Vec<&xla::PjRtBuffer> = vec![&token_buffer, &pos_buffer];
+    inputs.extend(ple_buffer.iter());
     inputs.extend(weight_buffers.iter());
     let prefill_outputs = prefill_exe
         .execute_b(&inputs)?
@@ -771,35 +835,65 @@ fn main() -> Result<()> {
     println!("prefill ({} tokens) in {:?}", tokens.len(), start.elapsed());
     let start = std::time::Instant::now();
 
-    // Decode: one token at a time, the cache buffers stay on the device. The
-    // generated token has to come back to the host at every step (unlike in
-    // the qwen35 example where it is chained on the device) as the PLE row
-    // for the next step is gathered on the host.
+    // Decode: one token at a time, the cache buffers stay on the device.
     let prompt_len = tokens.len();
     let mut generated = 0usize;
     let mut in_flight = prefill_outputs;
-    loop {
-        // in_flight produces the token at position prompt_len + generated.
-        let pos = prompt_len + generated;
-        let next_token = in_flight[0].to_literal_sync()?.to_vec::<i32>()?[0];
-        tokens.push(next_token);
-        generated += 1;
-        if generated >= args.sample_len
-            || pos + 1 >= CONTEXT_SIZE
-            || stop_tokens.contains(&next_token)
-        {
-            break;
-        }
-        let pos_buffer = client.buffer_from_host_buffer(&[pos as i32], &[], None)?;
-        let ple_buffer = ple_table.gather_buffer(&client, &[next_token])?;
-        let mut inputs: Vec<&xla::PjRtBuffer> = vec![&in_flight[0], &pos_buffer, &ple_buffer];
-        inputs.extend(weight_buffers.iter());
-        inputs.extend(in_flight[1..].iter());
-        in_flight = decode_exe
-            .execute_b(&inputs)?
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow!("no execution result"))?;
+    match &ple_table {
+        // PLE rows gathered on the host: the generated token has to come
+        // back to the host before the next step can be launched.
+        Some(table) => loop {
+            // in_flight produces the token at position prompt_len + generated.
+            let pos = prompt_len + generated;
+            let next_token = in_flight[0].to_literal_sync()?.to_vec::<i32>()?[0];
+            tokens.push(next_token);
+            generated += 1;
+            if generated >= args.sample_len
+                || pos + 1 >= CONTEXT_SIZE
+                || stop_tokens.contains(&next_token)
+            {
+                break;
+            }
+            let pos_buffer = client.buffer_from_host_buffer(&[pos as i32], &[], None)?;
+            let ple_buffer = table.gather_buffer(&client, &[next_token])?;
+            let mut inputs: Vec<&xla::PjRtBuffer> = vec![&in_flight[0], &pos_buffer, &ple_buffer];
+            inputs.extend(weight_buffers.iter());
+            inputs.extend(in_flight[1..].iter());
+            in_flight = decode_exe
+                .execute_b(&inputs)?
+                .into_iter()
+                .next()
+                .ok_or_else(|| anyhow!("no execution result"))?;
+        },
+        // PLE table on the device: the generated token is chained on the
+        // device as in the qwen35 example, the next step is launched before
+        // the token comes back to the host.
+        None => loop {
+            // in_flight produces the token at position prompt_len + generated.
+            let pos = prompt_len + generated;
+            let next_outputs = if generated + 1 < args.sample_len && pos + 1 < CONTEXT_SIZE {
+                let pos_buffer = client.buffer_from_host_buffer(&[pos as i32], &[], None)?;
+                let mut inputs: Vec<&xla::PjRtBuffer> = vec![&in_flight[0], &pos_buffer];
+                inputs.extend(weight_buffers.iter());
+                inputs.extend(in_flight[1..].iter());
+                Some(
+                    decode_exe
+                        .execute_b(&inputs)?
+                        .into_iter()
+                        .next()
+                        .ok_or_else(|| anyhow!("no execution result"))?,
+                )
+            } else {
+                None
+            };
+            let next_token = in_flight[0].to_literal_sync()?.to_vec::<i32>()?[0];
+            tokens.push(next_token);
+            generated += 1;
+            match next_outputs {
+                Some(o) if !stop_tokens.contains(&next_token) => in_flight = o,
+                _ => break,
+            }
+        },
     }
     let decode_steps = generated - 1;
     let dt = start.elapsed();

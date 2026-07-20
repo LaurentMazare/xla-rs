@@ -7,21 +7,20 @@
 use anyhow::{bail, Result};
 use xla::{ElementType, PjRtBuffer, PjRtClient, XlaBuilder, XlaOp};
 
-// Parameters 0, 1, and 2 are reserved for the token ids, the last position,
-// and the host-gathered per-layer embedding rows.
-pub const NUM_NON_WEIGHT_ARGS: usize = 3;
-
 type Vars = std::rc::Rc<std::cell::RefCell<Vec<(String, Vec<i64>)>>>;
 
 pub struct VarBuilder {
     builder: XlaBuilder,
     dtype: ElementType,
     vars: Vars,
+    // The first parameter index available for weights, the indices before it
+    // are reserved for the non-weight arguments (token ids, position, ...).
+    first_weight_index: usize,
 }
 
 impl VarBuilder {
-    pub fn new(builder: &XlaBuilder, dtype: ElementType) -> Self {
-        Self { builder: builder.clone(), dtype, vars: Default::default() }
+    pub fn new(builder: &XlaBuilder, dtype: ElementType, first_weight_index: usize) -> Self {
+        Self { builder: builder.clone(), dtype, vars: Default::default(), first_weight_index }
     }
 
     pub fn dtype(&self) -> ElementType {
@@ -31,15 +30,15 @@ impl VarBuilder {
     /// Declare a weight parameter with the given safetensors name.
     pub fn var(&self, name: &str, dims: &[i64]) -> Result<XlaOp> {
         let mut vars = self.vars.borrow_mut();
-        let index = vars.len() + NUM_NON_WEIGHT_ARGS;
+        let index = vars.len() + self.first_weight_index;
         let op = self.builder.parameter(index as i64, self.dtype, dims, name)?;
         vars.push((name.to_string(), dims.to_vec()));
         Ok(op)
     }
 
-    /// The number of declared weight parameters.
-    pub fn num_vars(&self) -> usize {
-        self.vars.borrow().len()
+    /// The parameter index right after the last declared weight.
+    pub fn next_index(&self) -> usize {
+        self.vars.borrow().len() + self.first_weight_index
     }
 
     /// Load the declared weights from safetensors shards, in declaration order.

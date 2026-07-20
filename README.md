@@ -127,11 +127,16 @@ too.
 
 The PLE table is the "effective" in the E model names: it holds roughly half
 of the parameters (2.4B of E2B's 4.6B, 2.9B of E4B's 7.5B) but is only ever
-read one row per token, so the example keeps it in host memory and gathers
-the rows for the current tokens on the cpu, passing them to the computations
-as an input. This halves the device memory (4.5GB of weights for E2B, 9.2GB
-for E4B) and is what lets E4B run on a 16GB gpu in bf16, at the cost of a
-host round-trip per decode step (a few percent decode rate on E2B).
+read one row per token, so by default the example keeps it in host memory
+and gathers the rows for the current tokens on the cpu, passing them to the
+computations as an input. This halves the device memory (4.5GB of weights
+for E2B, 9.2GB for E4B) and is what lets E4B run on a 16GB gpu in bf16, at
+the cost of a host round-trip per decode step: the next step can only be
+launched once the generated token is back on the host, while with the table
+on the device the token is chained on the device as in the qwen35 example.
+The `--ple-on-device` flag keeps the table in device memory instead (an
+extra 4.8GB for E2B, and 5.8GB for E4B which then no longer fits on a 16GB
+gpu), trading the memory back for the chained decode loop.
 
 The repositories are gated on the hub: accept the license on the model page
 and make a token available via `HF_TOKEN` or `~/.cache/huggingface/token` for
@@ -152,22 +157,25 @@ qwen35 benchmark above. Prefill is the time to the first generated token
 (median of 5), the decode rate covers the remaining 105 tokens (median of 3
 runs), and the memory column is the peak gpu usage of the xla-rs run:
 
-|                          | E2B         | E4B        |
-|--------------------------|-------------|------------|
-| prefill, xla-rs          | 13 ms       | 24 ms      |
-| prefill, transformers    | 25 ms       | -          |
-| decode, xla-rs           | 110.1 tok/s | 48.0 tok/s |
-| decode, transformers     | 46.1 tok/s  | -          |
-| gpu memory, xla-rs       | 8.5 GB      | 14.7 GB    |
+|                          | E2B         | E2B, PLE on device | E4B        |
+|--------------------------|-------------|--------------------|------------|
+| prefill, xla-rs          | 13 ms       | 12 ms              | 24 ms      |
+| prefill, transformers    | 25 ms       | 25 ms              | -          |
+| decode, xla-rs           | 110.1 tok/s | 117.4 tok/s        | 48.0 tok/s |
+| decode, transformers     | 46.1 tok/s  | 46.1 tok/s         | -          |
+| gpu memory, xla-rs       | 8.5 GB      | 9.6 GB             | 14.7 GB    |
 
-The transformers E4B column is empty as the full bf16 text model (15GB of
-weights with the PLE table on the device) does not leave enough room on a
-16GB gpu; splitting it across gpu and cpu with accelerate works for checking
-outputs but is not a meaningful speed comparison. The generated tokens are
-identical between the two implementations on the prompts tested (E4B was
-checked against a gpu+cpu split run). One caveat: on E2B the very first token
-of the benchmark prompt is a near-tie (the top-2 logits are 0.11 apart in a
-f32 reference run, about one bf16 ulp at that magnitude), so bf16-level
-numeric changes such as a different autotuned gemm kernel or the PLE
-offload's slightly different graph can flip it and the continuations then
-diverge while staying equally valid.
+The host round-trip of the default PLE offload costs E2B ~6% decode rate
+(110 vs 117 tok/s with `--ple-on-device`) for 1.1GB less peak gpu memory
+(the 4.8GB table plus its gathers is mostly hidden by the XLA workspace in
+the peak numbers). The transformers E4B column is empty as the full bf16
+text model (15GB of weights with the PLE table on the device) does not leave
+enough room on a 16GB gpu; splitting it across gpu and cpu with accelerate
+works for checking outputs but is not a meaningful speed comparison. The
+generated tokens are identical between the two implementations on the
+prompts tested (E4B was checked against a gpu+cpu split run). One caveat: on
+E2B the very first token of the benchmark prompt is a near-tie (the top-2
+logits are 0.11 apart in a f32 reference run, about one bf16 ulp at that
+magnitude), so bf16-level numeric changes such as a different autotuned gemm
+kernel or the PLE offload's slightly different graph can flip it and the
+continuations then diverge while staying equally valid.
