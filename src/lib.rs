@@ -58,8 +58,29 @@ impl TfLogLevel {
             Self::Fatal => "3",
         }
     }
+
+    fn as_severity(&self) -> i32 {
+        match self {
+            Self::Info => 0,
+            Self::Warning => 1,
+            Self::Error => 2,
+            Self::Fatal => 3,
+        }
+    }
 }
 
+/// Set the log level for the tsl logging path. This works by setting the
+/// `TF_CPP_MIN_LOG_LEVEL` environment variable so it has to be called before
+/// the first use of the xla library, see [`set_min_log_level`] for the abseil
+/// logging path used by more recent parts of xla.
 pub fn set_tf_min_log_level(log_level: TfLogLevel) {
     std::env::set_var("TF_CPP_MIN_LOG_LEVEL", log_level.as_env_variable_str())
+}
+
+/// Set the minimum severity for the abseil logging used by recent parts of
+/// xla. This is a runtime setting that can be changed at any time, and
+/// complements [`set_tf_min_log_level`] which only covers the tsl logging
+/// path.
+pub fn set_min_log_level(log_level: TfLogLevel) {
+    unsafe { c_lib::set_min_log_level(log_level.as_severity()) }
 }

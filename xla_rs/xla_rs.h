@@ -7,6 +7,7 @@
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #pragma GCC diagnostic ignored "-Winvalid-offsetof"
 #pragma GCC diagnostic ignored "-Wreturn-type"
+#include "absl/log/globals.h"
 #include "absl/status/statusor.h"
 #include "xla/client/client_library.h"
 #include "xla/debug_options_flags.h"
@@ -222,6 +223,7 @@ status compile(const pjrt_client, const xla_computation,
 status compile_with_autotune_cache(const pjrt_client, const xla_computation,
                                    const char *load_from, const char *dump_to,
                                    pjrt_loaded_executable *);
+void set_min_log_level(int severity);
 status execute(const pjrt_loaded_executable, const literal *, int,
                pjrt_buffer ***);
 status execute_b(const pjrt_loaded_executable, const pjrt_buffer *, int,

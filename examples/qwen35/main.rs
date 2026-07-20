@@ -1063,6 +1063,7 @@ fn main() -> Result<()> {
         }
     };
     xla::set_tf_min_log_level(xla::TfLogLevel::Warning);
+    xla::set_min_log_level(xla::TfLogLevel::Warning);
     let cfg = args.which.config();
     let client = make_client(args.cpu)?;
     println!(

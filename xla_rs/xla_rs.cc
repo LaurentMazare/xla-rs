@@ -1014,6 +1014,16 @@ status compile_with_autotune_cache(const pjrt_client client,
   return nullptr;
 }
 
+
+// Sets the minimum severity for the abseil logging used by recent parts of
+// xla (0=info, 1=warning, 2=error, 3=fatal). This complements the
+// TF_CPP_MIN_LOG_LEVEL environment variable which only covers the tsl logging
+// path, and being a runtime setting it can be called at any time.
+void set_min_log_level(int severity) {
+  absl::SetMinLogLevel(static_cast<absl::LogSeverityAtLeast>(severity));
+  absl::SetStderrThreshold(static_cast<absl::LogSeverityAtLeast>(severity));
+}
+
 status first_error(const xla_builder b) {
   MAYBE_RETURN_STATUS(b->first_error());
   return nullptr;
