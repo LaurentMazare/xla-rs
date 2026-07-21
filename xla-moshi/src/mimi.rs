@@ -112,7 +112,8 @@ impl Mimi {
         let encoder_frame_rate =
             cfg.sample_rate / cfg.seanet.ratios.iter().product::<usize>() as f64;
         let downsample_stride = (encoder_frame_rate / cfg.frame_rate) as i64;
-        let downsample = ConvDownsample1d::load(&vb.pp("downsample"), downsample_stride, dim, true)?;
+        let downsample =
+            ConvDownsample1d::load(&vb.pp("downsample"), downsample_stride, dim, true)?;
         let upsample = ConvTrUpsample1d::load(&vb.pp("upsample"), downsample_stride, dim, true)?;
         Ok(Self {
             encoder,

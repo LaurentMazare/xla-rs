@@ -169,8 +169,7 @@ impl SeaNetEncoder {
 
         let mut layers = Vec::with_capacity(cfg.ratios.len());
         for (i, &ratio) in cfg.ratios.iter().rev().enumerate() {
-            let norm =
-                if cfg.disable_norm_outer_blocks >= i + 2 { None } else { Some(cfg.norm) };
+            let norm = if cfg.disable_norm_outer_blocks >= i + 2 { None } else { Some(cfg.norm) };
             let mut residuals = Vec::with_capacity(cfg.n_residual_layers);
             for j in 0..cfg.n_residual_layers {
                 let dilation = (cfg.dilation_base as i64).pow(j as u32);

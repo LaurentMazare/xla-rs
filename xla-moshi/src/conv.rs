@@ -25,12 +25,7 @@ pub enum PadMode {
     Replicate,
 }
 
-fn get_extra_padding_for_conv1d(
-    len: i64,
-    k_size_eff: i64,
-    stride: i64,
-    padding_total: i64,
-) -> i64 {
+fn get_extra_padding_for_conv1d(len: i64, k_size_eff: i64, stride: i64, padding_total: i64) -> i64 {
     let n_frames = (len + padding_total - k_size_eff).max(0) as f64 / stride as f64 + 1.0;
     let ideal_len = ((n_frames.ceil() as i64 - 1) * stride + k_size_eff - padding_total).max(0);
     (ideal_len - len).max(0)

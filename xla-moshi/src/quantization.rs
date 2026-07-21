@@ -70,12 +70,7 @@ pub struct VectorQuantization {
 }
 
 impl VectorQuantization {
-    pub fn load(
-        vb: &Vb,
-        dim: i64,
-        codebook_size: i64,
-        codebook_dim: Option<i64>,
-    ) -> Result<Self> {
+    pub fn load(vb: &Vb, dim: i64, codebook_size: i64, codebook_dim: Option<i64>) -> Result<Self> {
         let codebook_dim = codebook_dim.unwrap_or(dim);
         let (project_in, project_out) = if codebook_dim == dim {
             (None, None)
@@ -153,8 +148,9 @@ impl ResidualVectorQuantization {
         let mut quantized: Option<XlaOp> = None;
         for (i, layer) in self.layers.iter().enumerate() {
             let d = codes.dims()?;
-            let layer_codes =
-                codes.slice_in_dim1(i as i64, i as i64 + 1, 1)?.reshape(&[d[0] as i64, d[2] as i64])?;
+            let layer_codes = codes
+                .slice_in_dim1(i as i64, i as i64 + 1, 1)?
+                .reshape(&[d[0] as i64, d[2] as i64])?;
             let q = layer.decode(&layer_codes)?;
             quantized = Some(match quantized {
                 None => q,
@@ -235,8 +231,15 @@ impl SplitResidualVectorQuantizer {
         n_q: i64,
         bins: i64,
     ) -> Result<Self> {
-        let rvq_first =
-            ResidualVectorQuantizer::load(&vb.pp("rvq_first"), dim, input_dim, output_dim, 1, bins, true)?;
+        let rvq_first = ResidualVectorQuantizer::load(
+            &vb.pp("rvq_first"),
+            dim,
+            input_dim,
+            output_dim,
+            1,
+            bins,
+            true,
+        )?;
         let rvq_rest = ResidualVectorQuantizer::load(
             &vb.pp("rvq_rest"),
             dim,
