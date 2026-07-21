@@ -25,6 +25,10 @@ pub enum Error {
     #[error("token id {id} out of range for the table ({rows} rows)")]
     IndexOutOfRange { id: usize, rows: usize },
 
+    /// Some tensors present in the shards were never used.
+    #[error("{} unused tensors {names:?}", names.len())]
+    UnusedTensors { names: Vec<String> },
+
     /// Error from the underlying xla crate.
     #[error(transparent)]
     Xla(#[from] xla::Error),

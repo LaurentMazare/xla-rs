@@ -1112,6 +1112,11 @@ fn main() -> Result<()> {
 
     let start = std::time::Instant::now();
     let weight_buffers = vb.load_buffers(&weights_paths, &client)?;
+    // The checkpoint also ships the vision tower and the multi-token-prediction
+    // head, neither of which is used by this text-generation example.
+    vb.check_all_used_with_ignore(&weights_paths, |name| {
+        name.starts_with("model.visual.") || name.starts_with("mtp.")
+    })?;
     println!("loaded {} weights in {:?}", weight_buffers.len(), start.elapsed());
 
     let start = std::time::Instant::now();

@@ -5,6 +5,7 @@
 // created one tensor at a time so that peak host memory stays around a single
 // tensor.
 use crate::error::{Error, Result};
+use std::collections::HashSet;
 use xla::{ElementType, PjRtBuffer, PjRtClient, XlaBuilder, XlaOp};
 
 type Vars = std::rc::Rc<std::cell::RefCell<Vec<(String, Vec<i64>)>>>;
@@ -15,6 +16,9 @@ pub struct VarBuilder {
     builder: XlaBuilder,
     dtype: ElementType,
     vars: Vars,
+    // Tensor names consumed outside of `var` (e.g. gathered by a `PleTable`)
+    // that should still count as used by `check_all_used`.
+    extra_used: std::rc::Rc<std::cell::RefCell<HashSet<String>>>,
     // The first parameter index available for weights; the indices before it
     // are reserved for the non-weight arguments (token ids, position, ...).
     first_weight_index: usize,
@@ -25,7 +29,13 @@ impl VarBuilder {
     /// reserved for the non-weight arguments, so the first declared weight gets
     /// that parameter index.
     pub fn new(builder: &XlaBuilder, dtype: ElementType, first_weight_index: usize) -> Self {
-        Self { builder: builder.clone(), dtype, vars: Default::default(), first_weight_index }
+        Self {
+            builder: builder.clone(),
+            dtype,
+            vars: Default::default(),
+            extra_used: Default::default(),
+            first_weight_index,
+        }
     }
 
     pub fn dtype(&self) -> ElementType {
@@ -49,6 +59,61 @@ impl VarBuilder {
     /// The parameter index right after the last declared weight.
     pub fn next_index(&self) -> usize {
         self.vars.borrow().len() + self.first_weight_index
+    }
+
+    /// Mark a tensor name as used even though it was not declared via `var`,
+    /// e.g. when it is loaded by a [`PleTable`]. This keeps [`check_all_used`]
+    /// from reporting it as unused.
+    ///
+    /// [`check_all_used`]: VarBuilder::check_all_used
+    pub fn mark_used(&self, name: &str) {
+        self.extra_used.borrow_mut().insert(name.to_string());
+    }
+
+    /// The set of tensor names that have been used so far, i.e. declared via
+    /// [`var`](VarBuilder::var) or marked via [`mark_used`](VarBuilder::mark_used).
+    pub fn used_names(&self) -> HashSet<String> {
+        let mut used: HashSet<String> = self.vars.borrow().iter().map(|(n, _)| n.clone()).collect();
+        used.extend(self.extra_used.borrow().iter().cloned());
+        used
+    }
+
+    /// Check that every tensor present in the given safetensors shards has been
+    /// used (declared via [`var`](VarBuilder::var) or marked via
+    /// [`mark_used`](VarBuilder::mark_used)), erroring with the sorted list of
+    /// tensors that were never used.
+    pub fn check_all_used<P: AsRef<std::path::Path>>(&self, paths: &[P]) -> Result<()> {
+        self.check_all_used_with_ignore(paths, |_| false)
+    }
+
+    /// Like [`check_all_used`](VarBuilder::check_all_used) but tensors for which
+    /// `ignore_f` returns true are not reported.
+    pub fn check_all_used_with_ignore<P: AsRef<std::path::Path>>(
+        &self,
+        paths: &[P],
+        ignore_f: impl Fn(&str) -> bool,
+    ) -> Result<()> {
+        let used = self.used_names();
+        let mut mmaps = Vec::with_capacity(paths.len());
+        for path in paths.iter() {
+            let file = std::fs::File::open(path.as_ref())?;
+            mmaps.push(unsafe { memmap2::Mmap::map(&file)? });
+        }
+        let mut unused = Vec::new();
+        for mmap in mmaps.iter() {
+            let st = safetensors::SafeTensors::deserialize(mmap)?;
+            for name in st.names() {
+                if !used.contains(name) && !ignore_f(name) {
+                    unused.push(name.to_string());
+                }
+            }
+        }
+        if !unused.is_empty() {
+            unused.sort();
+            unused.dedup();
+            return Err(Error::UnusedTensors { names: unused });
+        }
+        Ok(())
     }
 
     /// Load the declared weights from safetensors shards, in declaration order.
