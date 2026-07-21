@@ -98,7 +98,7 @@ const CONFIG_E4B: Config = Config {
 
 impl Config {
     fn is_full_attention(&self, layer_idx: usize) -> bool {
-        (layer_idx + 1) % self.full_attention_interval == 0
+        (layer_idx + 1).is_multiple_of(self.full_attention_interval)
     }
 
     fn is_kv_shared(&self, layer_idx: usize) -> bool {
@@ -164,7 +164,7 @@ fn gelu_tanh(x: &XlaOp) -> Result<XlaOp> {
     let dt = x.ty()?;
     let x = x.convert(PrimitiveType::F32)?;
     let x3 = ((&x * &x)? * &x)?;
-    let inner = ((&x + (x3 * b.c0(0.044715f32)?)?)? * b.c0(0.7978845608028654f32)?)?;
+    let inner = ((&x + (x3 * b.c0(0.044715f32)?)?)? * b.c0(0.797_884_6_f32)?)?;
     let y = ((inner.tanh()? + b.c0(1f32)?)? * (x * b.c0(0.5f32)?)?)?;
     Ok(y.convert(dt)?)
 }
@@ -599,7 +599,7 @@ fn build_decode(
     let mut param_idx = vb.next_index() as i64;
     let dtype = vb.dtype();
     let mut caches: Vec<Option<(XlaOp, XlaOp)>> = vec![None; cfg.num_layers];
-    for layer_idx in 0..cfg.first_kv_shared_layer {
+    for (layer_idx, cache) in caches.iter_mut().enumerate().take(cfg.first_kv_shared_layer) {
         let dims = [T, cfg.num_kv_heads, cfg.head_dim(layer_idx)];
         let k =
             builder.parameter(param_idx, dtype, &dims, &format!("layers.{layer_idx}.k_cache"))?;
@@ -610,7 +610,7 @@ fn build_decode(
             &format!("layers.{layer_idx}.v_cache"),
         )?;
         param_idx += 2;
-        caches[layer_idx] = Some((k, v));
+        *cache = Some((k, v));
     }
 
     let (cos_l, sin_l) = rope_tables(builder, false)?;
