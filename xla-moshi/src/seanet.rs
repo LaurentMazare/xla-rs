@@ -1,6 +1,6 @@
 //! SEANet encoder/decoder, ported from `xn-moshi` (forward path only).
 use crate::conv::{Norm, PadMode, StreamableConv1d, StreamableConvTranspose1d};
-use crate::{Result, Vb};
+use crate::{Result, StepCtx, Vb};
 use xla::XlaOp;
 
 #[derive(Debug, Copy, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -127,6 +127,18 @@ impl SeaNetResnetBlock {
             Some(shortcut) => Ok(ys.add_(&shortcut.forward(xs)?)?),
         }
     }
+
+    fn step(&self, xs: &XlaOp, ctx: &mut StepCtx) -> Result<XlaOp> {
+        let mut ys = xs.clone();
+        for conv in &self.block {
+            ys = self.activation.apply(&ys)?;
+            ys = conv.step(&ys, ctx)?;
+        }
+        match &self.shortcut {
+            None => Ok(ys.add_(xs)?),
+            Some(shortcut) => Ok(ys.add_(&shortcut.step(xs, ctx)?)?),
+        }
+    }
 }
 
 struct EncoderLayer {
@@ -234,6 +246,21 @@ impl SeaNetEncoder {
         }
         xs = self.activation.apply(&xs)?;
         self.final_conv.forward(&xs)
+    }
+
+    /// Streaming step: `xs` is `[1, channels, l]`, returns `[1, dimension, l / 960]`
+    /// (the SEANet downsampling factor) worth of encoder frames.
+    pub fn step(&self, xs: &XlaOp, ctx: &mut StepCtx) -> Result<XlaOp> {
+        let mut xs = self.init_conv.step(xs, ctx)?;
+        for layer in &self.layers {
+            for residual in &layer.residuals {
+                xs = residual.step(&xs, ctx)?;
+            }
+            xs = self.activation.apply(&xs)?;
+            xs = layer.downsample.step(&xs, ctx)?;
+        }
+        xs = self.activation.apply(&xs)?;
+        self.final_conv.step(&xs, ctx)
     }
 }
 
@@ -351,6 +378,24 @@ impl SeaNetDecoder {
         }
         xs = self.activation.apply(&xs)?;
         xs = self.final_conv.forward(&xs)?;
+        if let Some(act) = &self.final_activation {
+            xs = act.apply(&xs)?;
+        }
+        Ok(xs)
+    }
+
+    /// Streaming step: `xs` is `[1, dimension, l]`, returns `[1, channels, l * 960]`.
+    pub fn step(&self, xs: &XlaOp, ctx: &mut StepCtx) -> Result<XlaOp> {
+        let mut xs = self.init_conv.step(xs, ctx)?;
+        for layer in &self.layers {
+            xs = self.activation.apply(&xs)?;
+            xs = layer.upsample.step(&xs, ctx)?;
+            for residual in &layer.residuals {
+                xs = residual.step(&xs, ctx)?;
+            }
+        }
+        xs = self.activation.apply(&xs)?;
+        xs = self.final_conv.step(&xs, ctx)?;
         if let Some(act) = &self.final_activation {
             xs = act.apply(&xs)?;
         }

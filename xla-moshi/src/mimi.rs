@@ -4,7 +4,7 @@ use crate::conv::{ConvDownsample1d, ConvTrUpsample1d, Norm, PadMode};
 use crate::quantization::SplitResidualVectorQuantizer;
 use crate::seanet::{self, SeaNetDecoder, SeaNetEncoder};
 use crate::transformer::{self, PositionalEmbedding, ProjectedTransformer};
-use crate::{Result, Vb};
+use crate::{Result, StepCtx, Vb};
 use xla::XlaOp;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -145,6 +145,26 @@ impl Mimi {
         let emb = self.upsample.forward(&emb)?;
         let outs = self.decoder_transformer.forward(&emb)?;
         self.decoder.forward(&outs)
+    }
+
+    /// Streaming encode step: `xs` is one audio frame `[1, 1, frame_size]`
+    /// (`frame_size = sample_rate / frame_rate`), returns one code slice
+    /// `[1, n_q, 1]`. Streaming state is threaded through `ctx`.
+    pub fn encode_step(&self, xs: &XlaOp, ctx: &mut StepCtx) -> Result<XlaOp> {
+        let xs = self.encoder.step(xs, ctx)?;
+        let xs = self.encoder_transformer.step(&xs, ctx)?;
+        let xs = self.downsample.step(&xs, ctx)?;
+        self.quantizer.encode(&xs)
+    }
+
+    /// Streaming decode step: `codes` is one code slice `[1, n_q, 1]`, returns
+    /// one audio frame `[1, 1, frame_size]`. Streaming state is threaded through
+    /// `ctx`.
+    pub fn decode_step(&self, codes: &XlaOp, ctx: &mut StepCtx) -> Result<XlaOp> {
+        let emb = self.quantizer.decode(codes)?;
+        let emb = self.upsample.step(&emb, ctx)?;
+        let outs = self.decoder_transformer.step(&emb, ctx)?;
+        self.decoder.step(&outs, ctx)
     }
 
     /// Encoder + transformer + downsample, before quantization.
