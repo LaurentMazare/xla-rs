@@ -117,6 +117,17 @@ xla_op op_dot(const xla_op, const xla_op);
 xla_op op_dot_general(const xla_op, const xla_op, const int64_t *, size_t,
                       const int64_t *, size_t, const int64_t *, size_t,
                       const int64_t *, size_t);
+xla_op op_conv_general_dilated(
+    const xla_op lhs, const xla_op rhs, const int64_t *window_strides,
+    size_t n_strides, const int64_t *padding_low, const int64_t *padding_high,
+    size_t n_padding, const int64_t *lhs_dilation, size_t n_lhs_dilation,
+    const int64_t *rhs_dilation, size_t n_rhs_dilation,
+    const int64_t *input_spatial, const int64_t *output_spatial,
+    const int64_t *kernel_spatial, size_t n_spatial, int64_t input_batch,
+    int64_t input_feature, int64_t output_batch, int64_t output_feature,
+    int64_t kernel_input_feature, int64_t kernel_output_feature,
+    int64_t feature_group_count, int64_t batch_group_count,
+    bool window_reversal);
 xla_op op_eq(const xla_op, const xla_op);
 xla_op op_ne(const xla_op, const xla_op);
 xla_op op_ge(const xla_op, const xla_op);
@@ -138,6 +149,8 @@ xla_op op_clz(const xla_op);
 xla_op op_cos(const xla_op);
 xla_op op_sin(const xla_op);
 xla_op op_tanh(const xla_op);
+xla_op op_erf(const xla_op);
+xla_op op_rev(const xla_op, const int64_t *, size_t);
 xla_op op_real(const xla_op);
 xla_op op_imag(const xla_op);
 xla_op op_sqrt(const xla_op);

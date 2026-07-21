@@ -68,6 +68,109 @@ fn matmul_op() -> Result<()> {
 }
 
 #[test]
+fn conv1d_op() -> Result<()> {
+    let client = xla::PjRtClient::cpu()?;
+
+    // Plain conv1d: input [1, 1, 5], kernel [1, 1, 3] of ones, stride 1.
+    let builder = xla::XlaBuilder::new("test");
+    let x = builder.parameter(0, f32::TY, &[1, 1, 5], "x")?;
+    let w = builder.parameter(1, f32::TY, &[1, 1, 3], "w")?;
+    let exe = x.conv1d(&w, 1, 0, 1, 1)?.build()?.compile(&client)?;
+    let x = xla::Literal::vec1(&[1f32, 2., 3., 4., 5.]).reshape(&[1, 1, 5])?;
+    let w = xla::Literal::vec1(&[1f32, 1., 1.]).reshape(&[1, 1, 3])?;
+    let result = exe.execute::<xla::Literal>(&[x, w])?[0][0].to_literal_sync()?;
+    assert_eq!(result.array_shape()?, xla::ArrayShape::new::<f32>(vec![1, 1, 3]));
+    // Sliding window sums: 1+2+3, 2+3+4, 3+4+5.
+    assert_eq!(result.to_vec::<f32>()?, [6., 9., 12.]);
+
+    // Strided conv1d: stride 2 keeps windows starting at positions 0 and 2.
+    let builder = xla::XlaBuilder::new("test");
+    let x = builder.parameter(0, f32::TY, &[1, 1, 5], "x")?;
+    let w = builder.parameter(1, f32::TY, &[1, 1, 3], "w")?;
+    let exe = x.conv1d(&w, 2, 0, 1, 1)?.build()?.compile(&client)?;
+    let x = xla::Literal::vec1(&[1f32, 2., 3., 4., 5.]).reshape(&[1, 1, 5])?;
+    let w = xla::Literal::vec1(&[1f32, 1., 1.]).reshape(&[1, 1, 3])?;
+    let result = exe.execute::<xla::Literal>(&[x, w])?[0][0].to_literal_sync()?;
+    assert_eq!(result.to_vec::<f32>()?, [6., 12.]);
+
+    // Depthwise conv1d: 2 channels, groups = 2, kernel [2, 1, 2].
+    let builder = xla::XlaBuilder::new("test");
+    let x = builder.parameter(0, f32::TY, &[1, 2, 3], "x")?;
+    let w = builder.parameter(1, f32::TY, &[2, 1, 2], "w")?;
+    let exe = x.conv1d(&w, 1, 0, 1, 2)?.build()?.compile(&client)?;
+    // channel 0: [1, 2, 3], channel 1: [4, 5, 6].
+    let x = xla::Literal::vec1(&[1f32, 2., 3., 4., 5., 6.]).reshape(&[1, 2, 3])?;
+    // channel 0 kernel [1, 1], channel 1 kernel [1, -1].
+    let w = xla::Literal::vec1(&[1f32, 1., 1., -1.]).reshape(&[2, 1, 2])?;
+    let result = exe.execute::<xla::Literal>(&[x, w])?[0][0].to_literal_sync()?;
+    assert_eq!(result.array_shape()?, xla::ArrayShape::new::<f32>(vec![1, 2, 2]));
+    // ch0: 1+2, 2+3 ; ch1: 4-5, 5-6.
+    assert_eq!(result.to_vec::<f32>()?, [3., 5., -1., -1.]);
+    Ok(())
+}
+
+#[test]
+fn conv_transpose1d_op() -> Result<()> {
+    let client = xla::PjRtClient::cpu()?;
+
+    // Transposed conv, stride 2, kernel [1, 1, 2] of ones. Each input value is
+    // spread over `stride` output positions: output length (3-1)*2 + 2 = 6.
+    let builder = xla::XlaBuilder::new("test");
+    let x = builder.parameter(0, f32::TY, &[1, 1, 3], "x")?;
+    let w = builder.parameter(1, f32::TY, &[1, 1, 2], "w")?;
+    let exe = x.conv_transpose1d(&w, 2, 0, 0, 1, 1)?.build()?.compile(&client)?;
+    let x = xla::Literal::vec1(&[1f32, 2., 3.]).reshape(&[1, 1, 3])?;
+    let w = xla::Literal::vec1(&[1f32, 1.]).reshape(&[1, 1, 2])?;
+    let result = exe.execute::<xla::Literal>(&[x, w])?[0][0].to_literal_sync()?;
+    assert_eq!(result.array_shape()?, xla::ArrayShape::new::<f32>(vec![1, 1, 6]));
+    assert_eq!(result.to_vec::<f32>()?, [1., 1., 2., 2., 3., 3.]);
+
+    // Depthwise transposed conv: 2 channels, groups = 2, kernel [2, 1, 2].
+    let builder = xla::XlaBuilder::new("test");
+    let x = builder.parameter(0, f32::TY, &[1, 2, 2], "x")?;
+    let w = builder.parameter(1, f32::TY, &[2, 1, 2], "w")?;
+    let exe = x.conv_transpose1d(&w, 2, 0, 0, 1, 2)?.build()?.compile(&client)?;
+    // ch0: [1, 2], ch1: [3, 4].
+    let x = xla::Literal::vec1(&[1f32, 2., 3., 4.]).reshape(&[1, 2, 2])?;
+    // ch0 kernel [1, 1], ch1 kernel [1, 2].
+    let w = xla::Literal::vec1(&[1f32, 1., 1., 2.]).reshape(&[2, 1, 2])?;
+    let result = exe.execute::<xla::Literal>(&[x, w])?[0][0].to_literal_sync()?;
+    assert_eq!(result.array_shape()?, xla::ArrayShape::new::<f32>(vec![1, 2, 4]));
+    // ch0: 1,1,2,2 ; ch1: 3,6,4,8.
+    assert_eq!(result.to_vec::<f32>()?, [1., 1., 2., 2., 3., 6., 4., 8.]);
+
+    // groups=1, 2 in-channels, 2 out-channels, stride 1, to check the
+    // input/output channel mapping (not just depthwise). weight[i, o, :].
+    let builder = xla::XlaBuilder::new("test");
+    let x = builder.parameter(0, f32::TY, &[1, 2, 2], "x")?;
+    let w = builder.parameter(1, f32::TY, &[2, 2, 2], "w")?;
+    let exe = x.conv_transpose1d(&w, 1, 0, 0, 1, 1)?.build()?.compile(&client)?;
+    // in ch0 = [1, 0] (impulse), in ch1 = [0, 1].
+    let x = xla::Literal::vec1(&[1f32, 0., 0., 1.]).reshape(&[1, 2, 2])?;
+    // w[0,0]=[1,0], w[0,1]=[0,0], w[1,0]=[0,0], w[1,1]=[1,0].
+    let w = xla::Literal::vec1(&[1f32, 0., 0., 0., 0., 0., 1., 0.]).reshape(&[2, 2, 2])?;
+    let result = exe.execute::<xla::Literal>(&[x, w])?[0][0].to_literal_sync()?;
+    assert_eq!(result.array_shape()?, xla::ArrayShape::new::<f32>(vec![1, 2, 3]));
+    // out ch0 gets in ch0 via w[0,0]: [1,0,0]; out ch1 gets in ch1 via w[1,1]: [0,1,0].
+    assert_eq!(result.to_vec::<f32>()?, [1., 0., 0., 0., 1., 0.]);
+
+    // stride 2 with k=4 (overlap-add): each output position receives from two
+    // input elements. input [a, b], weight [w0, w1, w2, w3].
+    let builder = xla::XlaBuilder::new("test");
+    let x = builder.parameter(0, f32::TY, &[1, 1, 2], "x")?;
+    let w = builder.parameter(1, f32::TY, &[1, 1, 4], "w")?;
+    let exe = x.conv_transpose1d(&w, 2, 0, 0, 1, 1)?.build()?.compile(&client)?;
+    let x = xla::Literal::vec1(&[2f32, 3.]).reshape(&[1, 1, 2])?;
+    let w = xla::Literal::vec1(&[1f32, 10., 100., 1000.]).reshape(&[1, 1, 4])?;
+    let result = exe.execute::<xla::Literal>(&[x, w])?[0][0].to_literal_sync()?;
+    assert_eq!(result.array_shape()?, xla::ArrayShape::new::<f32>(vec![1, 1, 6]));
+    // a*[1,10,100,1000] at 0.. + b*[1,10,100,1000] at 2..
+    // = [2, 20, 200+3, 2000+30, 300, 3000] = [2, 20, 203, 2030, 300, 3000].
+    assert_eq!(result.to_vec::<f32>()?, [2., 20., 203., 2030., 300., 3000.]);
+    Ok(())
+}
+
+#[test]
 fn pad_op() -> Result<()> {
     let client = xla::PjRtClient::cpu()?;
 

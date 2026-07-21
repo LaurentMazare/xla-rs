@@ -99,6 +99,7 @@ impl XlaOp {
     unary_op!(cos, c_lib::op_cos);
     unary_op!(sin, c_lib::op_sin);
     unary_op!(tanh, c_lib::op_tanh);
+    unary_op!(erf, c_lib::op_erf);
     unary_op!(real, c_lib::op_real);
     unary_op!(imag, c_lib::op_imag);
     unary_op!(sqrt, c_lib::op_sqrt);
@@ -123,6 +124,16 @@ impl XlaOp {
     /// This computes the element-wise SiLU activation, x.sigmoid(x).
     pub fn silu(&self) -> Result<Self> {
         self * self.logistic()
+    }
+
+    /// Exact GELU activation, `0.5 * x * (1 + erf(x / sqrt(2)))`.
+    pub fn gelu_erf(&self) -> Result<Self> {
+        let b = self.builder();
+        let inv_sqrt2 = b.c0(std::f32::consts::FRAC_1_SQRT_2)?;
+        let erf = self.mul_(&inv_sqrt2)?.erf()?;
+        let one = b.c0(1f32)?;
+        let half = b.c0(0.5f32)?;
+        self.mul_(&erf.add_(&one)?)?.mul_(&half)
     }
 
     /// A node that applies the specified Einstein summation formula to this node.
@@ -460,6 +471,158 @@ impl XlaOp {
             )
         };
         self.wrap(op)
+    }
+
+    /// Low-level general convolution, mapping directly to XLA's `ConvGeneralDilated`.
+    /// `padding` holds the (low, high) padding for each spatial dimension; `window_strides`,
+    /// `lhs_dilation`, `rhs_dilation` and the three `*_spatial` slices all have one entry per
+    /// spatial dimension. `window_reversal` reverses the kernel along the spatial dims (used to
+    /// express transposed convolutions).
+    #[allow(clippy::too_many_arguments)]
+    pub fn conv_general_dilated(
+        &self,
+        rhs: &XlaOp,
+        window_strides: &[i64],
+        padding: &[(i64, i64)],
+        lhs_dilation: &[i64],
+        rhs_dilation: &[i64],
+        input_batch: i64,
+        input_feature: i64,
+        input_spatial: &[i64],
+        output_batch: i64,
+        output_feature: i64,
+        output_spatial: &[i64],
+        kernel_input_feature: i64,
+        kernel_output_feature: i64,
+        kernel_spatial: &[i64],
+        feature_group_count: i64,
+        batch_group_count: i64,
+        window_reversal: bool,
+    ) -> Result<Self> {
+        let low: Vec<i64> = padding.iter().map(|p| p.0).collect();
+        let high: Vec<i64> = padding.iter().map(|p| p.1).collect();
+        let op = unsafe {
+            c_lib::op_conv_general_dilated(
+                self.op,
+                rhs.op,
+                window_strides.as_ptr(),
+                window_strides.len(),
+                low.as_ptr(),
+                high.as_ptr(),
+                padding.len(),
+                lhs_dilation.as_ptr(),
+                lhs_dilation.len(),
+                rhs_dilation.as_ptr(),
+                rhs_dilation.len(),
+                input_spatial.as_ptr(),
+                output_spatial.as_ptr(),
+                kernel_spatial.as_ptr(),
+                input_spatial.len(),
+                input_batch,
+                input_feature,
+                output_batch,
+                output_feature,
+                kernel_input_feature,
+                kernel_output_feature,
+                feature_group_count,
+                batch_group_count,
+                window_reversal,
+            )
+        };
+        self.wrap(op)
+    }
+
+    /// 1D convolution. `self` has shape `[batch, c_in, len]`, `kernel` has shape
+    /// `[c_out, c_in / groups, k]`, and the result is `[batch, c_out, len_out]`.
+    pub fn conv1d(
+        &self,
+        kernel: &XlaOp,
+        stride: i64,
+        padding: i64,
+        dilation: i64,
+        groups: i64,
+    ) -> Result<Self> {
+        self.conv_general_dilated(
+            kernel,
+            &[stride],
+            &[(padding, padding)],
+            &[1],
+            &[dilation],
+            0,
+            1,
+            &[2],
+            0,
+            1,
+            &[2],
+            1,
+            0,
+            &[2],
+            groups,
+            1,
+            false,
+        )
+    }
+
+    /// Reverse the operand along the given dimensions.
+    pub fn rev(&self, dims: &[i64]) -> Result<Self> {
+        let op = unsafe { c_lib::op_rev(self.op, dims.as_ptr(), dims.len()) };
+        self.wrap(op)
+    }
+
+    /// 1D transposed convolution. `self` has shape `[batch, c_in, len]`, `kernel` uses the
+    /// PyTorch layout `[c_in, c_out / groups, k]`, and the result is `[batch, c_out, len_out]`
+    /// with `len_out = (len - 1) * stride - 2 * padding + dilation * (k - 1) + output_padding + 1`.
+    pub fn conv_transpose1d(
+        &self,
+        kernel: &XlaOp,
+        stride: i64,
+        padding: i64,
+        output_padding: i64,
+        dilation: i64,
+        groups: i64,
+    ) -> Result<Self> {
+        let kd = kernel.dims()?;
+        if kd.len() != 3 {
+            return Err(Error::UnexpectedNumberOfDims {
+                expected: 3,
+                got: kd.len(),
+                dims: kd.iter().map(|d| *d as i64).collect(),
+            });
+        }
+        let (c_in, c_out_g, k) = (kd[0] as i64, kd[1] as i64, kd[2] as i64);
+        let c_out = c_out_g * groups;
+        let c_in_g = c_in / groups;
+        // Rearrange the PyTorch transposed-conv weight [c_in, c_out/groups, k] into the XLA
+        // grouped-conv layout [c_out, c_in/groups, k] and reverse it along the spatial dim.
+        // We reverse the kernel explicitly (rather than relying on the convolution's
+        // `window_reversal` flag) because XLA-GPU mishandles window reversal combined with a
+        // feature group count, giving wrong results for grouped/depthwise transposed convs.
+        let kernel = kernel
+            .reshape(&[groups, c_in_g, c_out_g, k])?
+            .transpose(&[0, 2, 1, 3])?
+            .reshape(&[c_out, c_in_g, k])?
+            .rev(&[2])?;
+        let pad_low = dilation * (k - 1) - padding;
+        let pad_high = dilation * (k - 1) - padding + output_padding;
+        self.conv_general_dilated(
+            &kernel,
+            &[1],
+            &[(pad_low, pad_high)],
+            &[stride],
+            &[dilation],
+            0,
+            1,
+            &[2],
+            0,
+            1,
+            &[2],
+            1,
+            0,
+            &[2],
+            groups,
+            1,
+            false,
+        )
     }
 
     pub fn gather(
