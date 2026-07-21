@@ -29,6 +29,10 @@ required-features = ["hf-hub"]
 name = "gemma4"
 required-features = ["hf-hub"]
 
+[[example]]
+name = "nemotron3"
+required-features = ["hf-hub"]
+
 [build-dependencies]
 bindgen = "0.72"
 cc = "1.0"

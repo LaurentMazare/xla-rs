@@ -179,3 +179,45 @@ logits are 0.11 apart in a f32 reference run, about one bf16 ulp at that
 magnitude), so bf16-level numeric changes such as a different autotuned gemm
 kernel or the PLE offload's slightly different graph can flip it and the
 continuations then diverge while staying equally valid.
+
+## Nemotron 3 Nano 4B
+
+The nemotron3 example runs
+[NVIDIA Nemotron 3 Nano 4B](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16),
+a Nemotron-H style hybrid where each of the 42 layers holds a single mixer:
+a Mamba2 SSM (21 layers), a plain squared-relu MLP (17 layers), or full
+attention with GQA (4 layers). The attention layers use no positional
+embedding: positional information only comes from the recurrent Mamba2
+layers. As in the qwen35 example the prefill computation runs the recurrence
+sequentially with an XLA while loop, and the decode computation carries the
+SSM state (kept in f32), the conv1d window, and the k/v caches on the device
+across steps. Generation runs in bf16 and the `--autotune-cache` flag is
+supported.
+
+```bash
+cargo run --example nemotron3 --release --features hf-hub -- \
+  --prompt "What is the capital of France? Answer in one word."
+```
+
+### Comparison with transformers
+
+Greedy generation of 100 tokens from a 28 token prompt, measured after
+compilation, weight loading, and the one-time kernel loading of the first
+execution, on the same RTX 4080 SUPER (16GB) and with the same versions as
+the qwen35 benchmark above. Prefill is the time to the first generated token
+(median of 5), the decode rate covers the remaining 99 tokens (median of 3
+runs), and the memory column is the peak gpu usage of the xla-rs run:
+
+|                          | prefill  | decode     | gpu memory |
+|--------------------------|----------|------------|------------|
+| GPU bf16, xla-rs         | 24 ms    | 89.1 tok/s | 8.5 GB     |
+| GPU bf16, transformers   | 483 ms   | 71.7 tok/s | -          |
+
+The transformers numbers use the naive torch path for the Mamba2 layers as
+the fused `mamba-ssm`/`causal-conv1d` kernels are not installed; most of its
+prefill gap comes from that path materializing the full chunked SSD
+intermediates. The generated tokens are identical between the two
+implementations on the prompts tested, with one exception on a 100 token run
+where the two top logits are an exact bf16 tie in the transformers run
+(gap 0.015 in a f32 reference run, which sides with the xla-rs token): the
+continuations then diverge while staying equally valid.
