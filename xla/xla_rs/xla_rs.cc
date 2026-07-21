@@ -393,6 +393,46 @@ xla_op op_dot_general(const xla_op lhs, const xla_op rhs, const int64_t *lhs_c,
   END_PROTECT_OP(lhs)
 }
 
+xla_op op_conv_general_dilated(
+    const xla_op lhs, const xla_op rhs, const int64_t *window_strides,
+    size_t n_strides, const int64_t *padding_low, const int64_t *padding_high,
+    size_t n_padding, const int64_t *lhs_dilation, size_t n_lhs_dilation,
+    const int64_t *rhs_dilation, size_t n_rhs_dilation,
+    const int64_t *input_spatial, const int64_t *output_spatial,
+    const int64_t *kernel_spatial, size_t n_spatial, int64_t input_batch,
+    int64_t input_feature, int64_t output_batch, int64_t output_feature,
+    int64_t kernel_input_feature, int64_t kernel_output_feature,
+    int64_t feature_group_count, int64_t batch_group_count,
+    bool window_reversal) {
+  BEGIN_PROTECT_OP
+  ConvolutionDimensionNumbers dnums;
+  dnums.set_input_batch_dimension(input_batch);
+  dnums.set_input_feature_dimension(input_feature);
+  dnums.set_output_batch_dimension(output_batch);
+  dnums.set_output_feature_dimension(output_feature);
+  dnums.set_kernel_input_feature_dimension(kernel_input_feature);
+  dnums.set_kernel_output_feature_dimension(kernel_output_feature);
+  for (size_t i = 0; i < n_spatial; ++i) {
+    dnums.add_input_spatial_dimensions(input_spatial[i]);
+    dnums.add_output_spatial_dimensions(output_spatial[i]);
+    dnums.add_kernel_spatial_dimensions(kernel_spatial[i]);
+  }
+  std::vector<std::pair<int64_t, int64_t>> padding;
+  padding.reserve(n_padding);
+  for (size_t i = 0; i < n_padding; ++i)
+    padding.emplace_back(padding_low[i], padding_high[i]);
+  std::optional<std::vector<bool>> reversal;
+  if (window_reversal)
+    reversal = std::vector<bool>(n_spatial, true);
+  return new XlaOp(ConvGeneralDilated(
+      *lhs, *rhs, absl::Span<const int64_t>(window_strides, n_strides), padding,
+      absl::Span<const int64_t>(lhs_dilation, n_lhs_dilation),
+      absl::Span<const int64_t>(rhs_dilation, n_rhs_dilation), dnums,
+      feature_group_count, batch_group_count, /*precision_config=*/nullptr,
+      /*preferred_element_type=*/std::nullopt, reversal));
+  END_PROTECT_OP(lhs)
+}
+
 xla_op op_eq(const xla_op lhs, const xla_op rhs) {
   BEGIN_PROTECT_OP
   return new XlaOp(Eq(*lhs, *rhs));
@@ -516,6 +556,18 @@ xla_op op_sin(const xla_op arg) {
 xla_op op_tanh(const xla_op arg) {
   BEGIN_PROTECT_OP
   return new XlaOp(Tanh(*arg));
+  END_PROTECT_OP(arg)
+}
+
+xla_op op_erf(const xla_op arg) {
+  BEGIN_PROTECT_OP
+  return new XlaOp(Erf(*arg));
+  END_PROTECT_OP(arg)
+}
+
+xla_op op_rev(const xla_op arg, const int64_t *dims, size_t ndims) {
+  BEGIN_PROTECT_OP
+  return new XlaOp(Rev(*arg, absl::Span<const int64_t>(dims, ndims)));
   END_PROTECT_OP(arg)
 }
 

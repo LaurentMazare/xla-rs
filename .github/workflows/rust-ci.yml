@@ -20,6 +20,7 @@ jobs:
       - run: |
           wget -nv https://github.com/elixir-nx/xla/releases/download/v0.10.0/xla_extension-0.10.0-x86_64-linux-gnu-cpu.tar.gz
           tar -xzvf xla_extension-0.10.0-x86_64-linux-gnu-cpu.tar.gz
+          echo "XLA_EXTENSION_DIR=$(pwd)/xla_extension" >> "$GITHUB_ENV"
       - uses: actions-rs/cargo@v1
         with:
           command: check
@@ -41,6 +42,7 @@ jobs:
       - run: |
           wget -nv https://github.com/elixir-nx/xla/releases/download/v0.10.0/xla_extension-0.10.0-x86_64-linux-gnu-cpu.tar.gz
           tar -xzvf xla_extension-0.10.0-x86_64-linux-gnu-cpu.tar.gz
+          echo "XLA_EXTENSION_DIR=$(pwd)/xla_extension" >> "$GITHUB_ENV"
       - uses: actions-rs/cargo@v1
         with:
           command: test
@@ -75,6 +77,7 @@ jobs:
       - run: |
           wget -nv https://github.com/elixir-nx/xla/releases/download/v0.10.0/xla_extension-0.10.0-x86_64-linux-gnu-cpu.tar.gz
           tar -xzvf xla_extension-0.10.0-x86_64-linux-gnu-cpu.tar.gz
+          echo "XLA_EXTENSION_DIR=$(pwd)/xla_extension" >> "$GITHUB_ENV"
       - uses: actions-rs/cargo@v1
         with:
           command: clippy
