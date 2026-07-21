@@ -134,18 +134,32 @@ impl StreamableConv1d {
     /// through `ctx` (a zero-initialised buffer of shape `[1, in_c, carry]`,
     /// which also supplies the causal left padding on the first steps).
     ///
-    /// For `PadMode::Replicate` convs this zero left padding differs from the
-    /// whole-file forward (which replicates the first frame), so the very first
-    /// output frame can differ slightly; every later frame is identical. Keeping
-    /// the graph fully static is preferred over reproducing that one-frame
-    /// warm-up exactly.
+    /// For `PadMode::Replicate` convs the whole-file forward instead replicates
+    /// the first frame into the left pad. Pass an `is_first` flag through `ctx`
+    /// (see [`StepCtx::set_is_first`](crate::StepCtx::set_is_first)) and this
+    /// step reproduces that exactly on the first step; without it the zero left
+    /// padding causes a one-frame warm-up difference.
     pub fn step(&self, xs: &XlaOp, ctx: &mut StepCtx) -> Result<XlaOp> {
         let carry = self.carry();
         let wd = self.weight.dims()?;
         let in_c = wd[1] as i64 * self.groups;
         let combined = if carry > 0 {
+            let is_first = ctx.is_first_pred()?;
             let (idx, state) = ctx.state_in(ElementType::F32, &[1, in_c, carry])?;
-            let combined = state.concat_in_dim(std::slice::from_ref(xs), 2)?;
+            // The left pad is normally the carried input history (which is
+            // zero-initialised, matching `Constant` padding). For `Replicate`
+            // padding the whole-file forward replicates the first input column
+            // instead, so on the first step select that replicated pad.
+            let pad = match (self.pad_mode, is_first) {
+                (PadMode::Replicate, Some(is_first)) => {
+                    let repl = xs
+                        .slice_in_dim1(0, 1, 2)?
+                        .broadcast_in_dim(&[1, in_c, carry], &[0, 1, 2])?;
+                    is_first.broadcast(&[1, in_c, carry])?.select(&repl, &state)?
+                }
+                _ => state,
+            };
+            let combined = pad.concat_in_dim(std::slice::from_ref(xs), 2)?;
             let clen = combined.dims()?[2] as i64;
             ctx.state_out(idx, combined.slice_in_dim1(clen - carry, clen, 2)?);
             combined

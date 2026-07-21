@@ -33,6 +33,7 @@ pub struct StepCtx<'a> {
     next_param: i64,
     state_shapes: Vec<(ElementType, Vec<i64>)>,
     new_states: Vec<Option<XlaOp>>,
+    is_first: Option<XlaOp>,
 }
 
 impl<'a> StepCtx<'a> {
@@ -44,6 +45,23 @@ impl<'a> StepCtx<'a> {
             next_param: first_state_param,
             state_shapes: Vec::new(),
             new_states: Vec::new(),
+            is_first: None,
+        }
+    }
+
+    /// Provide an `is_first` flag (a non-zero scalar on the first step, zero
+    /// afterwards). `Replicate`-padded convs use it to reproduce the whole-file
+    /// left padding exactly on the first step; without it they fall back to zero
+    /// left padding. This is only needed on the encode side.
+    pub fn set_is_first(&mut self, is_first: XlaOp) {
+        self.is_first = Some(is_first);
+    }
+
+    /// The `is_first` flag as a boolean scalar, if one was provided.
+    pub(crate) fn is_first_pred(&self) -> Result<Option<XlaOp>> {
+        match &self.is_first {
+            None => Ok(None),
+            Some(f) => Ok(Some(f.gt(&self.builder.c0(0i32)?)?)),
         }
     }
 

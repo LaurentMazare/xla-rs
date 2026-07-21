@@ -213,7 +213,12 @@ fn audio_to_audio_streaming(
     let frame = enc_builder.parameter(0, ElementType::F32, &[1, 1, frame_size as i64], "frame")?;
     let enc_vb = xla_nn::VarBuilder::new(&enc_builder, ElementType::F32, 1);
     let enc_model = Mimi::load(&Vb::new(&enc_vb), config.clone())?;
-    let mut enc_ctx = xla_moshi::StepCtx::new(&enc_builder, 1 + enc_vb.num_vars() as i64);
+    let enc_w = enc_vb.num_vars() as i64;
+    // `is_first` (param after the weights) is 1 on the first step and 0 after,
+    // so the downsample reproduces its replicate left padding exactly.
+    let is_first = enc_builder.parameter(1 + enc_w, ElementType::S32, &[], "is_first")?;
+    let mut enc_ctx = xla_moshi::StepCtx::new(&enc_builder, 2 + enc_w);
+    enc_ctx.set_is_first(is_first);
     let codes = enc_model.encode_step(&frame, &mut enc_ctx)?;
     let enc_state_shapes: Vec<_> = enc_ctx.state_shapes().to_vec();
     let mut enc_outs = vec![codes];
@@ -247,8 +252,10 @@ fn audio_to_audio_streaming(
     for f in 0..num_frames {
         let chunk = &pcm_data[f * frame_size..(f + 1) * frame_size];
         let frame_buf = client.buffer_from_host_buffer(chunk, &[1, 1, frame_size], None)?;
+        let is_first_buf = client.buffer_from_host_buffer(&[i32::from(f == 0)], &[], None)?;
         let mut inputs: Vec<&xla::PjRtBuffer> = vec![&frame_buf];
         inputs.extend(enc_weights.iter());
+        inputs.push(&is_first_buf);
         inputs.extend(enc_states.iter());
         let mut out = enc_exe.execute_b(&inputs)?.into_iter().next().context("no enc output")?;
         code_slices.push(out[0].to_literal_sync()?.to_vec::<i64>()?);
