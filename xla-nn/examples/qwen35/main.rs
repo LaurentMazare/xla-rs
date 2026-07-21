@@ -1027,26 +1027,6 @@ struct Args {
     autotune_cache: Option<std::path::PathBuf>,
 }
 
-// Selects an execution device. Unless `--cpu` forces CPU, prefer an
-// accelerator whose runtime is actually available: try TPU first, then GPU,
-// then fall back to CPU. The client constructors return an error when their
-// runtime is missing (e.g. no libtpu.so, or no CUDA device), so the same
-// binary works against the cpu, cuda, or tpu xla_extension builds.
-fn make_client(force_cpu: bool) -> Result<PjRtClient> {
-    if force_cpu {
-        return Ok(PjRtClient::cpu()?);
-    }
-    match PjRtClient::tpu(1) {
-        Ok(client) => return Ok(client),
-        Err(err) => eprintln!("tpu client unavailable, trying gpu ({err})"),
-    }
-    match PjRtClient::gpu(0.90, false) {
-        Ok(client) => return Ok(client),
-        Err(err) => eprintln!("gpu client unavailable, falling back to cpu ({err})"),
-    }
-    Ok(PjRtClient::cpu()?)
-}
-
 fn main() -> Result<()> {
     let args = Args::parse();
     // Load the autotune cache when the file exists, dump it otherwise. The
@@ -1066,7 +1046,7 @@ fn main() -> Result<()> {
     xla::set_tf_min_log_level(xla::TfLogLevel::Warning);
     xla::set_min_log_level(xla::TfLogLevel::Warning);
     let cfg = args.which.config();
-    let client = make_client(args.cpu)?;
+    let client = PjRtClient::auto(args.cpu)?;
     println!(
         "platform: {} {}, model: {}, dtype: {:?}",
         client.platform_name(),

@@ -688,17 +688,6 @@ struct Args {
     autotune_cache: Option<std::path::PathBuf>,
 }
 
-fn make_client(force_cpu: bool) -> Result<PjRtClient> {
-    if force_cpu {
-        return Ok(PjRtClient::cpu()?);
-    }
-    match PjRtClient::gpu(0.90, false) {
-        Ok(client) => return Ok(client),
-        Err(err) => eprintln!("gpu client unavailable, falling back to cpu ({err})"),
-    }
-    Ok(PjRtClient::cpu()?)
-}
-
 fn main() -> Result<()> {
     let args = Args::parse();
     let (at_load, at_dump) = match &args.autotune_cache {
@@ -714,7 +703,7 @@ fn main() -> Result<()> {
     };
     xla::set_tf_min_log_level(xla::TfLogLevel::Warning);
     xla::set_min_log_level(xla::TfLogLevel::Warning);
-    let client = make_client(args.cpu)?;
+    let client = PjRtClient::auto(args.cpu)?;
     println!(
         "platform: {} {}, model: {REPO}, dtype: bf16",
         client.platform_name(),

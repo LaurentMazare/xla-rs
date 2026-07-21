@@ -40,6 +40,25 @@ impl PjRtClient {
         Ok(Self(Rc::new(PjRtClientInternal(ptr))))
     }
 
+    /// A client for the best available platform: try TPU, then GPU, then fall
+    /// back to CPU. When `force_cpu` is set, a CPU client is created directly.
+    ///
+    /// The client constructors return an error when their runtime is missing
+    /// (e.g. no `libtpu.so`, or no CUDA device), so the same binary works
+    /// against the cpu, cuda, or tpu `xla_extension` builds.
+    pub fn auto(force_cpu: bool) -> Result<Self> {
+        if force_cpu {
+            return Self::cpu();
+        }
+        if let Ok(client) = Self::tpu(1) {
+            return Ok(client);
+        }
+        if let Ok(client) = Self::gpu(0.90, false) {
+            return Ok(client);
+        }
+        Self::cpu()
+    }
+
     fn ptr(&self) -> c_lib::pjrt_client {
         self.0 .0
     }
