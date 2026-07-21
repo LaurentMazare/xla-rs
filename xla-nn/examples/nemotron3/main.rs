@@ -20,8 +20,10 @@ use clap::Parser;
 extern crate xla;
 use xla::{ElementType, PjRtClient, PrimitiveType, Shape, XlaBuilder, XlaComputation, XlaOp};
 
-mod var_store;
-use var_store::{VarBuilder, NUM_NON_WEIGHT_ARGS};
+use xla_nn::VarBuilder;
+
+// Parameters 0 and 1 are reserved for the token ids and the last position.
+const NUM_NON_WEIGHT_ARGS: usize = 2;
 
 // Fixed context size the computations get compiled for, also the kv-cache
 // length.
@@ -742,10 +744,10 @@ fn main() -> Result<()> {
 
     let start = std::time::Instant::now();
     let prefill_builder = XlaBuilder::new("nemotron3-prefill");
-    let vb = VarBuilder::new(&prefill_builder, ElementType::Bf16);
+    let vb = VarBuilder::new(&prefill_builder, ElementType::Bf16, NUM_NON_WEIGHT_ARGS);
     let prefill = build_prefill(&prefill_builder, &vb)?;
     let decode_builder = XlaBuilder::new("nemotron3-decode");
-    let decode_vb = VarBuilder::new(&decode_builder, ElementType::Bf16);
+    let decode_vb = VarBuilder::new(&decode_builder, ElementType::Bf16, NUM_NON_WEIGHT_ARGS);
     let decode = build_decode(&decode_builder, &decode_vb)?;
     println!("built the computations in {:?}", start.elapsed());
 

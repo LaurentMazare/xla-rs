@@ -32,8 +32,7 @@ use clap::Parser;
 extern crate xla;
 use xla::{ElementType, PjRtClient, PrimitiveType, XlaBuilder, XlaComputation, XlaOp};
 
-mod var_store;
-use var_store::VarBuilder;
+use xla_nn::VarBuilder;
 
 // Fixed context size the computations get compiled for, also the kv-cache
 // length. Must stay <= sliding_window (512) so that sliding attention
@@ -804,7 +803,7 @@ fn main() -> Result<()> {
     let ple_table = if args.ple_on_device {
         None
     } else {
-        Some(var_store::PleTable::load(
+        Some(xla_nn::PleTable::load(
             &weights_paths,
             "model.language_model.embed_tokens_per_layer.weight",
             &[VOCAB_SIZE, cfg.num_layers as i64 * PLE_DIM],

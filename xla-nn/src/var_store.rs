@@ -1,24 +1,29 @@
-// A small helper to declare the model weights as XLA parameters and load the
-// matching buffers from a safetensors file.
+// A small helper to declare model weights as XLA parameters and load the
+// matching buffers from safetensors files.
 //
-// Weights are converted to the target dtype on the host, the buffers are
+// Weights are converted to the target dtype on the host, and the buffers are
 // created one tensor at a time so that peak host memory stays around a single
 // tensor.
-use anyhow::{bail, Result};
+use crate::error::{Error, Result};
 use xla::{ElementType, PjRtBuffer, PjRtClient, XlaBuilder, XlaOp};
 
 type Vars = std::rc::Rc<std::cell::RefCell<Vec<(String, Vec<i64>)>>>;
 
+/// Declares model weights as XLA parameters and loads their values from
+/// safetensors shards, in declaration order.
 pub struct VarBuilder {
     builder: XlaBuilder,
     dtype: ElementType,
     vars: Vars,
-    // The first parameter index available for weights, the indices before it
+    // The first parameter index available for weights; the indices before it
     // are reserved for the non-weight arguments (token ids, position, ...).
     first_weight_index: usize,
 }
 
 impl VarBuilder {
+    /// Create a new builder. `first_weight_index` is the number of parameters
+    /// reserved for the non-weight arguments, so the first declared weight gets
+    /// that parameter index.
     pub fn new(builder: &XlaBuilder, dtype: ElementType, first_weight_index: usize) -> Self {
         Self { builder: builder.clone(), dtype, vars: Default::default(), first_weight_index }
     }
@@ -34,6 +39,11 @@ impl VarBuilder {
         let op = self.builder.parameter(index as i64, self.dtype, dims, name)?;
         vars.push((name.to_string(), dims.to_vec()));
         Ok(op)
+    }
+
+    /// The number of declared weight parameters.
+    pub fn num_vars(&self) -> usize {
+        self.vars.borrow().len()
     }
 
     /// The parameter index right after the last declared weight.
@@ -62,42 +72,18 @@ impl VarBuilder {
             let view = sts
                 .iter()
                 .find_map(|st| st.tensor(name).ok())
-                .ok_or_else(|| anyhow::anyhow!("cannot find tensor {name} in the shards"))?;
+                .ok_or_else(|| Error::TensorNotFound { name: name.clone() })?;
             let view_dims: Vec<i64> = view.shape().iter().map(|d| *d as i64).collect();
             if view_dims != *dims {
-                bail!("shape mismatch for {name}: expected {dims:?}, got {view_dims:?}")
+                return Err(Error::ShapeMismatch {
+                    name: name.clone(),
+                    expected: dims.clone(),
+                    got: view_dims,
+                });
             }
             let dims_usize: Vec<usize> = dims.iter().map(|d| *d as usize).collect();
-            let src_matches = matches!(
-                (view.dtype(), self.dtype),
-                (safetensors::Dtype::F32, ElementType::F32)
-                    | (safetensors::Dtype::BF16, ElementType::Bf16)
-                    | (safetensors::Dtype::F16, ElementType::F16)
-            );
-            let buffer = if src_matches {
-                // Same source and target dtype, pass the raw bytes through.
-                client.buffer_from_host_raw_bytes(self.dtype, view.data(), &dims_usize, None)?
-            } else {
-                let data = to_f32_vec(name, view.dtype(), view.data())?;
-                match self.dtype {
-                    ElementType::F32 => client.buffer_from_host_buffer(&data, &dims_usize, None)?,
-                    ElementType::Bf16 => {
-                        let data: Vec<u8> = data
-                            .iter()
-                            .flat_map(|&v| half::bf16::from_f32(v).to_le_bytes())
-                            .collect();
-                        client.buffer_from_host_raw_bytes(self.dtype, &data, &dims_usize, None)?
-                    }
-                    ElementType::F16 => {
-                        let data: Vec<u8> = data
-                            .iter()
-                            .flat_map(|&v| half::f16::from_f32(v).to_le_bytes())
-                            .collect();
-                        client.buffer_from_host_raw_bytes(self.dtype, &data, &dims_usize, None)?
-                    }
-                    dtype => bail!("unsupported target dtype {dtype:?}"),
-                }
-            };
+            let buffer =
+                buffer_from_view(client, name, view.dtype(), view.data(), &dims_usize, self.dtype)?;
             buffers.push(buffer)
         }
         Ok(buffers)
@@ -106,8 +92,8 @@ impl VarBuilder {
 
 /// A weight kept in host memory as a memory-mapped safetensors tensor, with
 /// rows gathered on the cpu and shipped to the device as a computation input.
-/// Used for the multi-GB per-layer embedding table which is only ever read a
-/// row at a time, so that it does not take up device memory.
+/// Useful for a multi-GB embedding table which is only ever read a row at a
+/// time, so that it does not take up device memory.
 pub struct PleTable {
     mmap: memmap2::Mmap,
     data_start: usize,
@@ -125,7 +111,7 @@ impl PleTable {
         target: ElementType,
     ) -> Result<Self> {
         if dims.len() != 2 {
-            bail!("expected a rank 2 shape for {name}, got {dims:?}")
+            return Err(Error::ExpectedRank2 { name: name.to_string(), dims: dims.to_vec() });
         }
         for path in paths.iter() {
             let file = std::fs::File::open(path.as_ref())?;
@@ -137,7 +123,11 @@ impl PleTable {
                     Ok(view) => {
                         let view_dims: Vec<i64> = view.shape().iter().map(|d| *d as i64).collect();
                         if view_dims != *dims {
-                            bail!("shape mismatch for {name}: expected {dims:?}, got {view_dims:?}")
+                            return Err(Error::ShapeMismatch {
+                                name: name.to_string(),
+                                expected: dims.to_vec(),
+                                got: view_dims,
+                            });
                         }
                         let data_start = view.data().as_ptr() as usize - mmap.as_ptr() as usize;
                         Some((data_start, view.dtype()))
@@ -156,7 +146,7 @@ impl PleTable {
                 });
             }
         }
-        bail!("cannot find tensor {name} in the shards")
+        Err(Error::TensorNotFound { name: name.to_string() })
     }
 
     /// Gather the rows for the given token ids into a device buffer of shape
@@ -167,46 +157,60 @@ impl PleTable {
         for &id in ids.iter() {
             let id = id as usize;
             if id >= self.rows {
-                bail!("token id {id} out of range for the ple table ({} rows)", self.rows)
+                return Err(Error::IndexOutOfRange { id, rows: self.rows });
             }
             let start = self.data_start + id * row_bytes;
             data.extend_from_slice(&self.mmap[start..start + row_bytes]);
         }
         let dims = [ids.len(), self.row_elems];
-        let src_matches = matches!(
-            (self.dtype, self.target),
-            (safetensors::Dtype::F32, ElementType::F32)
-                | (safetensors::Dtype::BF16, ElementType::Bf16)
-                | (safetensors::Dtype::F16, ElementType::F16)
-        );
-        let buffer = if src_matches {
-            client.buffer_from_host_raw_bytes(self.target, &data, &dims, None)?
-        } else {
-            let data = to_f32_vec("ple table", self.dtype, &data)?;
-            match self.target {
-                ElementType::F32 => client.buffer_from_host_buffer(&data, &dims, None)?,
-                ElementType::Bf16 => {
-                    let data: Vec<u8> =
-                        data.iter().flat_map(|&v| half::bf16::from_f32(v).to_le_bytes()).collect();
-                    client.buffer_from_host_raw_bytes(self.target, &data, &dims, None)?
-                }
-                ElementType::F16 => {
-                    let data: Vec<u8> =
-                        data.iter().flat_map(|&v| half::f16::from_f32(v).to_le_bytes()).collect();
-                    client.buffer_from_host_raw_bytes(self.target, &data, &dims, None)?
-                }
-                dtype => bail!("unsupported target dtype {dtype:?}"),
-            }
-        };
-        Ok(buffer)
+        buffer_from_view(client, "ple table", self.dtype, &data, &dims, self.target)
     }
+}
+
+/// Create a device buffer from raw safetensors bytes, converting to `target`
+/// if the source dtype differs.
+fn buffer_from_view(
+    client: &PjRtClient,
+    name: &str,
+    src: safetensors::Dtype,
+    data: &[u8],
+    dims: &[usize],
+    target: ElementType,
+) -> Result<PjRtBuffer> {
+    let src_matches = matches!(
+        (src, target),
+        (safetensors::Dtype::F32, ElementType::F32)
+            | (safetensors::Dtype::BF16, ElementType::Bf16)
+            | (safetensors::Dtype::F16, ElementType::F16)
+    );
+    let buffer = if src_matches {
+        // Same source and target dtype, pass the raw bytes through.
+        client.buffer_from_host_raw_bytes(target, data, dims, None)?
+    } else {
+        let data = to_f32_vec(name, src, data)?;
+        match target {
+            ElementType::F32 => client.buffer_from_host_buffer(&data, dims, None)?,
+            ElementType::Bf16 => {
+                let data: Vec<u8> =
+                    data.iter().flat_map(|&v| half::bf16::from_f32(v).to_le_bytes()).collect();
+                client.buffer_from_host_raw_bytes(target, &data, dims, None)?
+            }
+            ElementType::F16 => {
+                let data: Vec<u8> =
+                    data.iter().flat_map(|&v| half::f16::from_f32(v).to_le_bytes()).collect();
+                client.buffer_from_host_raw_bytes(target, &data, dims, None)?
+            }
+            dtype => return Err(Error::UnsupportedTargetDType { dtype }),
+        }
+    };
+    Ok(buffer)
 }
 
 fn dtype_size(name: &str, dtype: safetensors::Dtype) -> Result<usize> {
     match dtype {
         safetensors::Dtype::F32 => Ok(4),
         safetensors::Dtype::BF16 | safetensors::Dtype::F16 => Ok(2),
-        dtype => bail!("unsupported dtype {dtype:?} for {name}"),
+        dtype => Err(Error::UnsupportedSourceDType { name: name.to_string(), dtype }),
     }
 }
 
@@ -221,7 +225,7 @@ fn to_f32_vec(name: &str, dtype: safetensors::Dtype, data: &[u8]) -> Result<Vec<
         safetensors::Dtype::F16 => {
             data.chunks_exact(2).map(|c| half::f16::from_le_bytes([c[0], c[1]]).to_f32()).collect()
         }
-        dtype => bail!("unsupported dtype {dtype:?} for {name}"),
+        dtype => return Err(Error::UnsupportedSourceDType { name: name.to_string(), dtype }),
     };
     Ok(res)
 }
