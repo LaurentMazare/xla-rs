@@ -1,0 +1,49 @@
+[package]
+name = "xla"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+readme = "README.md"
+
+[dependencies]
+thiserror = { workspace = true }
+libc = { workspace = true }
+num-traits = { workspace = true }
+num-derive = { workspace = true }
+zip = { workspace = true }
+hf-hub = { workspace = true, optional = true }
+
+[features]
+hf-hub = ["dep:hf-hub"]
+
+[[example]]
+name = "qwen35"
+required-features = ["hf-hub"]
+
+[[example]]
+name = "gemma4"
+required-features = ["hf-hub"]
+
+[[example]]
+name = "nemotron3"
+required-features = ["hf-hub"]
+
+[build-dependencies]
+bindgen = { workspace = true }
+cc = { workspace = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+fancy-regex = { workspace = true }
+half = { workspace = true }
+memmap2 = { workspace = true }
+rand = { workspace = true }
+safetensors = { workspace = true }
+serde_json = { workspace = true }
+tokenizers = { workspace = true }

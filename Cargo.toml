@@ -1,5 +1,8 @@
-[package]
-name = "xla"
+[workspace]
+members = ["xla"]
+resolver = "2"
+
+[workspace.package]
 version = "0.3.1"
 authors = ["laurent <laurent.mazare@gmail.com>"]
 edition = "2021"
@@ -8,36 +11,16 @@ repository = "https://github.com/LaurentMazare/xla-rs"
 keywords = ["blas", "tensor", "machine-learning"]
 categories = ["science"]
 license = "MIT/Apache-2.0"
-readme = "README.md"
 
-[dependencies]
+[workspace.dependencies]
 thiserror = "1"
 libc = "0.2"
 num-traits = "0.2"
 num-derive = "0.4"
 zip = "0.6.4"
-hf-hub = { version = "1.0.0", features = ["blocking"], optional = true }
-
-[features]
-hf-hub = ["dep:hf-hub"]
-
-[[example]]
-name = "qwen35"
-required-features = ["hf-hub"]
-
-[[example]]
-name = "gemma4"
-required-features = ["hf-hub"]
-
-[[example]]
-name = "nemotron3"
-required-features = ["hf-hub"]
-
-[build-dependencies]
+hf-hub = { version = "1.0.0", features = ["blocking"] }
 bindgen = "0.72"
 cc = "1.0"
-
-[dev-dependencies]
 anyhow = "1.0"
 clap = { version = "4.2.4", features = ["derive"] }
 fancy-regex = "0.11.0"
