@@ -5,8 +5,8 @@
 //! Weight-norm is assumed to be pre-fused into a single `weight` tensor, which
 //! is the case for the candle-format Mimi checkpoints used by the AudioToAudio
 //! example.
-use crate::{add_bias, Result, Vb};
-use xla::XlaOp;
+use crate::{add_bias, Result, StepCtx, Vb};
+use xla::{ElementType, XlaOp};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -121,6 +121,57 @@ impl StreamableConv1d {
             None => Ok(ys),
         }
     }
+
+    /// The number of input samples carried between streaming steps (the causal
+    /// left context of the sliding window).
+    fn carry(&self) -> i64 {
+        let k_size_eff = (self.kernel_size - 1) * self.dilation + 1;
+        k_size_eff - self.stride
+    }
+
+    /// Streaming step: `xs` is `[1, in_c, l]` with `l` a multiple of `stride`;
+    /// returns `[1, out_c, l / stride]`. The carried input history is threaded
+    /// through `ctx` (a zero-initialised buffer of shape `[1, in_c, carry]`,
+    /// which also supplies the causal left padding on the first steps).
+    ///
+    /// For `PadMode::Replicate` convs the whole-file forward instead replicates
+    /// the first frame into the left pad. Pass an `is_first` flag through `ctx`
+    /// (see [`StepCtx::set_is_first`](crate::StepCtx::set_is_first)) and this
+    /// step reproduces that exactly on the first step; without it the zero left
+    /// padding causes a one-frame warm-up difference.
+    pub fn step(&self, xs: &XlaOp, ctx: &mut StepCtx) -> Result<XlaOp> {
+        let carry = self.carry();
+        let wd = self.weight.dims()?;
+        let in_c = wd[1] as i64 * self.groups;
+        let combined = if carry > 0 {
+            let is_first = ctx.is_first_pred()?;
+            let (idx, state) = ctx.state_in(ElementType::F32, &[1, in_c, carry])?;
+            // The left pad is normally the carried input history (which is
+            // zero-initialised, matching `Constant` padding). For `Replicate`
+            // padding the whole-file forward replicates the first input column
+            // instead, so on the first step select that replicated pad.
+            let pad = match (self.pad_mode, is_first) {
+                (PadMode::Replicate, Some(is_first)) => {
+                    let repl = xs
+                        .slice_in_dim1(0, 1, 2)?
+                        .broadcast_in_dim(&[1, in_c, carry], &[0, 1, 2])?;
+                    is_first.broadcast(&[1, in_c, carry])?.select(&repl, &state)?
+                }
+                _ => state,
+            };
+            let combined = pad.concat_in_dim(std::slice::from_ref(xs), 2)?;
+            let clen = combined.dims()?[2] as i64;
+            ctx.state_out(idx, combined.slice_in_dim1(clen - carry, clen, 2)?);
+            combined
+        } else {
+            xs.clone()
+        };
+        let ys = combined.conv1d(&self.weight, self.stride, 0, self.dilation, self.groups)?;
+        match &self.bias {
+            Some(b) => add_bias(&ys, b),
+            None => Ok(ys),
+        }
+    }
 }
 
 pub struct StreamableConvTranspose1d {
@@ -166,6 +217,36 @@ impl StreamableConvTranspose1d {
             unpad1d(&ys, padding_left, padding_right)
         }
     }
+
+    /// Streaming step for the causal transposed conv: `xs` is `[1, in_c, l]`,
+    /// returns `[1, out_c, l * stride]`. The overlap-add tail is carried through
+    /// `ctx` (a zero-initialised `[1, out_c, k - stride]` buffer). The bias is
+    /// applied to the emitted output, and the carried tail is kept bias-free so
+    /// it is not double-counted on the next step.
+    pub fn step(&self, xs: &XlaOp, ctx: &mut StepCtx) -> Result<XlaOp> {
+        let carry = (self.k_size - self.stride).max(0);
+        let wd = self.weight.dims()?;
+        let out_c = wd[1] as i64 * self.groups;
+        // Raw transposed conv without bias.
+        let ys = xs.conv_transpose1d(&self.weight, self.stride, 0, 0, 1, self.groups)?;
+        let ot = ys.dims()?[2] as i64;
+        let ys = if carry > 0 {
+            let (idx, state) = ctx.state_in(ElementType::F32, &[1, out_c, carry])?;
+            // Overlap-add the carried tail onto the head of this step's output.
+            let head = ys.slice_in_dim1(0, carry, 2)?.add_(&state)?;
+            let tail = ys.slice_in_dim1(carry, ot, 2)?;
+            let ys = head.concat_in_dim(&[tail], 2)?;
+            let valid_len = ot - carry;
+            ctx.state_out(idx, ys.slice_in_dim1(valid_len, ot, 2)?);
+            ys.slice_in_dim1(0, valid_len, 2)?
+        } else {
+            ys
+        };
+        match &self.bias {
+            Some(b) => add_bias(&ys, b),
+            None => Ok(ys),
+        }
+    }
 }
 
 pub struct ConvDownsample1d {
@@ -193,6 +274,10 @@ impl ConvDownsample1d {
     pub fn forward(&self, xs: &XlaOp) -> Result<XlaOp> {
         self.conv.forward(xs)
     }
+
+    pub fn step(&self, xs: &XlaOp, ctx: &mut StepCtx) -> Result<XlaOp> {
+        self.conv.step(xs, ctx)
+    }
 }
 
 pub struct ConvTrUpsample1d {
@@ -217,5 +302,9 @@ impl ConvTrUpsample1d {
 
     pub fn forward(&self, xs: &XlaOp) -> Result<XlaOp> {
         self.convtr.forward(xs)
+    }
+
+    pub fn step(&self, xs: &XlaOp, ctx: &mut StepCtx) -> Result<XlaOp> {
+        self.convtr.step(xs, ctx)
     }
 }

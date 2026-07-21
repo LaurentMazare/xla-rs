@@ -34,6 +34,11 @@ enum Command {
         /// Use CPU even if an accelerator is available.
         #[arg(long, default_value_t = false)]
         cpu: bool,
+
+        /// Use the streaming per-frame path (compile one static step graph and
+        /// run it frame by frame) instead of the whole-file computation.
+        #[arg(long, default_value_t = false)]
+        streaming: bool,
     },
 }
 
@@ -152,8 +157,136 @@ fn audio_to_audio(
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::AudioToAudio { input, output, codebooks, cpu } => {
-            audio_to_audio(input, output, codebooks, cpu)
+        Command::AudioToAudio { input, output, codebooks, cpu, streaming } => {
+            if streaming {
+                audio_to_audio_streaming(input, output, codebooks, cpu)
+            } else {
+                audio_to_audio(input, output, codebooks, cpu)
+            }
         }
     }
+}
+
+/// A device buffer of zeros with the given element type and shape, used to
+/// initialise streaming state.
+fn zeros_buffer(client: &PjRtClient, ty: ElementType, dims: &[i64]) -> Result<xla::PjRtBuffer> {
+    let dims_u: Vec<usize> = dims.iter().map(|d| *d as usize).collect();
+    let n: usize = dims_u.iter().product::<usize>().max(1);
+    Ok(match ty {
+        ElementType::F32 => client.buffer_from_host_buffer(&vec![0f32; n], &dims_u, None)?,
+        ElementType::S32 => client.buffer_from_host_buffer(&vec![0i32; n], &dims_u, None)?,
+        other => anyhow::bail!("unsupported streaming state dtype {other:?}"),
+    })
+}
+
+fn audio_to_audio_streaming(
+    input: std::path::PathBuf,
+    output: std::path::PathBuf,
+    codebooks: usize,
+    cpu: bool,
+) -> Result<()> {
+    let target_sample_rate: usize = 24000;
+    let frame_size: usize = 1920;
+
+    println!("Loading audio from {}...", input.display());
+    let (pcm_data, sample_rate) = kaudio::pcm_decode(&input)?;
+    let pcm_data = if sample_rate as usize != target_sample_rate {
+        println!("  Resampling {sample_rate} Hz -> {target_sample_rate} Hz");
+        kaudio::resample(&pcm_data, sample_rate as usize, target_sample_rate)?
+    } else {
+        pcm_data
+    };
+    let orig_len = pcm_data.len();
+    let num_frames = orig_len.div_ceil(frame_size);
+    let mut pcm_data = pcm_data;
+    pcm_data.resize(num_frames * frame_size, 0.0);
+
+    let model_path = download_mimi_model()?;
+    let client = if cpu { PjRtClient::cpu()? } else { PjRtClient::auto(false)? };
+    let config = mimi::Config::v0_1(Some(codebooks));
+    let n_q = codebooks as i64;
+
+    // --- Build the encode-step and decode-step computations (static graphs) ---
+    println!("Compiling streaming step graphs...");
+    let start = std::time::Instant::now();
+    let enc_builder = XlaBuilder::new("mimi-encode-step");
+    let frame = enc_builder.parameter(0, ElementType::F32, &[1, 1, frame_size as i64], "frame")?;
+    let enc_vb = xla_nn::VarBuilder::new(&enc_builder, ElementType::F32, 1);
+    let enc_model = Mimi::load(&Vb::new(&enc_vb), config.clone())?;
+    let enc_w = enc_vb.num_vars() as i64;
+    // `is_first` (param after the weights) is 1 on the first step and 0 after,
+    // so the downsample reproduces its replicate left padding exactly.
+    let is_first = enc_builder.parameter(1 + enc_w, ElementType::S32, &[], "is_first")?;
+    let mut enc_ctx = xla_moshi::StepCtx::new(&enc_builder, 2 + enc_w);
+    enc_ctx.set_is_first(is_first);
+    let codes = enc_model.encode_step(&frame, &mut enc_ctx)?;
+    let enc_state_shapes: Vec<_> = enc_ctx.state_shapes().to_vec();
+    let mut enc_outs = vec![codes];
+    enc_outs.extend(enc_ctx.into_new_states());
+    let enc_exe =
+        client.compile(&enc_builder.tuple(&enc_outs.iter().collect::<Vec<_>>())?.build()?)?;
+    let enc_weights = enc_vb.load_buffers(&[&model_path], &client)?;
+
+    let dec_builder = XlaBuilder::new("mimi-decode-step");
+    let codes_in = dec_builder.parameter(0, ElementType::S64, &[1, n_q, 1], "codes")?;
+    let dec_vb = xla_nn::VarBuilder::new(&dec_builder, ElementType::F32, 1);
+    let dec_model = Mimi::load(&Vb::new(&dec_vb), config.clone())?;
+    let mut dec_ctx = xla_moshi::StepCtx::new(&dec_builder, 1 + dec_vb.num_vars() as i64);
+    let audio_out = dec_model.decode_step(&codes_in, &mut dec_ctx)?;
+    let dec_state_shapes: Vec<_> = dec_ctx.state_shapes().to_vec();
+    let mut dec_outs = vec![audio_out];
+    dec_outs.extend(dec_ctx.into_new_states());
+    let dec_exe =
+        client.compile(&dec_builder.tuple(&dec_outs.iter().collect::<Vec<_>>())?.build()?)?;
+    let dec_weights = dec_vb.load_buffers(&[&model_path], &client)?;
+    println!("  compiled in {:?}", start.elapsed());
+
+    // --- Streaming encode: one 1920-sample frame -> one code slice ---
+    println!("Streaming encode ({num_frames} frames)...");
+    let start = std::time::Instant::now();
+    let mut enc_states = enc_state_shapes
+        .iter()
+        .map(|(ty, d)| zeros_buffer(&client, *ty, d))
+        .collect::<Result<Vec<_>>>()?;
+    let mut code_slices: Vec<Vec<i64>> = Vec::with_capacity(num_frames);
+    for f in 0..num_frames {
+        let chunk = &pcm_data[f * frame_size..(f + 1) * frame_size];
+        let frame_buf = client.buffer_from_host_buffer(chunk, &[1, 1, frame_size], None)?;
+        let is_first_buf = client.buffer_from_host_buffer(&[i32::from(f == 0)], &[], None)?;
+        let mut inputs: Vec<&xla::PjRtBuffer> = vec![&frame_buf];
+        inputs.extend(enc_weights.iter());
+        inputs.push(&is_first_buf);
+        inputs.extend(enc_states.iter());
+        let mut out = enc_exe.execute_b(&inputs)?.into_iter().next().context("no enc output")?;
+        code_slices.push(out[0].to_literal_sync()?.to_vec::<i64>()?);
+        enc_states = out.split_off(1);
+    }
+    println!("  done in {:?}", start.elapsed());
+
+    // --- Streaming decode: one code slice -> one 1920-sample frame ---
+    println!("Streaming decode ({num_frames} frames)...");
+    let start = std::time::Instant::now();
+    let mut dec_states = dec_state_shapes
+        .iter()
+        .map(|(ty, d)| zeros_buffer(&client, *ty, d))
+        .collect::<Result<Vec<_>>>()?;
+    let mut audio: Vec<f32> = Vec::with_capacity(num_frames * frame_size);
+    for code_slice in &code_slices {
+        let codes_buf = client.buffer_from_host_buffer(code_slice, &[1, n_q as usize, 1], None)?;
+        let mut inputs: Vec<&xla::PjRtBuffer> = vec![&codes_buf];
+        inputs.extend(dec_weights.iter());
+        inputs.extend(dec_states.iter());
+        let mut out = dec_exe.execute_b(&inputs)?.into_iter().next().context("no dec output")?;
+        audio.extend_from_slice(&out[0].to_literal_sync()?.to_vec::<f32>()?);
+        dec_states = out.split_off(1);
+    }
+    println!("  done in {:?}", start.elapsed());
+
+    let audio: Vec<f32> = audio.into_iter().take(orig_len).collect();
+    println!("Writing {} samples to {}...", audio.len(), output.display());
+    let file = std::fs::File::create(&output)?;
+    let mut writer = std::io::BufWriter::new(file);
+    kaudio::wav::write_pcm_as_wav(&mut writer, &audio, target_sample_rate as u32, 1)?;
+    println!("Done.");
+    Ok(())
 }

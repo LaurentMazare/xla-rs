@@ -1,10 +1,14 @@
 //! Moshi / Mimi models built on top of the [`xla`] crate.
 //!
-//! This currently implements the non-streaming (whole-file) forward path of the
-//! Mimi neural audio codec: SEANet encoder/decoder, the Mimi transformer, and
-//! the split residual vector quantizer. The implementation mirrors the eager
-//! `xn-moshi` reference but builds a single XLA computation for `encode` and one
-//! for `decode`.
+//! This implements the Mimi neural audio codec (SEANet encoder/decoder, the Mimi
+//! transformer, and the split residual vector quantizer), mirroring the eager
+//! `xn-moshi` reference. Two execution modes are provided:
+//!
+//! - Non-streaming (whole-file): [`mimi::Mimi::encode`] / [`mimi::Mimi::decode`]
+//!   build a single computation over the whole clip.
+//! - Streaming: [`mimi::Mimi::encode_step`] / [`mimi::Mimi::decode_step`] build a
+//!   static per-frame step computation, taking the running state plus one frame
+//!   and returning the next state plus one slice of codes (or one audio frame).
 pub mod conv;
 pub mod mimi;
 pub mod quantization;
@@ -13,7 +17,80 @@ pub mod transformer;
 
 pub use xla_nn::{Error, Result};
 
-use xla::XlaOp;
+use xla::{ElementType, XlaBuilder, XlaOp};
+
+/// Threads streaming state through a `*_step` computation.
+///
+/// State tensors are extra parameters of the step computation, appended after
+/// the input frame and the model weights. Each streaming module declares its
+/// input-state parameters via [`StepCtx::state_in`] (recording their shape) and
+/// writes the corresponding updated state via [`StepCtx::state_out`]. The order
+/// of the collected new-state outputs matches the order of the declared input
+/// parameters, so at runtime the outputs can be fed straight back in as the next
+/// step's state.
+pub struct StepCtx<'a> {
+    builder: &'a XlaBuilder,
+    next_param: i64,
+    state_shapes: Vec<(ElementType, Vec<i64>)>,
+    new_states: Vec<Option<XlaOp>>,
+    is_first: Option<XlaOp>,
+}
+
+impl<'a> StepCtx<'a> {
+    /// `first_state_param` is the parameter index of the first state tensor,
+    /// i.e. right after the input frame and all the model weights.
+    pub fn new(builder: &'a XlaBuilder, first_state_param: i64) -> Self {
+        Self {
+            builder,
+            next_param: first_state_param,
+            state_shapes: Vec::new(),
+            new_states: Vec::new(),
+            is_first: None,
+        }
+    }
+
+    /// Provide an `is_first` flag (a non-zero scalar on the first step, zero
+    /// afterwards). `Replicate`-padded convs use it to reproduce the whole-file
+    /// left padding exactly on the first step; without it they fall back to zero
+    /// left padding. This is only needed on the encode side.
+    pub fn set_is_first(&mut self, is_first: XlaOp) {
+        self.is_first = Some(is_first);
+    }
+
+    /// The `is_first` flag as a boolean scalar, if one was provided.
+    pub(crate) fn is_first_pred(&self) -> Result<Option<XlaOp>> {
+        match &self.is_first {
+            None => Ok(None),
+            Some(f) => Ok(Some(f.gt(&self.builder.c0(0i32)?)?)),
+        }
+    }
+
+    /// Declare an input-state parameter, returning its slot index and node.
+    pub fn state_in(&mut self, ty: ElementType, dims: &[i64]) -> Result<(usize, XlaOp)> {
+        let idx = self.state_shapes.len();
+        let p = self.builder.parameter(self.next_param, ty, dims, &format!("state{idx}"))?;
+        self.next_param += 1;
+        self.state_shapes.push((ty, dims.to_vec()));
+        self.new_states.push(None);
+        Ok((idx, p))
+    }
+
+    /// Record the updated value for the state slot returned by [`state_in`](Self::state_in).
+    pub fn state_out(&mut self, idx: usize, x: XlaOp) {
+        self.new_states[idx] = Some(x);
+    }
+
+    /// The (dtype, shape) of every state tensor, in parameter order. Callers use
+    /// this to allocate the zero-initialised state buffers.
+    pub fn state_shapes(&self) -> &[(ElementType, Vec<i64>)] {
+        &self.state_shapes
+    }
+
+    /// The updated state nodes, in parameter order (each slot must have been set).
+    pub fn into_new_states(self) -> Vec<XlaOp> {
+        self.new_states.into_iter().map(|o| o.expect("a state slot was never written")).collect()
+    }
+}
 
 /// A thin helper that mirrors the `Path` used in the `xn` reference: it keeps a
 /// dotted prefix and forwards weight declarations to an [`xla_nn::VarBuilder`],

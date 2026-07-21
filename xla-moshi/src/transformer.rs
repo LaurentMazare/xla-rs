@@ -1,8 +1,8 @@
 //! The Mimi transformer, ported from `xn-moshi` and run over the whole sequence
 //! at once. Only causal + norm-first + `kv_repeat = 1` + rope is supported,
 //! which is what the Mimi configs use.
-use crate::{Result, Vb};
-use xla::{XlaBuilder, XlaOp};
+use crate::{Result, StepCtx, Vb};
+use xla::{ElementType, PrimitiveType, XlaBuilder, XlaOp};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -154,11 +154,49 @@ fn attn_mask(builder: &XlaBuilder, t: i64, context: i64) -> Result<XlaOp> {
     Ok(builder.constant_r1(&m)?.reshape(&[1, 1, t, t])?)
 }
 
+/// In-graph rope tables for `t` positions starting at the runtime scalar `pos`,
+/// shaped `[1, 1, t, head_dim / 2]`.
+fn rope_step(
+    builder: &XlaBuilder,
+    pos: &XlaOp,
+    t: i64,
+    head_dim: i64,
+    max_period: f32,
+) -> Result<(XlaOp, XlaOp)> {
+    let half = (head_dim / 2) as usize;
+    let inv_freq: Vec<f32> =
+        (0..half).map(|f| 1.0 / max_period.powf(f as f32 / half as f32)).collect();
+    let inv_freq = builder.constant_r1(&inv_freq)?.reshape(&[1, half as i64])?;
+    let iota = builder.iota(ElementType::S32, &[t], 0)?;
+    let positions = iota.add_(&pos.broadcast(&[t])?)?.convert(PrimitiveType::F32)?;
+    let freqs = positions.reshape(&[t, 1])?.mul_(&inv_freq)?; // [t, half]
+    let cos = freqs.cos()?.reshape(&[1, 1, t, half as i64])?;
+    let sin = freqs.sin()?.reshape(&[1, 1, t, half as i64])?;
+    Ok((cos, sin))
+}
+
+/// In-graph streaming attention mask `[t, context]`. Query row `i` (absolute
+/// position `pos + i`) may attend cache column `j` iff the slot is causal
+/// (`j - i <= context - t`) and has been written (`pos + t - context + j >= 0`).
+/// The cache holds the `context` most recent keys in order, oldest first.
+fn mask_step(builder: &XlaBuilder, pos: &XlaOp, t: i64, context: i64) -> Result<XlaOp> {
+    let ii = builder.iota(ElementType::S32, &[t, context], 0)?;
+    let jj = builder.iota(ElementType::S32, &[t, context], 1)?;
+    let causal = jj.sub_(&ii)?.le(&builder.c0((context - t) as i32)?)?;
+    let base = pos.add_(&builder.c0((t - context) as i32)?)?; // scalar
+    let written = jj.add_(&base.broadcast(&[t, context])?)?.ge(&builder.c0(0i32)?)?;
+    let cond = causal.and(&written)?;
+    let zeros = builder.c0(0f32)?.broadcast(&[t, context])?;
+    let neg = builder.c0(f32::NEG_INFINITY)?.broadcast(&[t, context])?;
+    Ok(cond.select(&zeros, &neg)?)
+}
+
 struct MultiheadAttention {
     in_proj: Linear,
     out_proj: Linear,
     num_heads: i64,
     head_dim: i64,
+    context: i64,
 }
 
 impl MultiheadAttention {
@@ -174,7 +212,59 @@ impl MultiheadAttention {
             if cfg.bias_attn { Some(vb_attn.var("in_proj_bias", &[out_dim])?) } else { None };
         let in_proj = Linear::from_weight(in_proj_weight, in_proj_bias);
         let out_proj = Linear::load(&vb_attn.pp("out_proj"), d_model, d_model, cfg.bias_attn)?;
-        Ok(Self { in_proj, out_proj, num_heads, head_dim })
+        Ok(Self { in_proj, out_proj, num_heads, head_dim, context: cfg.context as i64 })
+    }
+
+    /// Split the packed qkv projection into q/k/v, each `[b, h, t, head_dim]`.
+    fn qkv(&self, xs: &XlaOp) -> Result<(XlaOp, XlaOp, XlaOp)> {
+        let dims = xs.dims()?;
+        let (b, t) = (dims[0] as i64, dims[1] as i64);
+        let (h, hd) = (self.num_heads, self.head_dim);
+        let d_model = h * hd;
+        let qkv = self.in_proj.forward(xs)?;
+        let split = |start: i64| -> Result<XlaOp> {
+            let s = qkv.slice_in_dim1(start, start + d_model, 2)?;
+            Ok(s.reshape(&[b, t, h, hd])?.transpose(&[0, 2, 1, 3])?)
+        };
+        Ok((split(0)?, split(d_model)?, split(2 * d_model)?))
+    }
+
+    /// Streaming attention: append the `t` new keys/values to a fixed-size
+    /// `[1, h, context, hd]` cache (shift out the oldest `t`), and attend the
+    /// new queries over the whole cache. `pos` is the number of frames seen
+    /// before this step; the mask keeps each query causal and masks the unfilled
+    /// leading cache slots.
+    fn step(
+        &self,
+        xs: &XlaOp,
+        cos: &XlaOp,
+        sin: &XlaOp,
+        mask: &XlaOp,
+        ctx: &mut StepCtx,
+    ) -> Result<XlaOp> {
+        let dims = xs.dims()?;
+        let (b, t) = (dims[0] as i64, dims[1] as i64);
+        let (h, hd, c) = (self.num_heads, self.head_dim, self.context);
+        let d_model = h * hd;
+        let (q, k, v) = self.qkv(xs)?;
+        let q = apply_rotary_emb(&q, cos, sin)?;
+        let k = apply_rotary_emb(&k, cos, sin)?;
+
+        let (idx_k, k_cache) = ctx.state_in(ElementType::F32, &[b, h, c, hd])?;
+        let (idx_v, v_cache) = ctx.state_in(ElementType::F32, &[b, h, c, hd])?;
+        let k_cache = k_cache.slice_in_dim1(t, c, 2)?.concat_in_dim(&[k], 2)?;
+        let v_cache = v_cache.slice_in_dim1(t, c, 2)?.concat_in_dim(&[v], 2)?;
+        ctx.state_out(idx_k, k_cache.clone());
+        ctx.state_out(idx_v, v_cache.clone());
+
+        let scale = xs.builder().c0(1f32 / (hd as f32).sqrt())?;
+        let attn = q.dot_general(&k_cache, &[3], &[3], &[0, 1], &[0, 1])?; // [b, h, t, c]
+        let attn = attn.mul_(&scale)?;
+        let mask = mask.broadcast_in_dim(&[b, h, t, c], &[2, 3])?;
+        let attn = attn.add_(&mask)?.softmax(-1)?;
+        let out = attn.dot_general(&v_cache, &[3], &[2], &[0, 1], &[0, 1])?; // [b, h, t, hd]
+        let out = out.transpose(&[0, 2, 1, 3])?.reshape(&[b, t, d_model])?;
+        self.out_proj.forward(&out)
     }
 
     fn forward(&self, xs: &XlaOp, cos: &XlaOp, sin: &XlaOp, mask: &XlaOp) -> Result<XlaOp> {
@@ -269,6 +359,28 @@ impl TransformerLayer {
         }
         Ok(xs.add_(&mlp)?)
     }
+
+    fn step(
+        &self,
+        xs: &XlaOp,
+        cos: &XlaOp,
+        sin: &XlaOp,
+        mask: &XlaOp,
+        ctx: &mut StepCtx,
+    ) -> Result<XlaOp> {
+        let norm1 = self.norm1.forward(xs)?;
+        let mut attn = self.self_attn.step(&norm1, cos, sin, mask, ctx)?;
+        if let Some(ls) = &self.layer_scale_1 {
+            attn = ls.forward(&attn)?;
+        }
+        let xs = xs.add_(&attn)?;
+        let norm2 = self.norm2.forward(&xs)?;
+        let mut mlp = self.mlp.forward(&norm2)?;
+        if let Some(ls) = &self.layer_scale_2 {
+            mlp = ls.forward(&mlp)?;
+        }
+        Ok(xs.add_(&mlp)?)
+    }
 }
 
 struct Transformer {
@@ -311,6 +423,21 @@ impl Transformer {
         }
         Ok(xs)
     }
+
+    /// Streaming step over `t` positions. `xs`: `[1, t, d_model]`.
+    fn step(&self, xs: &XlaOp, ctx: &mut StepCtx) -> Result<XlaOp> {
+        let t = xs.dims()?[1] as i64;
+        let builder = xs.builder();
+        let (idx_pos, pos) = ctx.state_in(ElementType::S32, &[])?;
+        let (cos, sin) = rope_step(builder, &pos, t, self.head_dim, self.max_period)?;
+        let mask = mask_step(builder, &pos, t, self.context)?;
+        let mut xs = xs.clone();
+        for layer in &self.layers {
+            xs = layer.step(&xs, &cos, &sin, &mask, ctx)?;
+        }
+        ctx.state_out(idx_pos, pos.add_(&builder.c0(t as i32)?)?);
+        Ok(xs)
+    }
 }
 
 pub struct ProjectedTransformer {
@@ -345,6 +472,25 @@ impl ProjectedTransformer {
             None => xs,
         };
         let xs = self.transformer.forward(&xs)?;
+        let xs = match &self.output_proj {
+            Some(p) => p.forward(&xs)?,
+            None => xs,
+        };
+        if self.conv_layout {
+            Ok(xs.swap_dims(1, 2)?)
+        } else {
+            Ok(xs)
+        }
+    }
+
+    /// Streaming step. `xs`: `[1, c, t]` (conv layout) -> `[1, c, t]`.
+    pub fn step(&self, xs: &XlaOp, ctx: &mut StepCtx) -> Result<XlaOp> {
+        let xs = if self.conv_layout { xs.swap_dims(1, 2)? } else { xs.clone() };
+        let xs = match &self.input_proj {
+            Some(p) => p.forward(&xs)?,
+            None => xs,
+        };
+        let xs = self.transformer.step(&xs, ctx)?;
         let xs = match &self.output_proj {
             Some(p) => p.forward(&xs)?,
             None => xs,
