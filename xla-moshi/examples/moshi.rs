@@ -541,6 +541,8 @@ fn run_asr(input: std::path::PathBuf, cpu: bool, verbose: bool, dtype: &str) -> 
         client.buffer_from_host_buffer(&[lm_model.text_start_token()], &[1], None)?;
     let pad_codes = vec![lm_model.audio_pad_token(); n_q];
     let pad_codes_buf = client.buffer_from_host_buffer(&pad_codes, &[1, n_q, 1], None)?;
+    let is_first_true = client.buffer_from_host_buffer(&[1i32], &[], None)?;
+    let is_first_false = client.buffer_from_host_buffer(&[0i32], &[], None)?;
 
     let mut step_idx = 0usize;
     let mut word_tokens: Vec<u32> = vec![];
@@ -548,47 +550,9 @@ fn run_asr(input: std::path::PathBuf, cpu: bool, verbose: bool, dtype: &str) -> 
     // that sentencepiece handles spacing.
     let mut all_text_tokens: Vec<u32> = vec![];
     let mut last_decoded_len = 0;
-
-    for f in 0..num_chunks {
-        let chunk_start = f * FRAME_SIZE;
-        let chunk_end = (chunk_start + FRAME_SIZE).min(pcm_data.len());
-        let mut chunk: Vec<f32> = pcm_data[chunk_start..chunk_end].to_vec();
-        chunk.resize(FRAME_SIZE, 0.0);
-        let step_start = std::time::Instant::now();
-
-        // Mimi encode: one frame of audio -> one slice of codes.
-        let frame_buf = client.buffer_from_host_buffer(&chunk, &[1, 1, FRAME_SIZE], None)?;
-        let is_first_buf = client.buffer_from_host_buffer(&[i32::from(f == 0)], &[], None)?;
-        let mut inputs: Vec<&xla::PjRtBuffer> = vec![&frame_buf];
-        inputs.extend(enc_weights.iter());
-        inputs.push(&is_first_buf);
-        inputs.extend(enc_states.iter());
-        let mut out = enc_exe.execute_b(&inputs)?.into_iter().next().context("no enc output")?;
-        let codes_buf = out.remove(0);
-        enc_states = out;
-
-        // LM step: the code slice plus the previous text token -> next token.
-        let codes_buf = if f == 0 { &pad_codes_buf } else { &codes_buf };
-        let mut inputs: Vec<&xla::PjRtBuffer> = vec![codes_buf, &text_buf];
-        inputs.extend(lm_weights.iter());
-        inputs.extend(lm_states.iter());
-        let mut out = lm_exe.execute_b(&inputs)?.into_iter().next().context("no lm output")?;
-        let token_buf = out.remove(0);
-        lm_states = out;
-        let text_token = token_buf.to_literal_sync()?.to_vec::<i32>()?[0];
-        text_buf = token_buf;
-        if verbose {
-            println!(
-                "  chunk {}/{} -> token {} in {:.2}ms",
-                f + 1,
-                num_chunks,
-                text_token,
-                step_start.elapsed().as_secs_f64() * 1000.0
-            );
-        }
-
-        // Word assembly: boundary tokens flush the current word, everything
-        // else (once past the delay) extends it.
+    // Word assembly: boundary tokens flush the current word, everything else
+    // (once past the delay) extends it.
+    let mut on_text_token = |text_token: i32| -> Result<()> {
         step_idx += 1;
         if step_idx >= asr_delay_in_tokens {
             if WORD_BOUNDARY_TOKENS.contains(&text_token) {
@@ -606,7 +570,57 @@ fn run_asr(input: std::path::PathBuf, cpu: bool, verbose: bool, dtype: &str) -> 
                 word_tokens.push(text_token as u32);
             }
         }
+        Ok(())
+    };
+
+    for f in 0..num_chunks {
+        let chunk_start = f * FRAME_SIZE;
+        let chunk_end = (chunk_start + FRAME_SIZE).min(pcm_data.len());
+        let mut chunk: Vec<f32> = pcm_data[chunk_start..chunk_end].to_vec();
+        chunk.resize(FRAME_SIZE, 0.0);
+        let step_start = std::time::Instant::now();
+
+        // Mimi encode: one frame of audio -> one slice of codes.
+        let frame_buf = client.buffer_from_host_buffer(&chunk, &[1, 1, FRAME_SIZE], None)?;
+        let mut inputs: Vec<&xla::PjRtBuffer> = vec![&frame_buf];
+        inputs.extend(enc_weights.iter());
+        inputs.push(if f == 0 { &is_first_true } else { &is_first_false });
+        inputs.extend(enc_states.iter());
+        let mut out = enc_exe.execute_b(&inputs)?.into_iter().next().context("no enc output")?;
+        let codes_buf = out.remove(0);
+        enc_states = out;
+
+        // LM step: the code slice plus the previous text token -> next token.
+        let codes_buf = if f == 0 { &pad_codes_buf } else { &codes_buf };
+        let mut inputs: Vec<&xla::PjRtBuffer> = vec![codes_buf, &text_buf];
+        inputs.extend(lm_weights.iter());
+        inputs.extend(lm_states.iter());
+        let mut out = lm_exe.execute_b(&inputs)?.into_iter().next().context("no lm output")?;
+        let token_buf = out.remove(0);
+        lm_states = out;
+        // The text token chains on the device (`token_buf` becomes the next
+        // step's input), so this step's readback can wait until the next
+        // iteration has been dispatched: the host word assembly runs one step
+        // behind and the device queue never drains. `text_buf` currently
+        // holds the previous step's token, which has not been read yet.
+        let prev_token_buf = std::mem::replace(&mut text_buf, token_buf);
+        if f > 0 {
+            let text_token = prev_token_buf.to_literal_sync()?.to_vec::<i32>()?[0];
+            if verbose {
+                println!(
+                    "  chunk {}/{} -> token {} in {:.2}ms",
+                    f + 1,
+                    num_chunks,
+                    text_token,
+                    step_start.elapsed().as_secs_f64() * 1000.0
+                );
+            }
+            on_text_token(text_token)?;
+        }
     }
+    // Flush the last in-flight token.
+    let text_token = text_buf.to_literal_sync()?.to_vec::<i32>()?[0];
+    on_text_token(text_token)?;
     println!();
     println!("---");
     if verbose {
