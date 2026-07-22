@@ -193,53 +193,69 @@ fn attn_mask(builder: &XlaBuilder, t: i64, context: i64) -> Result<XlaOp> {
     Ok(builder.constant_r1(&m)?.reshape(&[1, 1, t, t])?)
 }
 
-/// In-graph rope tables for `t` positions starting at the runtime scalar `pos`,
-/// shaped `[1, 1, t, head_dim / 2]`.
+/// In-graph rope tables for `t` positions starting at the runtime per-session
+/// positions `pos` (`[b]`, s32), shaped `[b, 1, t, head_dim / 2]`.
 fn rope_step(
     builder: &XlaBuilder,
     pos: &XlaOp,
+    b: i64,
     t: i64,
     head_dim: i64,
     max_period: f32,
 ) -> Result<(XlaOp, XlaOp)> {
-    let half = (head_dim / 2) as usize;
+    let half = head_dim / 2;
     let inv_freq: Vec<f32> =
         (0..half).map(|f| 1.0 / max_period.powf(f as f32 / half as f32)).collect();
-    let inv_freq = builder.constant_r1(&inv_freq)?.reshape(&[1, half as i64])?;
-    let iota = builder.iota(ElementType::S32, &[t], 0)?;
-    let positions = iota.add_(&pos.broadcast(&[t])?)?.convert(PrimitiveType::F32)?;
-    let freqs = positions.reshape(&[t, 1])?.mul_(&inv_freq)?; // [t, half]
-    let cos = freqs.cos()?.reshape(&[1, 1, t, half as i64])?;
-    let sin = freqs.sin()?.reshape(&[1, 1, t, half as i64])?;
+    let inv_freq = builder.constant_r1(&inv_freq)?.broadcast_in_dim(&[b, t, half], &[2])?;
+    let iota = builder.iota(ElementType::S32, &[b, t, half], 1)?;
+    let pos = pos.broadcast_in_dim(&[b, t, half], &[0])?;
+    let positions = iota.add_(&pos)?.convert(PrimitiveType::F32)?;
+    let freqs = positions.mul_(&inv_freq)?; // [b, t, half]
+    let cos = freqs.cos()?.reshape(&[b, 1, t, half])?;
+    let sin = freqs.sin()?.reshape(&[b, 1, t, half])?;
     Ok((cos, sin))
 }
 
-/// In-graph streaming attention mask `[t, context]`. Query row `i` (absolute
-/// position `pos + i`) may attend cache column `j` iff the slot is causal
-/// (`j - i <= context - t`) and has been written (`pos + t - context + j >= 0`).
-/// The cache holds the `context` most recent keys in order, oldest first.
-fn mask_step(builder: &XlaBuilder, pos: &XlaOp, t: i64, context: i64) -> Result<XlaOp> {
-    let ii = builder.iota(ElementType::S32, &[t, context], 0)?;
-    let jj = builder.iota(ElementType::S32, &[t, context], 1)?;
-    let causal = jj.sub_(&ii)?.le(&builder.c0((context - t) as i32)?)?;
-    let base = pos.add_(&builder.c0((t - context) as i32)?)?; // scalar
-    let written = jj.add_(&base.broadcast(&[t, context])?)?.ge(&builder.c0(0i32)?)?;
+/// In-graph streaming attention mask `[b, t, context]` for the shifted cache.
+/// Query row `i` of session `s` (absolute position `pos_s + i`) may attend
+/// cache column `j` iff the slot is causal (`j - i <= context - t`) and has
+/// been written (`pos_s + t - context + j >= 0`). Each session's cache holds
+/// its `context` most recent keys in order, oldest first.
+fn mask_step(builder: &XlaBuilder, pos: &XlaOp, b: i64, t: i64, context: i64) -> Result<XlaOp> {
+    let dims = [b, t, context];
+    let ii = builder.iota(ElementType::S32, &dims, 1)?;
+    let jj = builder.iota(ElementType::S32, &dims, 2)?;
+    let causal = jj.sub_(&ii)?.le(&builder.c0((context - t) as i32)?.broadcast(&dims)?)?;
+    let base = pos.add_(&builder.c0((t - context) as i32)?.broadcast(&[b])?)?; // [b]
+    let written = jj
+        .add_(&base.broadcast_in_dim(&dims, &[0])?)?
+        .ge(&builder.c0(0i32)?.broadcast(&dims)?)?;
     let cond = causal.and(&written)?;
-    let zeros = builder.c0(0f32)?.broadcast(&[t, context])?;
-    let neg = builder.c0(f32::NEG_INFINITY)?.broadcast(&[t, context])?;
+    let zeros = builder.c0(0f32)?.broadcast(&dims)?;
+    let neg = builder.c0(f32::NEG_INFINITY)?.broadcast(&dims)?;
     Ok(cond.select(&zeros, &neg)?)
 }
 
-/// In-graph ring-cache mask `[1, context]` for single-position steps: after
-/// this step's write at slot `pos % context`, cache slot `j` is valid iff it
-/// has ever been written, i.e. `j <= pos`. The slot order does not matter for
-/// the attention itself as the keys carry their rotary position embedding.
-fn ring_mask(builder: &XlaBuilder, pos: &XlaOp, context: i64) -> Result<XlaOp> {
-    let jj = builder.iota(ElementType::S32, &[context], 0)?;
-    let valid = jj.le(&pos.broadcast(&[context])?)?;
-    let zeros = builder.c0(0f32)?.broadcast(&[context])?;
-    let neg = builder.c0(f32::NEG_INFINITY)?.broadcast(&[context])?;
-    Ok(valid.select(&zeros, &neg)?.reshape(&[1, context])?)
+/// In-graph ring-cache mask `[b, 1, context]` for single-position steps:
+/// after this step's write at slot `pos_s % context`, cache slot `j` of
+/// session `s` is valid iff it has ever been written, i.e. `j <= pos_s`. The
+/// slot order does not matter for the attention itself as the keys carry
+/// their rotary position embedding.
+fn ring_mask(builder: &XlaBuilder, pos: &XlaOp, b: i64, context: i64) -> Result<XlaOp> {
+    let jj = builder.iota(ElementType::S32, &[b, context], 1)?;
+    let valid = jj.le(&pos.broadcast_in_dim(&[b, context], &[0])?)?;
+    let zeros = builder.c0(0f32)?.broadcast(&[b, context])?;
+    let neg = builder.c0(f32::NEG_INFINITY)?.broadcast(&[b, context])?;
+    Ok(valid.select(&zeros, &neg)?.reshape(&[b, 1, context])?)
+}
+
+/// A two-scalar computation returning its second argument, used as the
+/// scatter combiner for plain assignment.
+fn assign_computation(ty: ElementType) -> Result<xla::XlaComputation> {
+    let b = XlaBuilder::new("assign");
+    let _old = b.parameter(0, ty, &[], "old")?;
+    let new = b.parameter(1, ty, &[], "new")?;
+    Ok(b.build(&new)?)
 }
 
 struct MultiheadAttention {
@@ -314,32 +330,76 @@ impl MultiheadAttention {
         let q = apply_rotary_emb(&q, &cos, &sin)?;
         let k = apply_rotary_emb(&k, &cos, &sin)?;
 
-        let (idx_k, k_cache) = ctx.state_in(ty, &[b, h, c, hd])?;
-        let (idx_v, v_cache) = ctx.state_in(ty, &[b, h, c, hd])?;
+        // Reset-exempt: the validity masks (`ring_mask` / `mask_step`) are
+        // derived from the position state, so stale entries of a reset
+        // session are never attended and each slot is rewritten before
+        // becoming visible again.
+        let (idx_k, k_cache) = ctx.state_in_no_reset(ty, &[b, h, c, hd])?;
+        let (idx_v, v_cache) = ctx.state_in_no_reset(ty, &[b, h, c, hd])?;
         let (k_cache, v_cache) = if self.ring_kv_cache && t == 1 {
-            // Ring cache: write the new key/value at slot `pos % c`. Combined
-            // with the state aliasing this compiles to an in-place one-slot
-            // update instead of rewriting the whole cache. The matching
-            // validity mask is built by `ring_mask`.
+            // Ring cache: write each session's new key/value at its slot
+            // `pos % c` with a batched scatter. Combined with the state
+            // aliasing this compiles to an in-place one-slot update per
+            // session instead of rewriting the whole cache. Inactive sessions
+            // scatter to the out-of-bounds slot `c`, which XLA drops, leaving
+            // their cache untouched. The matching validity mask is built by
+            // `ring_mask`.
             let builder = xs.builder();
-            let zero = builder.c0(0i32)?;
-            let slot = pos.rem_(&builder.c0(c as i32)?)?;
-            let k_cache = k_cache.dynamic_update_slice(&k, &[&zero, &zero, &slot, &zero])?;
-            let v_cache = v_cache.dynamic_update_slice(&v, &[&zero, &zero, &slot, &zero])?;
-            (k_cache, v_cache)
+            let slot = pos.rem_(&builder.c0(c as i32)?.broadcast(&[b])?)?;
+            if ctx.mask().is_none() && ctx.reset().is_none() {
+                // Without per-session masking or resets every session is at
+                // the same position, so the write is a plain (in-place)
+                // dynamic-update-slice at a single shared slot. XLA lowers
+                // this much better than the batched scatter below, which its
+                // GPU backend expands into per-index serialized updates.
+                let zero = builder.c0(0i32)?;
+                let slot = slot.slice_in_dim1(0, 1, 0)?.reshape(&[])?;
+                let k_cache = k_cache.dynamic_update_slice(&k, &[&zero, &zero, &slot, &zero])?;
+                let v_cache = v_cache.dynamic_update_slice(&v, &[&zero, &zero, &slot, &zero])?;
+                (k_cache, v_cache)
+            } else {
+                // Inactive sessions scatter to the out-of-bounds slot `c`,
+                // which XLA drops, leaving their cache untouched.
+                let slot = match ctx.mask_pred()? {
+                    None => slot,
+                    Some(pred) => pred.select(&slot, &builder.c0(c as i32)?.broadcast(&[b])?)?,
+                };
+                // Scatter indices [b, 2]: (session, slot) pairs.
+                let iota_b = builder.iota(ElementType::S32, &[b, 1], 0)?;
+                let indices = iota_b.concat_in_dim(&[slot.reshape(&[b, 1])?], 1)?;
+                let assign = assign_computation(ty)?;
+                let scatter = |cache: &XlaOp, new: &XlaOp| -> Result<XlaOp> {
+                    Ok(cache.scatter(
+                        &indices,
+                        &new.reshape(&[b, h, hd])?,
+                        &assign,
+                        &[1, 2], // update window dims (h, hd in the updates)
+                        &[0, 2], // inserted window dims (batch and slot in the operand)
+                        &[0, 2], // index vector -> operand dims (batch, slot)
+                        1,
+                    )?)
+                };
+                (scatter(&k_cache, &k)?, scatter(&v_cache, &v)?)
+            }
         } else {
             // Multi-position step: shift the cache, chronological order.
             let k_cache = k_cache.slice_in_dim1(t, c, 2)?.concat_in_dim(&[k], 2)?;
             let v_cache = v_cache.slice_in_dim1(t, c, 2)?.concat_in_dim(&[v], 2)?;
             (k_cache, v_cache)
         };
-        ctx.state_out(idx_k, k_cache.clone());
-        ctx.state_out(idx_v, v_cache.clone());
+        if self.ring_kv_cache && t == 1 {
+            // Inactive sessions were skipped by the scatter itself.
+            ctx.state_out_raw(idx_k, k_cache.clone());
+            ctx.state_out_raw(idx_v, v_cache.clone());
+        } else {
+            ctx.state_out(idx_k, k_cache.clone())?;
+            ctx.state_out(idx_v, v_cache.clone())?;
+        }
 
         let scale = xs.builder().c0(1f32 / (hd as f32).sqrt())?.convert(dt)?;
         let attn = q.dot_general(&k_cache, &[3], &[3], &[0, 1], &[0, 1])?; // [b, h, t, c]
         let attn = attn.mul_(&scale)?;
-        let mask = mask.convert(dt)?.broadcast_in_dim(&[b, h, t, c], &[2, 3])?;
+        let mask = mask.convert(dt)?.broadcast_in_dim(&[b, h, t, c], &[0, 2, 3])?;
         // The softmax runs in f32 for numerical stability, as in the reference.
         let attn = attn.add_(&mask)?.convert(PrimitiveType::F32)?.softmax(-1)?.convert(dt)?;
         let out = attn.dot_general(&v_cache, &[3], &[2], &[0, 1], &[0, 1])?; // [b, h, t, hd]
@@ -536,18 +596,24 @@ impl Transformer {
     pub(crate) fn step(&self, xs: &XlaOp, ctx: &mut StepCtx) -> Result<XlaOp> {
         let t = xs.dims()?[1] as i64;
         let builder = xs.builder();
-        let (idx_pos, pos) = ctx.state_in(ElementType::S32, &[])?;
-        let (cos, sin) = rope_step(builder, &pos, t, self.head_dim, self.max_period)?;
+        let b = xs.dims()?[0] as i64;
+        let (idx_pos, pos) = ctx.state_in(ElementType::S32, &[b])?;
+        let (cos, sin) = rope_step(builder, &pos, b, t, self.head_dim, self.max_period)?;
         let mask = if self.ring_kv_cache && t == 1 {
-            ring_mask(builder, &pos, self.context)?
+            ring_mask(builder, &pos, b, self.context)?
         } else {
-            mask_step(builder, &pos, t, self.context)?
+            mask_step(builder, &pos, b, t, self.context)?
         };
         let mut xs = xs.clone();
         for layer in &self.layers {
             xs = layer.step(&xs, &cos, &sin, &mask, &pos, ctx)?;
         }
-        ctx.state_out(idx_pos, pos.add_(&builder.c0(t as i32)?)?);
+        // Inactive sessions do not advance their position.
+        let incr = match ctx.mask() {
+            None => builder.c0(t as i32)?.broadcast(&[b])?,
+            Some(m) => m.mul_(&builder.c0(t as i32)?.broadcast(&[b])?)?,
+        };
+        ctx.state_out_raw(idx_pos, pos.add_(&incr)?);
         Ok(xs)
     }
 }

@@ -107,7 +107,31 @@ impl LmModel {
     ) -> Result<XlaOp> {
         let b = text_token.dims()?[0] as i64;
         let d_model = self.text_emb.dims()?[1] as i64;
-        let mut emb = self.text_emb.take(text_token, 0)?.reshape(&[b, 1, d_model])?;
+        let builder = text_token.builder();
+        // On a session's first step (per-slot `is_first`), the audio codes
+        // are replaced by the padding token and the text token by the start
+        // token, as in the reference implementation.
+        let is_first = ctx.is_first_pred()?;
+        let text_token = match &is_first {
+            None => text_token.clone(),
+            Some(pred) => {
+                let start = builder.c0(self.text_start_token())?.broadcast(&[b])?;
+                pred.select(&start, text_token)?
+            }
+        };
+        let audio_codes = match &is_first {
+            None => audio_codes.clone(),
+            Some(pred) => {
+                let pad = builder.c0(self.audio_pad_token())?.broadcast(&[
+                    b,
+                    self.audio_codebooks() as i64,
+                    1,
+                ])?;
+                pred.broadcast_in_dim(&[b, self.audio_codebooks() as i64, 1], &[0])?
+                    .select(&pad, audio_codes)?
+            }
+        };
+        let mut emb = self.text_emb.take(&text_token, 0)?.reshape(&[b, 1, d_model])?;
         for (i, audio_emb) in self.audio_embs.iter().enumerate() {
             let id = audio_codes
                 .slice_in_dim1(i as i64, i as i64 + 1, 1)?
@@ -122,10 +146,21 @@ impl LmModel {
         let logits = ys.dot_general(&self.text_linear, &[rank - 1], &[1], &[], &[])?;
         // Greedy sampling: the reference uses gumbel_max which degenerates to
         // argmax at temperature 0 (computed over f32 logits).
-        Ok(logits
+        let token = logits
             .reshape(&[b, logits.dims()?[2] as i64])?
             .convert(PrimitiveType::F32)?
             .argmax(ElementType::S32, -1)?
-            .reshape(&[b])?)
+            .reshape(&[b])?;
+        // Inactive sessions keep their previous text token so that the
+        // on-device chain resumes where it left off.
+        match ctx.mask_pred()? {
+            None => Ok(token),
+            Some(pred) => Ok(pred.select(&token, &text_token)?),
+        }
+    }
+
+    /// The number of audio codebooks.
+    pub fn audio_codebooks(&self) -> usize {
+        self.audio_embs.len()
     }
 }

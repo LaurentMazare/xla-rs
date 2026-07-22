@@ -34,8 +34,11 @@ pub struct StepCtx<'a> {
     first_state_param: i64,
     next_param: i64,
     state_shapes: Vec<(ElementType, Vec<i64>)>,
+    state_ins: Vec<XlaOp>,
     new_states: Vec<Option<XlaOp>>,
     is_first: Option<XlaOp>,
+    mask: Option<XlaOp>,
+    reset: Option<XlaOp>,
 }
 
 impl<'a> StepCtx<'a> {
@@ -47,8 +50,38 @@ impl<'a> StepCtx<'a> {
             first_state_param,
             next_param: first_state_param,
             state_shapes: Vec::new(),
+            state_ins: Vec::new(),
             new_states: Vec::new(),
             is_first: None,
+            mask: None,
+            reset: None,
+        }
+    }
+
+    /// Provide a per-session activity mask, `[batch]` (s32, non-zero =
+    /// active). Inactive sessions do not make progress: their states keep
+    /// their previous values ([`state_out`](Self::state_out) selects between
+    /// the updated and the previous state per batch element) and the
+    /// transformer positions do not advance. All state tensors must then have
+    /// the batch as their leading dimension. Without a mask every session
+    /// steps unconditionally.
+    pub fn set_mask(&mut self, mask: XlaOp) {
+        self.mask = Some(mask);
+    }
+
+    /// The activity mask, if one was provided.
+    pub fn mask(&self) -> Option<&XlaOp> {
+        self.mask.as_ref()
+    }
+
+    /// The activity mask as a boolean `[batch]` vector, if one was provided.
+    pub(crate) fn mask_pred(&self) -> Result<Option<XlaOp>> {
+        match &self.mask {
+            None => Ok(None),
+            Some(m) => {
+                let b = m.dims()?[0] as i64;
+                Ok(Some(m.gt(&self.builder.c0(0i32)?.broadcast(&[b])?)?))
+            }
         }
     }
 
@@ -65,34 +98,106 @@ impl<'a> StepCtx<'a> {
         }
     }
 
-    /// Provide an `is_first` flag (a non-zero scalar on the first step, zero
-    /// afterwards). `Replicate`-padded convs use it to reproduce the whole-file
-    /// left padding exactly on the first step; without it they fall back to zero
-    /// left padding. This is only needed on the encode side.
+    /// Provide an `is_first` flag: non-zero on a session's first step, zero
+    /// afterwards, either as a scalar shared by the whole batch or as a
+    /// per-session `[batch]` vector. `Replicate`-padded convs use it to
+    /// reproduce the whole-file left padding exactly on the first step
+    /// (without it they fall back to zero left padding), and the ASR LM uses
+    /// it to substitute the audio padding token and the text start token.
     pub fn set_is_first(&mut self, is_first: XlaOp) {
         self.is_first = Some(is_first);
     }
 
-    /// The `is_first` flag as a boolean scalar, if one was provided.
+    /// The `is_first` flag as a boolean scalar or `[batch]` vector, if one
+    /// was provided.
     pub(crate) fn is_first_pred(&self) -> Result<Option<XlaOp>> {
         match &self.is_first {
             None => Ok(None),
-            Some(f) => Ok(Some(f.gt(&self.builder.c0(0i32)?)?)),
+            Some(f) => {
+                let dims: Vec<i64> = f.dims()?.iter().map(|d| *d as i64).collect();
+                let zeros = self.builder.c0(0i32)?.broadcast(&dims)?;
+                Ok(Some(f.gt(&zeros)?))
+            }
         }
     }
 
+    /// Provide a per-session reset vector, `[batch]` (s32, non-zero = reset).
+    /// All the states of a reset session are zeroed at the start of the step,
+    /// so the slot behaves like a fresh stream; combine with a per-session
+    /// `is_first` for that step. Resets apply regardless of the activity
+    /// mask. Must be set before the model declares its states.
+    pub fn set_reset(&mut self, reset: XlaOp) {
+        self.reset = Some(reset);
+    }
+
+    /// The reset vector, if one was provided.
+    pub fn reset(&self) -> Option<&XlaOp> {
+        self.reset.as_ref()
+    }
+
     /// Declare an input-state parameter, returning its slot index and node.
+    /// When a reset vector is set, the state of reset sessions reads as zero
+    /// (the state's leading dimension must then be the batch); the zeroed
+    /// value is also what inactive sessions keep through
+    /// [`state_out`](Self::state_out), so a reset sticks even on a masked
+    /// step.
     pub fn state_in(&mut self, ty: ElementType, dims: &[i64]) -> Result<(usize, XlaOp)> {
         let idx = self.state_shapes.len();
         let p = self.builder.parameter(self.next_param, ty, dims, &format!("state{idx}"))?;
         self.next_param += 1;
+        let p = match &self.reset {
+            None => p,
+            Some(reset) => {
+                let b = reset.dims()?[0] as i64;
+                let pred = reset.gt(&self.builder.c0(0i32)?.broadcast(&[b])?)?;
+                let zero = self.builder.zero(ty)?.broadcast(dims)?;
+                pred.broadcast_in_dim(dims, &[0])?.select(&zero, &p)?
+            }
+        };
         self.state_shapes.push((ty, dims.to_vec()));
+        self.state_ins.push(p.clone());
         self.new_states.push(None);
         Ok((idx, p))
     }
 
-    /// Record the updated value for the state slot returned by [`state_in`](Self::state_in).
-    pub fn state_out(&mut self, idx: usize, x: XlaOp) {
+    /// Like [`state_in`](Self::state_in) but exempt from the reset zeroing,
+    /// for states whose stale contents are unreachable after a reset anyway.
+    /// The kv caches are the important case: their validity masks derive from
+    /// the position state, so resetting the position alone hides every stale
+    /// entry (each cache slot is rewritten before it becomes visible again),
+    /// and skipping the zeroing keeps the update free of a full-cache select
+    /// that would break the in-place aliasing.
+    pub fn state_in_no_reset(&mut self, ty: ElementType, dims: &[i64]) -> Result<(usize, XlaOp)> {
+        let idx = self.state_shapes.len();
+        let p = self.builder.parameter(self.next_param, ty, dims, &format!("state{idx}"))?;
+        self.next_param += 1;
+        self.state_shapes.push((ty, dims.to_vec()));
+        self.state_ins.push(p.clone());
+        self.new_states.push(None);
+        Ok((idx, p))
+    }
+
+    /// Record the updated value for the state slot returned by
+    /// [`state_in`](Self::state_in). When an activity mask is set, inactive
+    /// batch elements keep their previous state instead (the state's leading
+    /// dimension must be the batch).
+    pub fn state_out(&mut self, idx: usize, x: XlaOp) -> Result<()> {
+        let x = match self.mask_pred()? {
+            None => x,
+            Some(pred) => {
+                let old = &self.state_ins[idx];
+                let dims: Vec<i64> = old.dims()?.iter().map(|d| *d as i64).collect();
+                pred.broadcast_in_dim(&dims, &[0])?.select(&x, old)?
+            }
+        };
+        self.new_states[idx] = Some(x);
+        Ok(())
+    }
+
+    /// Record the updated value for a state slot without applying the
+    /// activity mask, for states whose update handles inactive sessions
+    /// itself (e.g. the ring kv cache writes and the position counters).
+    pub fn state_out_raw(&mut self, idx: usize, x: XlaOp) {
         self.new_states[idx] = Some(x);
     }
 

@@ -156,13 +156,19 @@ impl StreamableConv1d {
                     let repl = xs
                         .slice_in_dim1(0, 1, 2)?
                         .broadcast_in_dim(&[b, in_c, carry], &[0, 1, 2])?;
-                    is_first.broadcast(&[b, in_c, carry])?.select(&repl, &state)?
+                    // The flag is either a scalar or a per-session [b] vector.
+                    let is_first = if is_first.rank()? == 0 {
+                        is_first.broadcast(&[b, in_c, carry])?
+                    } else {
+                        is_first.broadcast_in_dim(&[b, in_c, carry], &[0])?
+                    };
+                    is_first.select(&repl, &state)?
                 }
                 _ => state,
             };
             let combined = pad.concat_in_dim(std::slice::from_ref(xs), 2)?;
             let clen = combined.dims()?[2] as i64;
-            ctx.state_out(idx, combined.slice_in_dim1(clen - carry, clen, 2)?);
+            ctx.state_out(idx, combined.slice_in_dim1(clen - carry, clen, 2)?)?;
             combined
         } else {
             xs.clone()
@@ -239,7 +245,7 @@ impl StreamableConvTranspose1d {
             let tail = ys.slice_in_dim1(carry, ot, 2)?;
             let ys = head.concat_in_dim(&[tail], 2)?;
             let valid_len = ot - carry;
-            ctx.state_out(idx, ys.slice_in_dim1(valid_len, ot, 2)?);
+            ctx.state_out(idx, ys.slice_in_dim1(valid_len, ot, 2)?)?;
             ys.slice_in_dim1(0, valid_len, 2)?
         } else {
             ys

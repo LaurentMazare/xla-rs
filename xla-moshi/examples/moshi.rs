@@ -63,6 +63,13 @@ enum Command {
         /// transcript of the first element is reported.
         #[arg(short, long, default_value_t = 1)]
         batch_size: usize,
+
+        /// Masked-batching check (requires --batch-size 2): slot 0 consumes
+        /// the audio one chunk per step, slot 1 only on even steps and is
+        /// masked out (and fed garbage frames) on odd steps. Both transcripts
+        /// are printed and should match the batch-1 run exactly.
+        #[arg(long)]
+        mask_check: bool,
     },
 }
 
@@ -188,8 +195,8 @@ fn main() -> Result<()> {
                 audio_to_audio(input, output, codebooks, cpu)
             }
         }
-        Command::Asr { input, cpu, verbose, dtype, batch_size } => {
-            run_asr(input, cpu, verbose, &dtype, batch_size)
+        Command::Asr { input, cpu, verbose, dtype, batch_size, mask_check } => {
+            run_asr(input, cpu, verbose, &dtype, batch_size, mask_check)
         }
     }
 }
@@ -439,15 +446,53 @@ fn download_asr_model() -> Result<(std::path::PathBuf, std::path::PathBuf, std::
 // 0/2/3/4 (end-of-phrase, end-of-stream, padding, silence padding) delimit
 // words, other tokens accumulate into the current word, and the model output
 // lags the audio by `ASR_DELAY_SECONDS`.
+/// Per-session word assembly: boundary tokens flush the current word,
+/// everything else (once past the asr delay) extends it. `all_text_tokens`
+/// re-inserts the `3` separator between words so that the sentencepiece
+/// decoding handles spacing.
+struct WordState {
+    step_idx: usize,
+    word_tokens: Vec<u32>,
+    all_text_tokens: Vec<u32>,
+}
+
+impl WordState {
+    fn new() -> Self {
+        Self { step_idx: 0, word_tokens: vec![], all_text_tokens: vec![] }
+    }
+
+    /// Returns true when a word was flushed (new text may be available).
+    fn on_token(&mut self, token: i32, delay: usize, boundary: &[i32]) -> bool {
+        self.step_idx += 1;
+        if self.step_idx < delay {
+            return false;
+        }
+        if boundary.contains(&token) {
+            if !self.word_tokens.is_empty() {
+                self.all_text_tokens.push(3);
+                self.all_text_tokens.append(&mut self.word_tokens);
+                return true;
+            }
+        } else {
+            self.word_tokens.push(token as u32);
+        }
+        false
+    }
+}
+
 fn run_asr(
     input: std::path::PathBuf,
     cpu: bool,
     verbose: bool,
     dtype: &str,
     batch_size: usize,
+    mask_check: bool,
 ) -> Result<()> {
     use std::io::Write;
 
+    if mask_check && batch_size != 2 {
+        anyhow::bail!("--mask-check requires --batch-size 2");
+    }
     let lm_dtype = match dtype {
         "f32" => ElementType::F32,
         "bf16" => ElementType::Bf16,
@@ -497,9 +542,18 @@ fn run_asr(
     let enc_vb = xla_nn::VarBuilder::new(&enc_builder, ElementType::F32, 1);
     let enc_model = Mimi::load(&Vb::new(&enc_vb), mimi_config)?;
     let enc_w = enc_vb.num_vars() as i64;
-    let is_first = enc_builder.parameter(1 + enc_w, ElementType::S32, &[], "is_first")?;
-    let mut enc_ctx = xla_moshi::StepCtx::new(&enc_builder, 2 + enc_w);
+    let is_first = enc_builder.parameter(1 + enc_w, ElementType::S32, &[bs], "is_first")?;
+    let enc_mask = enc_builder.parameter(2 + enc_w, ElementType::S32, &[bs], "mask")?;
+    let enc_reset = enc_builder.parameter(3 + enc_w, ElementType::S32, &[bs], "reset")?;
+    let mut enc_ctx = xla_moshi::StepCtx::new(&enc_builder, 4 + enc_w);
     enc_ctx.set_is_first(is_first);
+    // Without masking the kv-cache updates take a faster path, so the mask
+    // and reset inputs are only wired in when the run exercises them (they
+    // are still passed as parameters to keep the buffer layout uniform).
+    if mask_check {
+        enc_ctx.set_mask(enc_mask);
+        enc_ctx.set_reset(enc_reset);
+    }
     let codes = enc_model.encode_step(&frame, &mut enc_ctx)?;
     let enc_state_shapes: Vec<_> = enc_ctx.state_shapes().to_vec();
     // States are output tuple elements 1.. and alias their input parameters,
@@ -514,9 +568,17 @@ fn run_asr(
     let lm_builder = XlaBuilder::new("asr-lm-step");
     let codes_in = lm_builder.parameter(0, ElementType::S64, &[bs, n_q as i64, 1], "codes")?;
     let text_in = lm_builder.parameter(1, ElementType::S32, &[bs], "text_token")?;
-    let lm_vb = xla_nn::VarBuilder::new(&lm_builder, lm_dtype, 2);
+    let lm_mask = lm_builder.parameter(2, ElementType::S32, &[bs], "mask")?;
+    let lm_is_first = lm_builder.parameter(3, ElementType::S32, &[bs], "is_first")?;
+    let lm_reset = lm_builder.parameter(4, ElementType::S32, &[bs], "reset")?;
+    let lm_vb = xla_nn::VarBuilder::new(&lm_builder, lm_dtype, 5);
     let lm_model = xla_moshi::lm::LmModel::load(&Vb::new(&lm_vb), &lm_config)?;
-    let mut lm_ctx = xla_moshi::StepCtx::new(&lm_builder, 2 + lm_vb.num_vars() as i64);
+    let mut lm_ctx = xla_moshi::StepCtx::new(&lm_builder, 5 + lm_vb.num_vars() as i64);
+    lm_ctx.set_is_first(lm_is_first);
+    if mask_check {
+        lm_ctx.set_mask(lm_mask);
+        lm_ctx.set_reset(lm_reset);
+    }
     let next_token = lm_model.step(&text_in, &codes_in, &mut lm_ctx)?;
     let lm_state_shapes: Vec<_> = lm_ctx.state_shapes().to_vec();
     lm_ctx.setup_aliases(1);
@@ -556,70 +618,96 @@ fn run_asr(
         .iter()
         .map(|(ty, d)| zeros_buffer(&client, *ty, d))
         .collect::<Result<Vec<_>>>()?;
-    // The first LM step gets the text start token and padding audio codes (the
-    // first slice of real codes is discarded, without shifting the following
-    // slices).
+    // On each session's first step the graph substitutes the text start
+    // token and the audio padding codes itself (driven by `is_first`), so the
+    // initial text buffer contents are arbitrary.
     let mut text_buf = client.buffer_from_host_buffer(
         &vec![lm_model.text_start_token(); batch_size],
         &[batch_size],
         None,
     )?;
-    let pad_codes = vec![lm_model.audio_pad_token(); batch_size * n_q];
-    let pad_codes_buf = client.buffer_from_host_buffer(&pad_codes, &[batch_size, n_q, 1], None)?;
-    let is_first_true = client.buffer_from_host_buffer(&[1i32], &[], None)?;
-    let is_first_false = client.buffer_from_host_buffer(&[0i32], &[], None)?;
+    let flags_buf = |v: &[i32]| client.buffer_from_host_buffer(v, &[batch_size], None);
+    let all_ones = flags_buf(&vec![1i32; batch_size])?;
+    let all_zeros = flags_buf(&vec![0i32; batch_size])?;
 
-    let mut step_idx = 0usize;
-    let mut word_tokens: Vec<u32> = vec![];
-    // All text tokens with the `3` separator re-inserted between words, so
-    // that sentencepiece handles spacing.
-    let mut all_text_tokens: Vec<u32> = vec![];
+    // In the mask check, slot 1 consumes its audio at half rate, so the run
+    // is extended until it has seen every chunk; slot 0 finishes at half time
+    // and is then reset to transcribe the whole audio a second time.
+    let num_steps = if mask_check { 2 * num_chunks } else { num_chunks };
+    let mut words: Vec<WordState> = (0..batch_size).map(|_| WordState::new()).collect();
+    let mut finished: Vec<(usize, Vec<u32>)> = vec![];
     let mut last_decoded_len = 0;
-    // Word assembly: boundary tokens flush the current word, everything else
-    // (once past the delay) extends it.
-    let mut on_text_token = |text_token: i32| -> Result<()> {
-        step_idx += 1;
-        if step_idx >= asr_delay_in_tokens {
-            if WORD_BOUNDARY_TOKENS.contains(&text_token) {
-                if !word_tokens.is_empty() {
-                    all_text_tokens.push(3);
-                    all_text_tokens.append(&mut word_tokens);
-                    let text = sp.decode_piece_ids(&all_text_tokens);
-                    if text.len() > last_decoded_len && !verbose {
-                        print!("{}", &text[last_decoded_len..]);
-                        std::io::stdout().flush()?;
-                    }
-                    last_decoded_len = text.len();
-                }
-            } else {
-                word_tokens.push(text_token as u32);
-            }
+    // The masks of the step whose token has not been read back yet.
+    let mut prev_masks: Vec<i32> = vec![1; batch_size];
+
+    // The chunk consumed by a session at a given step (None when the session
+    // is inactive), plus whether this is the session's first step.
+    let slot_chunk = |slot: usize, f: usize| -> (Option<usize>, bool) {
+        if !mask_check {
+            (Some(f), f == 0)
+        } else if slot == 0 {
+            // First pass over the audio, then a reset and a second pass.
+            let chunk = if f < num_chunks { f } else { f - num_chunks };
+            (Some(chunk), f == 0 || f == num_chunks)
+        } else {
+            (f.is_multiple_of(2).then_some(f / 2), f == 0)
         }
-        Ok(())
     };
 
-    for f in 0..num_chunks {
-        let chunk_start = f * FRAME_SIZE;
-        let chunk_end = (chunk_start + FRAME_SIZE).min(pcm_data.len());
-        let mut chunk: Vec<f32> = pcm_data[chunk_start..chunk_end].to_vec();
-        chunk.resize(FRAME_SIZE, 0.0);
-        let chunk = chunk.repeat(batch_size);
+    for f in 0..num_steps {
+        let mut frame = vec![0f32; batch_size * FRAME_SIZE];
+        let mut masks = vec![0i32; batch_size];
+        let mut firsts = vec![0i32; batch_size];
+        for (slot, mask) in masks.iter_mut().enumerate() {
+            let row = &mut frame[slot * FRAME_SIZE..(slot + 1) * FRAME_SIZE];
+            let (chunk, is_first) = slot_chunk(slot, f);
+            firsts[slot] = i32::from(is_first);
+            match chunk {
+                Some(ci) => {
+                    *mask = 1;
+                    let cs = ci * FRAME_SIZE;
+                    let ce = (cs + FRAME_SIZE).min(pcm_data.len());
+                    row[..ce - cs].copy_from_slice(&pcm_data[cs..ce]);
+                }
+                None => {
+                    // Garbage samples: with a working mask these must not
+                    // leak into the session's state.
+                    row.fill(7.5);
+                }
+            }
+        }
+        // A session's first step after step 0 means the slot is recycled for
+        // a new session: reset its states.
+        let resets: Vec<i32> = firsts.iter().map(|&x| if f > 0 { x } else { 0 }).collect();
         let step_start = std::time::Instant::now();
+
+        let mask_buf = if masks.iter().all(|&m| m == 1) { None } else { Some(flags_buf(&masks)?) };
+        let mask_buf = mask_buf.as_ref().unwrap_or(&all_ones);
+        let firsts_buf =
+            if firsts.iter().all(|&x| x == 0) { None } else { Some(flags_buf(&firsts)?) };
+        let firsts_buf = firsts_buf.as_ref().unwrap_or(&all_zeros);
+        let resets_buf =
+            if resets.iter().all(|&x| x == 0) { None } else { Some(flags_buf(&resets)?) };
+        let resets_buf = resets_buf.as_ref().unwrap_or(&all_zeros);
 
         // Mimi encode: one frame of audio -> one slice of codes.
         let frame_buf =
-            client.buffer_from_host_buffer(&chunk, &[batch_size, 1, FRAME_SIZE], None)?;
+            client.buffer_from_host_buffer(&frame, &[batch_size, 1, FRAME_SIZE], None)?;
         let mut inputs: Vec<&xla::PjRtBuffer> = vec![&frame_buf];
         inputs.extend(enc_weights.iter());
-        inputs.push(if f == 0 { &is_first_true } else { &is_first_false });
+        inputs.push(firsts_buf);
+        inputs.push(mask_buf);
+        inputs.push(resets_buf);
         inputs.extend(enc_states.iter());
         let mut out = enc_exe.execute_b(&inputs)?.into_iter().next().context("no enc output")?;
         let codes_buf = out.remove(0);
         enc_states = out;
 
-        // LM step: the code slice plus the previous text token -> next token.
-        let codes_buf = if f == 0 { &pad_codes_buf } else { &codes_buf };
-        let mut inputs: Vec<&xla::PjRtBuffer> = vec![codes_buf, &text_buf];
+        // LM step: the code slice plus the previous text token -> next token
+        // (the graph substitutes the padding codes and the start token on a
+        // session's first step).
+        let mut inputs: Vec<&xla::PjRtBuffer> =
+            vec![&codes_buf, &text_buf, mask_buf, firsts_buf, resets_buf];
         inputs.extend(lm_weights.iter());
         inputs.extend(lm_states.iter());
         let mut out = lm_exe.execute_b(&inputs)?.into_iter().next().context("no lm output")?;
@@ -629,29 +717,67 @@ fn run_asr(
         // step's input), so this step's readback can wait until the next
         // iteration has been dispatched: the host word assembly runs one step
         // behind and the device queue never drains. `text_buf` currently
-        // holds the previous step's token, which has not been read yet.
+        // holds the previous step's tokens, which have not been read yet.
         let prev_token_buf = std::mem::replace(&mut text_buf, token_buf);
         if f > 0 {
-            let text_token = prev_token_buf.to_literal_sync()?.to_vec::<i32>()?[0];
+            let tokens = prev_token_buf.to_literal_sync()?.to_vec::<i32>()?;
             if verbose {
                 println!(
-                    "  chunk {}/{} -> token {} in {:.2}ms",
+                    "  step {}/{} -> tokens {:?} in {:.2}ms",
                     f + 1,
-                    num_chunks,
-                    text_token,
+                    num_steps,
+                    tokens,
                     step_start.elapsed().as_secs_f64() * 1000.0
                 );
             }
-            on_text_token(text_token)?;
+            for (slot, &token) in tokens.iter().enumerate() {
+                // Sessions inactive at the step that produced this token did
+                // not step: their (unchanged) token must not be re-counted.
+                if prev_masks[slot] == 0 {
+                    continue;
+                }
+                let flushed =
+                    words[slot].on_token(token, asr_delay_in_tokens, &WORD_BOUNDARY_TOKENS);
+                if slot == 0 && flushed && !verbose && !mask_check {
+                    let text = sp.decode_piece_ids(&words[0].all_text_tokens);
+                    if text.len() > last_decoded_len {
+                        print!("{}", &text[last_decoded_len..]);
+                        std::io::stdout().flush()?;
+                    }
+                    last_decoded_len = text.len();
+                }
+            }
+        }
+        // The tokens read above belong to the previous step; a reset starting
+        // this step closes the slot's previous session afterwards.
+        for (slot, &reset) in resets.iter().enumerate() {
+            if reset != 0 {
+                let w = std::mem::replace(&mut words[slot], WordState::new());
+                finished.push((slot, w.all_text_tokens));
+            }
+        }
+        prev_masks = masks;
+    }
+    // Flush the last in-flight tokens.
+    let tokens = text_buf.to_literal_sync()?.to_vec::<i32>()?;
+    for (slot, &token) in tokens.iter().enumerate() {
+        if prev_masks[slot] != 0 {
+            words[slot].on_token(token, asr_delay_in_tokens, &WORD_BOUNDARY_TOKENS);
         }
     }
-    // Flush the last in-flight token.
-    let text_token = text_buf.to_literal_sync()?.to_vec::<i32>()?[0];
-    on_text_token(text_token)?;
     println!();
     println!("---");
-    if verbose {
-        let decoded_text = sp.decode_piece_ids(&all_text_tokens);
+    if mask_check {
+        for (slot, tokens) in finished.iter() {
+            println!("slot {slot} (finished session): {}", sp.decode_piece_ids(tokens));
+            println!("---");
+        }
+        for (slot, w) in words.iter().enumerate() {
+            println!("slot {slot}: {}", sp.decode_piece_ids(&w.all_text_tokens));
+            println!("---");
+        }
+    } else if verbose {
+        let decoded_text = sp.decode_piece_ids(&words[0].all_text_tokens);
         println!("{decoded_text}\n---");
     }
     let elapsed = start.elapsed();
