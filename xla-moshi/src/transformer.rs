@@ -329,33 +329,36 @@ impl MultiheadAttention {
         let sin = sin.convert(dt)?;
         let q = apply_rotary_emb(&q, &cos, &sin)?;
         let k = apply_rotary_emb(&k, &cos, &sin)?;
+        // The caches are stored slot-major, `[b, slot, h, hd]`: XLA's scatter
+        // normalization wants the indexed (session, slot) dimensions leading,
+        // and with this layout the batched scatter lowers without the two
+        // full-cache transposes it otherwise inserts. The attention below
+        // contracts this layout directly (dot_general does not need the batch
+        // dims to be adjacent), so no transpose appears anywhere.
+        let k = k.transpose(&[0, 2, 1, 3])?; // [b, t, h, hd]
+        let v = v.transpose(&[0, 2, 1, 3])?;
 
         // Reset-exempt: the validity masks (`ring_mask` / `mask_step`) are
         // derived from the position state, so stale entries of a reset
         // session are never attended and each slot is rewritten before
         // becoming visible again.
-        let (idx_k, k_cache) = ctx.state_in_no_reset(ty, &[b, h, c, hd])?;
-        let (idx_v, v_cache) = ctx.state_in_no_reset(ty, &[b, h, c, hd])?;
+        let (idx_k, k_cache) = ctx.state_in_no_reset(ty, &[b, c, h, hd])?;
+        let (idx_v, v_cache) = ctx.state_in_no_reset(ty, &[b, c, h, hd])?;
         let (k_cache, v_cache) = if self.ring_kv_cache && t == 1 {
             // Ring cache: write each session's new key/value at its slot
-            // `pos % c` with a batched scatter. Combined with the state
-            // aliasing this compiles to an in-place one-slot update per
-            // session instead of rewriting the whole cache. Inactive sessions
-            // scatter to the out-of-bounds slot `c`, which XLA drops, leaving
-            // their cache untouched. The matching validity mask is built by
-            // `ring_mask`.
+            // `pos % c`. Combined with the state aliasing this compiles to an
+            // in-place one-slot update per session instead of rewriting the
+            // whole cache. The matching validity mask is built by `ring_mask`.
             let builder = xs.builder();
             let slot = pos.rem_(&builder.c0(c as i32)?.broadcast(&[b])?)?;
             if ctx.mask().is_none() && ctx.reset().is_none() {
                 // Without per-session masking or resets every session is at
                 // the same position, so the write is a plain (in-place)
-                // dynamic-update-slice at a single shared slot. XLA lowers
-                // this much better than the batched scatter below, which its
-                // GPU backend expands into per-index serialized updates.
+                // dynamic-update-slice at a single shared slot.
                 let zero = builder.c0(0i32)?;
                 let slot = slot.slice_in_dim1(0, 1, 0)?.reshape(&[])?;
-                let k_cache = k_cache.dynamic_update_slice(&k, &[&zero, &zero, &slot, &zero])?;
-                let v_cache = v_cache.dynamic_update_slice(&v, &[&zero, &zero, &slot, &zero])?;
+                let k_cache = k_cache.dynamic_update_slice(&k, &[&zero, &slot, &zero, &zero])?;
+                let v_cache = v_cache.dynamic_update_slice(&v, &[&zero, &slot, &zero, &zero])?;
                 (k_cache, v_cache)
             } else {
                 // Inactive sessions scatter to the out-of-bounds slot `c`,
@@ -374,8 +377,8 @@ impl MultiheadAttention {
                         &new.reshape(&[b, h, hd])?,
                         &assign,
                         &[1, 2], // update window dims (h, hd in the updates)
-                        &[0, 2], // inserted window dims (batch and slot in the operand)
-                        &[0, 2], // index vector -> operand dims (batch, slot)
+                        &[0, 1], // inserted window dims (session and slot in the operand)
+                        &[0, 1], // index vector -> operand dims (session, slot)
                         1,
                     )?)
                 };
@@ -383,8 +386,8 @@ impl MultiheadAttention {
             }
         } else {
             // Multi-position step: shift the cache, chronological order.
-            let k_cache = k_cache.slice_in_dim1(t, c, 2)?.concat_in_dim(&[k], 2)?;
-            let v_cache = v_cache.slice_in_dim1(t, c, 2)?.concat_in_dim(&[v], 2)?;
+            let k_cache = k_cache.slice_in_dim1(t, c, 1)?.concat_in_dim(&[k], 1)?;
+            let v_cache = v_cache.slice_in_dim1(t, c, 1)?.concat_in_dim(&[v], 1)?;
             (k_cache, v_cache)
         };
         if self.ring_kv_cache && t == 1 {
@@ -396,13 +399,17 @@ impl MultiheadAttention {
             ctx.state_out(idx_v, v_cache.clone())?;
         }
 
+        // q: [b, h, t, hd] x k_cache: [b, slot, h, hd], contracting hd with
+        // batch dims (b, h) -> [b, h, t, slot].
         let scale = xs.builder().c0(1f32 / (hd as f32).sqrt())?.convert(dt)?;
-        let attn = q.dot_general(&k_cache, &[3], &[3], &[0, 1], &[0, 1])?; // [b, h, t, c]
+        let attn = q.dot_general(&k_cache, &[3], &[3], &[0, 1], &[0, 2])?; // [b, h, t, c]
         let attn = attn.mul_(&scale)?;
         let mask = mask.convert(dt)?.broadcast_in_dim(&[b, h, t, c], &[0, 2, 3])?;
         // The softmax runs in f32 for numerical stability, as in the reference.
         let attn = attn.add_(&mask)?.convert(PrimitiveType::F32)?.softmax(-1)?.convert(dt)?;
-        let out = attn.dot_general(&v_cache, &[3], &[2], &[0, 1], &[0, 1])?; // [b, h, t, hd]
+        // probs: [b, h, t, slot] x v_cache: [b, slot, h, hd], contracting the
+        // slot dim with batch dims (b, h) -> [b, h, t, hd].
+        let out = attn.dot_general(&v_cache, &[3], &[1], &[0, 1], &[0, 2])?; // [b, h, t, hd]
         let out = out.transpose(&[0, 2, 1, 3])?.reshape(&[b, t, d_model])?;
         self.out_proj.forward(&out)
     }

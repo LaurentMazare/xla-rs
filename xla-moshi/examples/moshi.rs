@@ -70,6 +70,12 @@ enum Command {
         /// are printed and should match the batch-1 run exactly.
         #[arg(long)]
         mask_check: bool,
+
+        /// Wire the per-session activity mask and reset inputs into the step
+        /// graphs even though this run keeps every session active (for
+        /// benchmarking the masked path).
+        #[arg(long)]
+        masked: bool,
     },
 }
 
@@ -195,8 +201,8 @@ fn main() -> Result<()> {
                 audio_to_audio(input, output, codebooks, cpu)
             }
         }
-        Command::Asr { input, cpu, verbose, dtype, batch_size, mask_check } => {
-            run_asr(input, cpu, verbose, &dtype, batch_size, mask_check)
+        Command::Asr { input, cpu, verbose, dtype, batch_size, mask_check, masked } => {
+            run_asr(input, cpu, verbose, &dtype, batch_size, mask_check, masked)
         }
     }
 }
@@ -487,12 +493,14 @@ fn run_asr(
     dtype: &str,
     batch_size: usize,
     mask_check: bool,
+    masked: bool,
 ) -> Result<()> {
     use std::io::Write;
 
     if mask_check && batch_size != 2 {
         anyhow::bail!("--mask-check requires --batch-size 2");
     }
+    let masked = masked || mask_check;
     let lm_dtype = match dtype {
         "f32" => ElementType::F32,
         "bf16" => ElementType::Bf16,
@@ -550,7 +558,7 @@ fn run_asr(
     // Without masking the kv-cache updates take a faster path, so the mask
     // and reset inputs are only wired in when the run exercises them (they
     // are still passed as parameters to keep the buffer layout uniform).
-    if mask_check {
+    if masked {
         enc_ctx.set_mask(enc_mask);
         enc_ctx.set_reset(enc_reset);
     }
@@ -575,7 +583,7 @@ fn run_asr(
     let lm_model = xla_moshi::lm::LmModel::load(&Vb::new(&lm_vb), &lm_config)?;
     let mut lm_ctx = xla_moshi::StepCtx::new(&lm_builder, 5 + lm_vb.num_vars() as i64);
     lm_ctx.set_is_first(lm_is_first);
-    if mask_check {
+    if masked {
         lm_ctx.set_mask(lm_mask);
         lm_ctx.set_reset(lm_reset);
     }
