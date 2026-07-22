@@ -40,6 +40,25 @@ enum Command {
         #[arg(long, default_value_t = false)]
         streaming: bool,
     },
+
+    /// Run speech-to-text on an audio file (greedy decoding).
+    Asr {
+        /// Input audio file to process.
+        input: std::path::PathBuf,
+
+        /// Use CPU even if an accelerator is available.
+        #[arg(long, default_value_t = false)]
+        cpu: bool,
+
+        /// Print per-chunk timings instead of the streaming transcript.
+        #[arg(long)]
+        verbose: bool,
+
+        /// The dtype for the LM weights and computation, f32 or bf16 (the
+        /// Mimi audio codec always runs in f32).
+        #[arg(long, default_value = "f32")]
+        dtype: String,
+    },
 }
 
 fn download_mimi_model() -> Result<std::path::PathBuf> {
@@ -164,6 +183,7 @@ fn main() -> Result<()> {
                 audio_to_audio(input, output, codebooks, cpu)
             }
         }
+        Command::Asr { input, cpu, verbose, dtype } => run_asr(input, cpu, verbose, &dtype),
     }
 }
 
@@ -175,6 +195,9 @@ fn zeros_buffer(client: &PjRtClient, ty: ElementType, dims: &[i64]) -> Result<xl
     Ok(match ty {
         ElementType::F32 => client.buffer_from_host_buffer(&vec![0f32; n], &dims_u, None)?,
         ElementType::S32 => client.buffer_from_host_buffer(&vec![0i32; n], &dims_u, None)?,
+        ElementType::Bf16 => {
+            client.buffer_from_host_raw_bytes(ty, &vec![0u8; 2 * n], &dims_u, None)?
+        }
         other => anyhow::bail!("unsupported streaming state dtype {other:?}"),
     })
 }
@@ -288,5 +311,314 @@ fn audio_to_audio_streaming(
     let mut writer = std::io::BufWriter::new(file);
     kaudio::wav::write_pcm_as_wav(&mut writer, &audio, target_sample_rate as u32, 1)?;
     println!("Done.");
+    Ok(())
+}
+
+/// A minimal sentencepiece detokenizer: the piece table is scanned out of the
+/// protobuf `.model` file by hand (field 1 of `ModelProto` holds the repeated
+/// `SentencePiece` messages, whose field 1 is the piece string and field 3 the
+/// piece type). Detokenization concatenates the pieces of the normal tokens,
+/// maps the `▁` marker to a space, and drops the leading space, matching
+/// `SentencePieceProcessor::Decode`. The `sentencepiece` C++ library is not
+/// used on purpose: it links the system protobuf whose symbols clash with the
+/// protobuf bundled in `libxla_extension.so` (decoding crashes in a protobuf
+/// consistency check when both are loaded).
+struct SpDecoder {
+    // The piece text for normal tokens, None for control/unknown pieces.
+    pieces: Vec<Option<String>>,
+}
+
+impl SpDecoder {
+    fn open(path: &std::path::Path) -> Result<Self> {
+        let data = std::fs::read(path)?;
+        let mut pieces = vec![];
+        let mut pos = 0usize;
+        let varint = |data: &[u8], pos: &mut usize| -> Result<u64> {
+            let mut v = 0u64;
+            let mut shift = 0u32;
+            loop {
+                let b = *data.get(*pos).context("truncated varint")?;
+                *pos += 1;
+                v |= u64::from(b & 0x7f) << shift;
+                if b & 0x80 == 0 {
+                    return Ok(v);
+                }
+                shift += 7;
+            }
+        };
+        while pos < data.len() {
+            let tag = varint(&data, &mut pos)?;
+            let (field, wire) = (tag >> 3, tag & 7);
+            if field == 1 && wire == 2 {
+                // A SentencePiece sub-message.
+                let len = varint(&data, &mut pos)? as usize;
+                let end = pos + len;
+                let (mut piece, mut kind) = (None, 1u64); // type defaults to NORMAL
+                while pos < end {
+                    let tag = varint(&data, &mut pos)?;
+                    match (tag >> 3, tag & 7) {
+                        (1, 2) => {
+                            let len = varint(&data, &mut pos)? as usize;
+                            piece =
+                                Some(String::from_utf8_lossy(&data[pos..pos + len]).into_owned());
+                            pos += len;
+                        }
+                        (3, 0) => kind = varint(&data, &mut pos)?,
+                        (_, 0) => {
+                            varint(&data, &mut pos)?;
+                        }
+                        (_, 5) => pos += 4,
+                        (_, 2) => {
+                            let len = varint(&data, &mut pos)? as usize;
+                            pos += len;
+                        }
+                        (f, w) => anyhow::bail!("unsupported piece field {f} wire type {w}"),
+                    }
+                }
+                // 1 = NORMAL, 4 = USER_DEFINED; the rest never produces text.
+                pieces.push(piece.filter(|_| kind == 1 || kind == 4));
+            } else {
+                // Skip the other top-level fields (trainer/normalizer specs).
+                match wire {
+                    0 => {
+                        varint(&data, &mut pos)?;
+                    }
+                    5 => pos += 4,
+                    2 => {
+                        let len = varint(&data, &mut pos)? as usize;
+                        pos += len;
+                    }
+                    w => anyhow::bail!("unsupported top-level wire type {w}"),
+                }
+            }
+        }
+        Ok(Self { pieces })
+    }
+
+    fn decode_piece_ids(&self, ids: &[u32]) -> String {
+        let mut out = String::new();
+        for &id in ids {
+            if let Some(Some(p)) = self.pieces.get(id as usize) {
+                out.push_str(&p.replace('\u{2581}', " "));
+            }
+        }
+        out.strip_prefix(' ').map(str::to_string).unwrap_or(out)
+    }
+}
+
+/// Download the stt-2.6b-en model files (LM, mimi codec, sentencepiece
+/// tokenizer) from the hugging face hub.
+fn download_asr_model() -> Result<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf)> {
+    let repo_id = "kyutai/stt-2.6b-en-candle";
+    println!("Downloading ASR model from {repo_id}...");
+    let client = hf_hub::HFClientSync::new()?;
+    let (owner, name) = repo_id.split_once('/').context("invalid repo")?;
+    let repo = client.model(owner, name);
+    let lm = repo.download_file().filename("model.safetensors").send()?;
+    let mimi = repo.download_file().filename("mimi-pytorch-e351c8d8@125.safetensors").send()?;
+    let tokenizer = repo.download_file().filename("tokenizer_en_audio_4000.model").send()?;
+    println!("  LM at {}", lm.display());
+    Ok((lm, mimi, tokenizer))
+}
+
+// Speech-to-text, mirroring the `asr` command of the `xn-moshi` example: one
+// Mimi encode step turns each 80ms frame into a slice of audio codes, one LM
+// step turns that slice (plus the previous text token) into the next text
+// token, and the text tokens are grouped into words on the host. Text tokens
+// 0/2/3/4 (end-of-phrase, end-of-stream, padding, silence padding) delimit
+// words, other tokens accumulate into the current word, and the model output
+// lags the audio by `ASR_DELAY_SECONDS`.
+fn run_asr(input: std::path::PathBuf, cpu: bool, verbose: bool, dtype: &str) -> Result<()> {
+    use std::io::Write;
+
+    let lm_dtype = match dtype {
+        "f32" => ElementType::F32,
+        "bf16" => ElementType::Bf16,
+        _ => anyhow::bail!("unsupported dtype {dtype}, expected f32 or bf16"),
+    };
+
+    const TARGET_SAMPLE_RATE: usize = 24000;
+    const FRAME_SIZE: usize = 1920;
+    const ASR_DELAY_SECONDS: f64 = 2.5;
+    const WORD_BOUNDARY_TOKENS: [i32; 4] = [0, 2, 3, 4]; // eop, eos, pad, silence pad
+
+    // --- Load and resample audio ---
+    println!("Loading audio from {}...", input.display());
+    let (pcm_data, sample_rate) = kaudio::pcm_decode(&input)?;
+    let audio_duration = pcm_data.len() as f64 / sample_rate as f64;
+    println!("  {} samples at {} Hz ({:.2}s)", pcm_data.len(), sample_rate, audio_duration);
+    let pcm_data = if sample_rate as usize != TARGET_SAMPLE_RATE {
+        println!("  Resampling {sample_rate} Hz -> {TARGET_SAMPLE_RATE} Hz");
+        kaudio::resample(&pcm_data, sample_rate as usize, TARGET_SAMPLE_RATE)?
+    } else {
+        pcm_data
+    };
+    // Two frames of silence before the audio, and the asr delay worth of
+    // silence after it so that the lagging transcript flushes completely.
+    let pcm_data = [
+        vec![0.0; FRAME_SIZE * 2],
+        pcm_data,
+        vec![0.0; (TARGET_SAMPLE_RATE as f64 * ASR_DELAY_SECONDS) as usize],
+    ]
+    .concat();
+
+    // --- Model files + tokenizer ---
+    let (lm_path, mimi_path, tokenizer_path) = download_asr_model()?;
+    let sp = SpDecoder::open(&tokenizer_path)?;
+    let client = if cpu { PjRtClient::cpu()? } else { PjRtClient::auto(false)? };
+
+    let lm_config = xla_moshi::lm::Config::stt_2_6b();
+    let n_q = lm_config.audio_codebooks;
+    let mimi_config = mimi::Config::v0_1(Some(n_q));
+
+    // --- Build the Mimi encode-step computation ---
+    println!("Compiling the step graphs...");
+    let start = std::time::Instant::now();
+    let enc_builder = XlaBuilder::new("mimi-encode-step");
+    let frame = enc_builder.parameter(0, ElementType::F32, &[1, 1, FRAME_SIZE as i64], "frame")?;
+    let enc_vb = xla_nn::VarBuilder::new(&enc_builder, ElementType::F32, 1);
+    let enc_model = Mimi::load(&Vb::new(&enc_vb), mimi_config)?;
+    let enc_w = enc_vb.num_vars() as i64;
+    let is_first = enc_builder.parameter(1 + enc_w, ElementType::S32, &[], "is_first")?;
+    let mut enc_ctx = xla_moshi::StepCtx::new(&enc_builder, 2 + enc_w);
+    enc_ctx.set_is_first(is_first);
+    let codes = enc_model.encode_step(&frame, &mut enc_ctx)?;
+    let enc_state_shapes: Vec<_> = enc_ctx.state_shapes().to_vec();
+    let mut enc_outs = vec![codes];
+    enc_outs.extend(enc_ctx.into_new_states());
+    let enc_exe =
+        client.compile(&enc_builder.tuple(&enc_outs.iter().collect::<Vec<_>>())?.build()?)?;
+
+    // --- Build the LM step computation ---
+    let lm_builder = XlaBuilder::new("asr-lm-step");
+    let codes_in = lm_builder.parameter(0, ElementType::S64, &[1, n_q as i64, 1], "codes")?;
+    let text_in = lm_builder.parameter(1, ElementType::S32, &[1], "text_token")?;
+    let lm_vb = xla_nn::VarBuilder::new(&lm_builder, lm_dtype, 2);
+    let lm_model = xla_moshi::lm::LmModel::load(&Vb::new(&lm_vb), &lm_config)?;
+    let mut lm_ctx = xla_moshi::StepCtx::new(&lm_builder, 2 + lm_vb.num_vars() as i64);
+    let next_token = lm_model.step(&text_in, &codes_in, &mut lm_ctx)?;
+    let lm_state_shapes: Vec<_> = lm_ctx.state_shapes().to_vec();
+    let mut lm_outs = vec![next_token];
+    lm_outs.extend(lm_ctx.into_new_states());
+    let lm_exe =
+        client.compile(&lm_builder.tuple(&lm_outs.iter().collect::<Vec<_>>())?.build()?)?;
+    println!("  compiled in {:?}", start.elapsed());
+
+    // --- Load the weights ---
+    println!("Loading weights...");
+    let start = std::time::Instant::now();
+    let enc_weights = enc_vb.load_buffers(&[&mimi_path], &client)?;
+    enc_vb.check_all_used_with_ignore(&[&mimi_path], |name| {
+        name.ends_with("_codebook._initialized")
+            || name.ends_with("_codebook.cluster_usage")
+            || name.ends_with("_codebook.embedding_sum")
+    })?;
+    let lm_weights = lm_vb.load_buffers(&[&lm_path], &client)?;
+    // The depformer heads (`linears.*`) are only used for audio generation.
+    lm_vb.check_all_used_with_ignore(&[&lm_path], |name| name.starts_with("linears."))?;
+    println!("  loaded {} weights in {:?}", enc_weights.len() + lm_weights.len(), start.elapsed());
+
+    // --- Streaming ASR loop ---
+    let asr_delay_in_tokens =
+        (ASR_DELAY_SECONDS * TARGET_SAMPLE_RATE as f64 / FRAME_SIZE as f64) as usize;
+    let num_chunks = pcm_data.len().div_ceil(FRAME_SIZE);
+    println!("\nProcessing ({num_chunks} chunks of {FRAME_SIZE} samples)...");
+    println!("---");
+    let start = std::time::Instant::now();
+
+    let mut enc_states = enc_state_shapes
+        .iter()
+        .map(|(ty, d)| zeros_buffer(&client, *ty, d))
+        .collect::<Result<Vec<_>>>()?;
+    let mut lm_states = lm_state_shapes
+        .iter()
+        .map(|(ty, d)| zeros_buffer(&client, *ty, d))
+        .collect::<Result<Vec<_>>>()?;
+    // The first LM step gets the text start token and padding audio codes (the
+    // first slice of real codes is discarded, without shifting the following
+    // slices).
+    let mut text_buf =
+        client.buffer_from_host_buffer(&[lm_model.text_start_token()], &[1], None)?;
+    let pad_codes = vec![lm_model.audio_pad_token(); n_q];
+    let pad_codes_buf = client.buffer_from_host_buffer(&pad_codes, &[1, n_q, 1], None)?;
+
+    let mut step_idx = 0usize;
+    let mut word_tokens: Vec<u32> = vec![];
+    // All text tokens with the `3` separator re-inserted between words, so
+    // that sentencepiece handles spacing.
+    let mut all_text_tokens: Vec<u32> = vec![];
+    let mut last_decoded_len = 0;
+
+    for f in 0..num_chunks {
+        let chunk_start = f * FRAME_SIZE;
+        let chunk_end = (chunk_start + FRAME_SIZE).min(pcm_data.len());
+        let mut chunk: Vec<f32> = pcm_data[chunk_start..chunk_end].to_vec();
+        chunk.resize(FRAME_SIZE, 0.0);
+        let step_start = std::time::Instant::now();
+
+        // Mimi encode: one frame of audio -> one slice of codes.
+        let frame_buf = client.buffer_from_host_buffer(&chunk, &[1, 1, FRAME_SIZE], None)?;
+        let is_first_buf = client.buffer_from_host_buffer(&[i32::from(f == 0)], &[], None)?;
+        let mut inputs: Vec<&xla::PjRtBuffer> = vec![&frame_buf];
+        inputs.extend(enc_weights.iter());
+        inputs.push(&is_first_buf);
+        inputs.extend(enc_states.iter());
+        let mut out = enc_exe.execute_b(&inputs)?.into_iter().next().context("no enc output")?;
+        let codes_buf = out.remove(0);
+        enc_states = out;
+
+        // LM step: the code slice plus the previous text token -> next token.
+        let codes_buf = if f == 0 { &pad_codes_buf } else { &codes_buf };
+        let mut inputs: Vec<&xla::PjRtBuffer> = vec![codes_buf, &text_buf];
+        inputs.extend(lm_weights.iter());
+        inputs.extend(lm_states.iter());
+        let mut out = lm_exe.execute_b(&inputs)?.into_iter().next().context("no lm output")?;
+        let token_buf = out.remove(0);
+        lm_states = out;
+        let text_token = token_buf.to_literal_sync()?.to_vec::<i32>()?[0];
+        text_buf = token_buf;
+        if verbose {
+            println!(
+                "  chunk {}/{} -> token {} in {:.2}ms",
+                f + 1,
+                num_chunks,
+                text_token,
+                step_start.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+
+        // Word assembly: boundary tokens flush the current word, everything
+        // else (once past the delay) extends it.
+        step_idx += 1;
+        if step_idx >= asr_delay_in_tokens {
+            if WORD_BOUNDARY_TOKENS.contains(&text_token) {
+                if !word_tokens.is_empty() {
+                    all_text_tokens.push(3);
+                    all_text_tokens.append(&mut word_tokens);
+                    let text = sp.decode_piece_ids(&all_text_tokens);
+                    if text.len() > last_decoded_len && !verbose {
+                        print!("{}", &text[last_decoded_len..]);
+                        std::io::stdout().flush()?;
+                    }
+                    last_decoded_len = text.len();
+                }
+            } else {
+                word_tokens.push(text_token as u32);
+            }
+        }
+    }
+    println!();
+    println!("---");
+    if verbose {
+        let decoded_text = sp.decode_piece_ids(&all_text_tokens);
+        println!("{decoded_text}\n---");
+    }
+    let elapsed = start.elapsed();
+    let audio_duration = pcm_data.len() as f64 / TARGET_SAMPLE_RATE as f64;
+    println!(
+        "Done in {:.2}s ({:.1}x realtime)",
+        elapsed.as_secs_f64(),
+        audio_duration / elapsed.as_secs_f64()
+    );
     Ok(())
 }

@@ -65,6 +65,8 @@ impl Config {
             dim_feedforward: 2048,
             kv_repeat: 1,
             conv_layout: true,
+            norm: transformer::NormType::LayerNorm,
+            gating: None,
         };
         Config {
             channels: 1,

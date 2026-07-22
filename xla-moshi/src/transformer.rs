@@ -1,6 +1,7 @@
-//! The Mimi transformer, ported from `xn-moshi` and run over the whole sequence
-//! at once. Only causal + norm-first + `kv_repeat = 1` + rope is supported,
-//! which is what the Mimi configs use.
+//! The Moshi transformer, ported from `xn-moshi`. Only causal + norm-first +
+//! `kv_repeat = 1` + rope is supported, which is what the Mimi and ASR LM
+//! configs use. The Mimi configs use a layer-norm and a plain gelu MLP, the LM
+//! configs use an rms-norm and a silu-gated MLP.
 use crate::{Result, StepCtx, Vb};
 use xla::{ElementType, PrimitiveType, XlaBuilder, XlaOp};
 
@@ -10,6 +11,13 @@ pub enum PositionalEmbedding {
     Rope,
     Sin,
     None,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NormType {
+    LayerNorm,
+    RmsNorm,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -29,15 +37,17 @@ pub struct Config {
     pub kv_repeat: usize,
     pub dim_feedforward: usize,
     pub conv_layout: bool,
+    pub norm: NormType,
+    pub gating: Option<crate::seanet::Activation>,
 }
 
-struct Linear {
+pub(crate) struct Linear {
     weight: XlaOp,
     bias: Option<XlaOp>,
 }
 
 impl Linear {
-    fn load(vb: &Vb, in_d: i64, out_d: i64, bias: bool) -> Result<Self> {
+    pub(crate) fn load(vb: &Vb, in_d: i64, out_d: i64, bias: bool) -> Result<Self> {
         let weight = vb.var("weight", &[out_d, in_d])?;
         let bias = if bias { Some(vb.var("bias", &[out_d])?) } else { None };
         Ok(Self { weight, bias })
@@ -47,7 +57,7 @@ impl Linear {
         Self { weight, bias }
     }
 
-    fn forward(&self, xs: &XlaOp) -> Result<XlaOp> {
+    pub(crate) fn forward(&self, xs: &XlaOp) -> Result<XlaOp> {
         let rank = xs.rank()? as i64;
         let ys = xs.dot_general(&self.weight, &[rank - 1], &[1], &[], &[])?;
         match &self.bias {
@@ -78,23 +88,46 @@ impl LayerScale {
     }
 }
 
-struct LayerNorm {
-    weight: XlaOp,
-    bias: XlaOp,
+pub(crate) enum Norm {
+    LayerNorm { weight: XlaOp, bias: XlaOp },
+    // The rms-norm weight is stored as `alpha` of shape `[1, 1, d]` and the
+    // norm uses a 1e-8 epsilon, as in the reference implementation.
+    RmsNorm { alpha: XlaOp },
 }
 
-impl LayerNorm {
-    fn load(vb: &Vb, d_model: i64) -> Result<Self> {
-        Ok(Self { weight: vb.var("weight", &[d_model])?, bias: vb.var("bias", &[d_model])? })
+impl Norm {
+    pub(crate) fn load(vb: &Vb, d_model: i64, norm_type: NormType) -> Result<Self> {
+        match norm_type {
+            NormType::LayerNorm => Ok(Self::LayerNorm {
+                weight: vb.var("weight", &[d_model])?,
+                bias: vb.var("bias", &[d_model])?,
+            }),
+            NormType::RmsNorm => Ok(Self::RmsNorm { alpha: vb.var("alpha", &[1, 1, d_model])? }),
+        }
     }
 
-    fn forward(&self, xs: &XlaOp) -> Result<XlaOp> {
-        // xla's `layer_norm` multiplies/adds scale and bias without rank
-        // broadcasting, so reshape them to `[1, 1, d]` to match `[b, t, d]`.
-        let d = self.weight.dims()?[0] as i64;
-        let weight = self.weight.reshape(&[1, 1, d])?;
-        let bias = self.bias.reshape(&[1, 1, d])?;
-        Ok(xs.layer_norm(-1, &weight, &bias)?)
+    pub(crate) fn forward(&self, xs: &XlaOp) -> Result<XlaOp> {
+        match self {
+            // xla's `layer_norm` multiplies/adds scale and bias without rank
+            // broadcasting, so reshape them to `[1, 1, d]` to match `[b, t, d]`.
+            Self::LayerNorm { weight, bias } => {
+                let d = weight.dims()?[0] as i64;
+                let weight = weight.reshape(&[1, 1, d])?;
+                let bias = bias.reshape(&[1, 1, d])?;
+                Ok(xs.layer_norm(-1, &weight, &bias)?)
+            }
+            Self::RmsNorm { alpha } => {
+                // Computed in f32 and cast back to the input dtype.
+                let b = xs.builder();
+                let dt = xs.ty()?;
+                let xs = xs.convert(PrimitiveType::F32)?;
+                let mean2 = xs.mul_(&xs)?.reduce_mean(&[-1], true)?;
+                let dims: Vec<i64> = mean2.dims()?.iter().map(|d| *d as i64).collect();
+                let eps = b.c0(1e-8f32)?.broadcast(&dims)?;
+                let xs_norm = xs.mul_(&mean2.add_(&eps)?.rsqrt()?)?;
+                Ok(xs_norm.mul_(&alpha.convert(PrimitiveType::F32)?)?.convert(dt)?)
+            }
+        }
     }
 }
 
@@ -246,22 +279,27 @@ impl MultiheadAttention {
         let (b, t) = (dims[0] as i64, dims[1] as i64);
         let (h, hd, c) = (self.num_heads, self.head_dim, self.context);
         let d_model = h * hd;
+        let ty = xs.array_shape()?.ty();
+        let dt = ty.primitive_type();
         let (q, k, v) = self.qkv(xs)?;
-        let q = apply_rotary_emb(&q, cos, sin)?;
-        let k = apply_rotary_emb(&k, cos, sin)?;
+        let cos = cos.convert(dt)?;
+        let sin = sin.convert(dt)?;
+        let q = apply_rotary_emb(&q, &cos, &sin)?;
+        let k = apply_rotary_emb(&k, &cos, &sin)?;
 
-        let (idx_k, k_cache) = ctx.state_in(ElementType::F32, &[b, h, c, hd])?;
-        let (idx_v, v_cache) = ctx.state_in(ElementType::F32, &[b, h, c, hd])?;
+        let (idx_k, k_cache) = ctx.state_in(ty, &[b, h, c, hd])?;
+        let (idx_v, v_cache) = ctx.state_in(ty, &[b, h, c, hd])?;
         let k_cache = k_cache.slice_in_dim1(t, c, 2)?.concat_in_dim(&[k], 2)?;
         let v_cache = v_cache.slice_in_dim1(t, c, 2)?.concat_in_dim(&[v], 2)?;
         ctx.state_out(idx_k, k_cache.clone());
         ctx.state_out(idx_v, v_cache.clone());
 
-        let scale = xs.builder().c0(1f32 / (hd as f32).sqrt())?;
+        let scale = xs.builder().c0(1f32 / (hd as f32).sqrt())?.convert(dt)?;
         let attn = q.dot_general(&k_cache, &[3], &[3], &[0, 1], &[0, 1])?; // [b, h, t, c]
         let attn = attn.mul_(&scale)?;
-        let mask = mask.broadcast_in_dim(&[b, h, t, c], &[2, 3])?;
-        let attn = attn.add_(&mask)?.softmax(-1)?;
+        let mask = mask.convert(dt)?.broadcast_in_dim(&[b, h, t, c], &[2, 3])?;
+        // The softmax runs in f32 for numerical stability, as in the reference.
+        let attn = attn.add_(&mask)?.convert(PrimitiveType::F32)?.softmax(-1)?.convert(dt)?;
         let out = attn.dot_general(&v_cache, &[3], &[2], &[0, 1], &[0, 1])?; // [b, h, t, hd]
         let out = out.transpose(&[0, 2, 1, 3])?.reshape(&[b, t, d_model])?;
         self.out_proj.forward(&out)
@@ -298,31 +336,56 @@ impl MultiheadAttention {
     }
 }
 
-struct Mlp {
-    linear1: Linear,
-    linear2: Linear,
+enum Mlp {
+    NoGating { linear1: Linear, linear2: Linear },
+    // Gated feed-forward: `linear_in` produces `[x1, x2]`, the output is
+    // `linear_out(act(x1) * x2)`.
+    Gating { linear_in: Linear, linear_out: Linear, hidden: i64 },
 }
 
 impl Mlp {
     fn load(vb: &Vb, cfg: &Config) -> Result<Self> {
         let d_model = cfg.d_model as i64;
         let ff = cfg.dim_feedforward as i64;
-        let linear1 = Linear::load(&vb.pp("linear1"), d_model, ff, cfg.bias_ff)?;
-        let linear2 = Linear::load(&vb.pp("linear2"), ff, d_model, cfg.bias_ff)?;
-        Ok(Self { linear1, linear2 })
+        match cfg.gating {
+            None => {
+                let linear1 = Linear::load(&vb.pp("linear1"), d_model, ff, cfg.bias_ff)?;
+                let linear2 = Linear::load(&vb.pp("linear2"), ff, d_model, cfg.bias_ff)?;
+                Ok(Self::NoGating { linear1, linear2 })
+            }
+            Some(crate::seanet::Activation::Silu) => {
+                let hidden = if ff == 4 * d_model { 11 * d_model / 4 } else { 2 * ff / 3 };
+                let vb = vb.pp("gating");
+                let linear_in =
+                    Linear::load(&vb.pp("linear_in"), d_model, 2 * hidden, cfg.bias_ff)?;
+                let linear_out = Linear::load(&vb.pp("linear_out"), hidden, d_model, cfg.bias_ff)?;
+                Ok(Self::Gating { linear_in, linear_out, hidden })
+            }
+            Some(act) => Err(err(&format!("unsupported gating activation {act:?}"))),
+        }
     }
 
     fn forward(&self, xs: &XlaOp) -> Result<XlaOp> {
-        let xs = self.linear1.forward(xs)?.gelu_erf()?;
-        self.linear2.forward(&xs)
+        match self {
+            Self::NoGating { linear1, linear2 } => {
+                let xs = linear1.forward(xs)?.gelu_erf()?;
+                linear2.forward(&xs)
+            }
+            Self::Gating { linear_in, linear_out, hidden } => {
+                let xs = linear_in.forward(xs)?;
+                let x1 = xs.slice_in_dim1(0, *hidden, 2)?;
+                let x2 = xs.slice_in_dim1(*hidden, 2 * hidden, 2)?;
+                linear_out.forward(&x1.silu()?.mul_(&x2)?)
+            }
+        }
     }
 }
 
 struct TransformerLayer {
     self_attn: MultiheadAttention,
     mlp: Mlp,
-    norm1: LayerNorm,
-    norm2: LayerNorm,
+    norm1: Norm,
+    norm2: Norm,
     layer_scale_1: Option<LayerScale>,
     layer_scale_2: Option<LayerScale>,
 }
@@ -332,8 +395,8 @@ impl TransformerLayer {
         let d_model = cfg.d_model as i64;
         let self_attn = MultiheadAttention::load(vb, cfg)?;
         let mlp = Mlp::load(vb, cfg)?;
-        let norm1 = LayerNorm::load(&vb.pp("norm1"), d_model)?;
-        let norm2 = LayerNorm::load(&vb.pp("norm2"), d_model)?;
+        let norm1 = Norm::load(&vb.pp("norm1"), d_model, cfg.norm)?;
+        let norm2 = Norm::load(&vb.pp("norm2"), d_model, cfg.norm)?;
         let (layer_scale_1, layer_scale_2) = if cfg.layer_scale.is_some() {
             (
                 Some(LayerScale::load(&vb.pp("layer_scale_1"), d_model)?),
@@ -383,7 +446,7 @@ impl TransformerLayer {
     }
 }
 
-struct Transformer {
+pub(crate) struct Transformer {
     layers: Vec<TransformerLayer>,
     head_dim: i64,
     max_period: f32,
@@ -391,7 +454,7 @@ struct Transformer {
 }
 
 impl Transformer {
-    fn load(vb: &Vb, cfg: &Config) -> Result<Self> {
+    pub(crate) fn load(vb: &Vb, cfg: &Config) -> Result<Self> {
         if !cfg.causal || !cfg.norm_first || cfg.kv_repeat != 1 {
             return Err(err("only causal norm_first kv_repeat=1 transformers are supported"));
         }
@@ -425,7 +488,7 @@ impl Transformer {
     }
 
     /// Streaming step over `t` positions. `xs`: `[1, t, d_model]`.
-    fn step(&self, xs: &XlaOp, ctx: &mut StepCtx) -> Result<XlaOp> {
+    pub(crate) fn step(&self, xs: &XlaOp, ctx: &mut StepCtx) -> Result<XlaOp> {
         let t = xs.dims()?[1] as i64;
         let builder = xs.builder();
         let (idx_pos, pos) = ctx.state_in(ElementType::S32, &[])?;

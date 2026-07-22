@@ -10,6 +10,7 @@
 //!   static per-frame step computation, taking the running state plus one frame
 //!   and returning the next state plus one slice of codes (or one audio frame).
 pub mod conv;
+pub mod lm;
 pub mod mimi;
 pub mod quantization;
 pub mod seanet;
