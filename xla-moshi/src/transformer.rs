@@ -351,39 +351,28 @@ impl MultiheadAttention {
             // whole cache. The matching validity mask is built by `ring_mask`.
             let builder = xs.builder();
             let slot = pos.rem_(&builder.c0(c as i32)?.broadcast(&[b])?)?;
-            if ctx.mask().is_none() && ctx.reset().is_none() {
-                // Without per-session masking or resets every session is at
-                // the same position, so the write is a plain (in-place)
-                // dynamic-update-slice at a single shared slot.
-                let zero = builder.c0(0i32)?;
-                let slot = slot.slice_in_dim1(0, 1, 0)?.reshape(&[])?;
-                let k_cache = k_cache.dynamic_update_slice(&k, &[&zero, &slot, &zero, &zero])?;
-                let v_cache = v_cache.dynamic_update_slice(&v, &[&zero, &slot, &zero, &zero])?;
-                (k_cache, v_cache)
-            } else {
-                // Inactive sessions scatter to the out-of-bounds slot `c`,
-                // which XLA drops, leaving their cache untouched.
-                let slot = match ctx.mask_pred()? {
-                    None => slot,
-                    Some(pred) => pred.select(&slot, &builder.c0(c as i32)?.broadcast(&[b])?)?,
-                };
-                // Scatter indices [b, 2]: (session, slot) pairs.
-                let iota_b = builder.iota(ElementType::S32, &[b, 1], 0)?;
-                let indices = iota_b.concat_in_dim(&[slot.reshape(&[b, 1])?], 1)?;
-                let assign = assign_computation(ty)?;
-                let scatter = |cache: &XlaOp, new: &XlaOp| -> Result<XlaOp> {
-                    Ok(cache.scatter(
-                        &indices,
-                        &new.reshape(&[b, h, hd])?,
-                        &assign,
-                        &[1, 2], // update window dims (h, hd in the updates)
-                        &[0, 1], // inserted window dims (session and slot in the operand)
-                        &[0, 1], // index vector -> operand dims (session, slot)
-                        1,
-                    )?)
-                };
-                (scatter(&k_cache, &k)?, scatter(&v_cache, &v)?)
-            }
+            // Inactive sessions scatter to the out-of-bounds slot `c`, which
+            // XLA drops, leaving their cache untouched.
+            let slot = match ctx.mask_pred()? {
+                None => slot,
+                Some(pred) => pred.select(&slot, &builder.c0(c as i32)?.broadcast(&[b])?)?,
+            };
+            // Scatter indices [b, 2]: (session, slot) pairs.
+            let iota_b = builder.iota(ElementType::S32, &[b, 1], 0)?;
+            let indices = iota_b.concat_in_dim(&[slot.reshape(&[b, 1])?], 1)?;
+            let assign = assign_computation(ty)?;
+            let scatter = |cache: &XlaOp, new: &XlaOp| -> Result<XlaOp> {
+                Ok(cache.scatter(
+                    &indices,
+                    &new.reshape(&[b, h, hd])?,
+                    &assign,
+                    &[1, 2], // update window dims (h, hd in the updates)
+                    &[0, 1], // inserted window dims (session and slot in the operand)
+                    &[0, 1], // index vector -> operand dims (session, slot)
+                    1,
+                )?)
+            };
+            (scatter(&k_cache, &k)?, scatter(&v_cache, &v)?)
         } else {
             // Multi-position step: shift the cache, chronological order.
             let k_cache = k_cache.slice_in_dim1(t, c, 1)?.concat_in_dim(&[k], 1)?;

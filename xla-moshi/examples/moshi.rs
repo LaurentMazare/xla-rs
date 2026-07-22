@@ -70,12 +70,6 @@ enum Command {
         /// are printed and should match the batch-1 run exactly.
         #[arg(long)]
         mask_check: bool,
-
-        /// Wire the per-session activity mask and reset inputs into the step
-        /// graphs even though this run keeps every session active (for
-        /// benchmarking the masked path).
-        #[arg(long)]
-        masked: bool,
     },
 }
 
@@ -201,8 +195,8 @@ fn main() -> Result<()> {
                 audio_to_audio(input, output, codebooks, cpu)
             }
         }
-        Command::Asr { input, cpu, verbose, dtype, batch_size, mask_check, masked } => {
-            run_asr(input, cpu, verbose, &dtype, batch_size, mask_check, masked)
+        Command::Asr { input, cpu, verbose, dtype, batch_size, mask_check } => {
+            run_asr(input, cpu, verbose, &dtype, batch_size, mask_check)
         }
     }
 }
@@ -493,14 +487,12 @@ fn run_asr(
     dtype: &str,
     batch_size: usize,
     mask_check: bool,
-    masked: bool,
 ) -> Result<()> {
     use std::io::Write;
 
     if mask_check && batch_size != 2 {
         anyhow::bail!("--mask-check requires --batch-size 2");
     }
-    let masked = masked || mask_check;
     let lm_dtype = match dtype {
         "f32" => ElementType::F32,
         "bf16" => ElementType::Bf16,
@@ -555,13 +547,8 @@ fn run_asr(
     let enc_reset = enc_builder.parameter(3 + enc_w, ElementType::S32, &[bs], "reset")?;
     let mut enc_ctx = xla_moshi::StepCtx::new(&enc_builder, 4 + enc_w);
     enc_ctx.set_is_first(is_first);
-    // Without masking the kv-cache updates take a faster path, so the mask
-    // and reset inputs are only wired in when the run exercises them (they
-    // are still passed as parameters to keep the buffer layout uniform).
-    if masked {
-        enc_ctx.set_mask(enc_mask);
-        enc_ctx.set_reset(enc_reset);
-    }
+    enc_ctx.set_mask(enc_mask);
+    enc_ctx.set_reset(enc_reset);
     let codes = enc_model.encode_step(&frame, &mut enc_ctx)?;
     let enc_state_shapes: Vec<_> = enc_ctx.state_shapes().to_vec();
     // States are output tuple elements 1.. and alias their input parameters,
@@ -583,10 +570,8 @@ fn run_asr(
     let lm_model = xla_moshi::lm::LmModel::load(&Vb::new(&lm_vb), &lm_config)?;
     let mut lm_ctx = xla_moshi::StepCtx::new(&lm_builder, 5 + lm_vb.num_vars() as i64);
     lm_ctx.set_is_first(lm_is_first);
-    if masked {
-        lm_ctx.set_mask(lm_mask);
-        lm_ctx.set_reset(lm_reset);
-    }
+    lm_ctx.set_mask(lm_mask);
+    lm_ctx.set_reset(lm_reset);
     let next_token = lm_model.step(&text_in, &codes_in, &mut lm_ctx)?;
     let lm_state_shapes: Vec<_> = lm_ctx.state_shapes().to_vec();
     lm_ctx.setup_aliases(1);
