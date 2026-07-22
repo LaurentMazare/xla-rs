@@ -92,6 +92,7 @@ void pjrt_buffer_free(pjrt_buffer);
 
 xla_builder xla_builder_create(const char *);
 void xla_builder_free(xla_builder);
+void xla_builder_setup_alias(const xla_builder, int64_t, int64_t);
 
 xla_op constant_literal(const xla_builder, const literal);
 xla_op parameter(const xla_builder, int64_t, int, int, const int64_t *,

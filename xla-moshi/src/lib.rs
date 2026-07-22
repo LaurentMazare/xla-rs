@@ -31,6 +31,7 @@ use xla::{ElementType, XlaBuilder, XlaOp};
 /// step's state.
 pub struct StepCtx<'a> {
     builder: &'a XlaBuilder,
+    first_state_param: i64,
     next_param: i64,
     state_shapes: Vec<(ElementType, Vec<i64>)>,
     new_states: Vec<Option<XlaOp>>,
@@ -43,10 +44,24 @@ impl<'a> StepCtx<'a> {
     pub fn new(builder: &'a XlaBuilder, first_state_param: i64) -> Self {
         Self {
             builder,
+            first_state_param,
             next_param: first_state_param,
             state_shapes: Vec::new(),
             new_states: Vec::new(),
             is_first: None,
+        }
+    }
+
+    /// Register input/output aliases for every declared state tensor: state
+    /// `i` (element `output_offset + i` of the root tuple) aliases its input
+    /// parameter, so that state updates happen in place rather than into
+    /// freshly allocated buffers. The state input buffers are donated at
+    /// execution time and must not be used after the step; feeding the step's
+    /// output states as the next step's inputs (as the streaming loops do) is
+    /// exactly that pattern.
+    pub fn setup_aliases(&self, output_offset: usize) {
+        for i in 0..self.state_shapes.len() {
+            self.builder.setup_alias((output_offset + i) as i64, self.first_state_param + i as i64);
         }
     }
 

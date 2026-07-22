@@ -1023,6 +1023,14 @@ status get_dimensions(const xla_builder b, const xla_op o, size_t *out_dims) {
   return nullptr;
 }
 
+void xla_builder_setup_alias(const xla_builder b, int64_t output_index,
+                             int64_t param_number) {
+  // The `output_index`-th element of the root tuple aliases the whole
+  // parameter `param_number`. May-alias: the alias is realized when the input
+  // buffer is donated at execution time, otherwise a copy is inserted.
+  b->SetUpAlias(ShapeIndex({output_index}), param_number, ShapeIndex({}));
+}
+
 status build(const xla_builder b, const xla_op o, xla_computation *output) {
   ASSIGN_OR_RETURN_STATUS(computation, b->Build(o));
   *output = new XlaComputation();

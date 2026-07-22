@@ -31,6 +31,16 @@ impl XlaBuilder {
         Ok(XlaComputation(result))
     }
 
+    /// Declare that the `output_index`-th element of the computation's root
+    /// tuple aliases the (whole) parameter `param_number`. When the input
+    /// buffer is donated at execution time the update then happens in place:
+    /// the output shares the input's device memory and the input buffer must
+    /// not be used after the execution. Shapes must match, and errors are
+    /// only reported when the computation is built.
+    pub fn setup_alias(&self, output_index: i64, param_number: i64) {
+        unsafe { c_lib::xla_builder_setup_alias(self.ptr(), output_index, param_number) };
+    }
+
     /// This returns `Ok(())` if the graph creation has not generated any error so far. Otherwise
     /// the first error is returned.
     pub fn first_error(&self) -> Result<()> {

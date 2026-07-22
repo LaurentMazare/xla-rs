@@ -58,6 +58,11 @@ enum Command {
         /// Mimi audio codec always runs in f32).
         #[arg(long, default_value = "f32")]
         dtype: String,
+
+        /// Batch size: the same audio is replicated across the batch and the
+        /// transcript of the first element is reported.
+        #[arg(short, long, default_value_t = 1)]
+        batch_size: usize,
     },
 }
 
@@ -183,7 +188,9 @@ fn main() -> Result<()> {
                 audio_to_audio(input, output, codebooks, cpu)
             }
         }
-        Command::Asr { input, cpu, verbose, dtype } => run_asr(input, cpu, verbose, &dtype),
+        Command::Asr { input, cpu, verbose, dtype, batch_size } => {
+            run_asr(input, cpu, verbose, &dtype, batch_size)
+        }
     }
 }
 
@@ -244,6 +251,9 @@ fn audio_to_audio_streaming(
     enc_ctx.set_is_first(is_first);
     let codes = enc_model.encode_step(&frame, &mut enc_ctx)?;
     let enc_state_shapes: Vec<_> = enc_ctx.state_shapes().to_vec();
+    // States are output tuple elements 1.. and alias their input parameters,
+    // so the streaming state is updated in place (the inputs are donated).
+    enc_ctx.setup_aliases(1);
     let mut enc_outs = vec![codes];
     enc_outs.extend(enc_ctx.into_new_states());
     let enc_exe =
@@ -257,6 +267,7 @@ fn audio_to_audio_streaming(
     let mut dec_ctx = xla_moshi::StepCtx::new(&dec_builder, 1 + dec_vb.num_vars() as i64);
     let audio_out = dec_model.decode_step(&codes_in, &mut dec_ctx)?;
     let dec_state_shapes: Vec<_> = dec_ctx.state_shapes().to_vec();
+    dec_ctx.setup_aliases(1);
     let mut dec_outs = vec![audio_out];
     dec_outs.extend(dec_ctx.into_new_states());
     let dec_exe =
@@ -428,7 +439,13 @@ fn download_asr_model() -> Result<(std::path::PathBuf, std::path::PathBuf, std::
 // 0/2/3/4 (end-of-phrase, end-of-stream, padding, silence padding) delimit
 // words, other tokens accumulate into the current word, and the model output
 // lags the audio by `ASR_DELAY_SECONDS`.
-fn run_asr(input: std::path::PathBuf, cpu: bool, verbose: bool, dtype: &str) -> Result<()> {
+fn run_asr(
+    input: std::path::PathBuf,
+    cpu: bool,
+    verbose: bool,
+    dtype: &str,
+    batch_size: usize,
+) -> Result<()> {
     use std::io::Write;
 
     let lm_dtype = match dtype {
@@ -475,7 +492,8 @@ fn run_asr(input: std::path::PathBuf, cpu: bool, verbose: bool, dtype: &str) -> 
     println!("Compiling the step graphs...");
     let start = std::time::Instant::now();
     let enc_builder = XlaBuilder::new("mimi-encode-step");
-    let frame = enc_builder.parameter(0, ElementType::F32, &[1, 1, FRAME_SIZE as i64], "frame")?;
+    let bs = batch_size as i64;
+    let frame = enc_builder.parameter(0, ElementType::F32, &[bs, 1, FRAME_SIZE as i64], "frame")?;
     let enc_vb = xla_nn::VarBuilder::new(&enc_builder, ElementType::F32, 1);
     let enc_model = Mimi::load(&Vb::new(&enc_vb), mimi_config)?;
     let enc_w = enc_vb.num_vars() as i64;
@@ -484,6 +502,9 @@ fn run_asr(input: std::path::PathBuf, cpu: bool, verbose: bool, dtype: &str) -> 
     enc_ctx.set_is_first(is_first);
     let codes = enc_model.encode_step(&frame, &mut enc_ctx)?;
     let enc_state_shapes: Vec<_> = enc_ctx.state_shapes().to_vec();
+    // States are output tuple elements 1.. and alias their input parameters,
+    // so the streaming state is updated in place (the inputs are donated).
+    enc_ctx.setup_aliases(1);
     let mut enc_outs = vec![codes];
     enc_outs.extend(enc_ctx.into_new_states());
     let enc_exe =
@@ -491,13 +512,14 @@ fn run_asr(input: std::path::PathBuf, cpu: bool, verbose: bool, dtype: &str) -> 
 
     // --- Build the LM step computation ---
     let lm_builder = XlaBuilder::new("asr-lm-step");
-    let codes_in = lm_builder.parameter(0, ElementType::S64, &[1, n_q as i64, 1], "codes")?;
-    let text_in = lm_builder.parameter(1, ElementType::S32, &[1], "text_token")?;
+    let codes_in = lm_builder.parameter(0, ElementType::S64, &[bs, n_q as i64, 1], "codes")?;
+    let text_in = lm_builder.parameter(1, ElementType::S32, &[bs], "text_token")?;
     let lm_vb = xla_nn::VarBuilder::new(&lm_builder, lm_dtype, 2);
     let lm_model = xla_moshi::lm::LmModel::load(&Vb::new(&lm_vb), &lm_config)?;
     let mut lm_ctx = xla_moshi::StepCtx::new(&lm_builder, 2 + lm_vb.num_vars() as i64);
     let next_token = lm_model.step(&text_in, &codes_in, &mut lm_ctx)?;
     let lm_state_shapes: Vec<_> = lm_ctx.state_shapes().to_vec();
+    lm_ctx.setup_aliases(1);
     let mut lm_outs = vec![next_token];
     lm_outs.extend(lm_ctx.into_new_states());
     let lm_exe =
@@ -537,10 +559,13 @@ fn run_asr(input: std::path::PathBuf, cpu: bool, verbose: bool, dtype: &str) -> 
     // The first LM step gets the text start token and padding audio codes (the
     // first slice of real codes is discarded, without shifting the following
     // slices).
-    let mut text_buf =
-        client.buffer_from_host_buffer(&[lm_model.text_start_token()], &[1], None)?;
-    let pad_codes = vec![lm_model.audio_pad_token(); n_q];
-    let pad_codes_buf = client.buffer_from_host_buffer(&pad_codes, &[1, n_q, 1], None)?;
+    let mut text_buf = client.buffer_from_host_buffer(
+        &vec![lm_model.text_start_token(); batch_size],
+        &[batch_size],
+        None,
+    )?;
+    let pad_codes = vec![lm_model.audio_pad_token(); batch_size * n_q];
+    let pad_codes_buf = client.buffer_from_host_buffer(&pad_codes, &[batch_size, n_q, 1], None)?;
     let is_first_true = client.buffer_from_host_buffer(&[1i32], &[], None)?;
     let is_first_false = client.buffer_from_host_buffer(&[0i32], &[], None)?;
 
@@ -578,10 +603,12 @@ fn run_asr(input: std::path::PathBuf, cpu: bool, verbose: bool, dtype: &str) -> 
         let chunk_end = (chunk_start + FRAME_SIZE).min(pcm_data.len());
         let mut chunk: Vec<f32> = pcm_data[chunk_start..chunk_end].to_vec();
         chunk.resize(FRAME_SIZE, 0.0);
+        let chunk = chunk.repeat(batch_size);
         let step_start = std::time::Instant::now();
 
         // Mimi encode: one frame of audio -> one slice of codes.
-        let frame_buf = client.buffer_from_host_buffer(&chunk, &[1, 1, FRAME_SIZE], None)?;
+        let frame_buf =
+            client.buffer_from_host_buffer(&chunk, &[batch_size, 1, FRAME_SIZE], None)?;
         let mut inputs: Vec<&xla::PjRtBuffer> = vec![&frame_buf];
         inputs.extend(enc_weights.iter());
         inputs.push(if f == 0 { &is_first_true } else { &is_first_false });

@@ -67,6 +67,9 @@ impl Config {
             conv_layout: true,
             norm: transformer::NormType::LayerNorm,
             gating: None,
+            // Keep the shifted cache: the caches are small and the streaming
+            // path stays bit-exact with the whole-file computations.
+            ring_kv_cache: false,
         };
         Config {
             channels: 1,

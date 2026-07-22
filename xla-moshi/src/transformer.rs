@@ -39,6 +39,12 @@ pub struct Config {
     pub conv_layout: bool,
     pub norm: NormType,
     pub gating: Option<crate::seanet::Activation>,
+    // Use a ring buffer for the streaming kv cache: the per-step update is a
+    // single-slot write (in place with the state aliasing) instead of a full
+    // shift of the cache. The attended key set is identical but the softmax
+    // reduction order differs, so streaming steps are no longer bit-exact
+    // with the whole-sequence forward.
+    pub ring_kv_cache: bool,
 }
 
 pub(crate) struct Linear {
@@ -224,12 +230,25 @@ fn mask_step(builder: &XlaBuilder, pos: &XlaOp, t: i64, context: i64) -> Result<
     Ok(cond.select(&zeros, &neg)?)
 }
 
+/// In-graph ring-cache mask `[1, context]` for single-position steps: after
+/// this step's write at slot `pos % context`, cache slot `j` is valid iff it
+/// has ever been written, i.e. `j <= pos`. The slot order does not matter for
+/// the attention itself as the keys carry their rotary position embedding.
+fn ring_mask(builder: &XlaBuilder, pos: &XlaOp, context: i64) -> Result<XlaOp> {
+    let jj = builder.iota(ElementType::S32, &[context], 0)?;
+    let valid = jj.le(&pos.broadcast(&[context])?)?;
+    let zeros = builder.c0(0f32)?.broadcast(&[context])?;
+    let neg = builder.c0(f32::NEG_INFINITY)?.broadcast(&[context])?;
+    Ok(valid.select(&zeros, &neg)?.reshape(&[1, context])?)
+}
+
 struct MultiheadAttention {
     in_proj: Linear,
     out_proj: Linear,
     num_heads: i64,
     head_dim: i64,
     context: i64,
+    ring_kv_cache: bool,
 }
 
 impl MultiheadAttention {
@@ -245,7 +264,14 @@ impl MultiheadAttention {
             if cfg.bias_attn { Some(vb_attn.var("in_proj_bias", &[out_dim])?) } else { None };
         let in_proj = Linear::from_weight(in_proj_weight, in_proj_bias);
         let out_proj = Linear::load(&vb_attn.pp("out_proj"), d_model, d_model, cfg.bias_attn)?;
-        Ok(Self { in_proj, out_proj, num_heads, head_dim, context: cfg.context as i64 })
+        Ok(Self {
+            in_proj,
+            out_proj,
+            num_heads,
+            head_dim,
+            context: cfg.context as i64,
+            ring_kv_cache: cfg.ring_kv_cache,
+        })
     }
 
     /// Split the packed qkv projection into q/k/v, each `[b, h, t, head_dim]`.
@@ -273,6 +299,7 @@ impl MultiheadAttention {
         cos: &XlaOp,
         sin: &XlaOp,
         mask: &XlaOp,
+        pos: &XlaOp,
         ctx: &mut StepCtx,
     ) -> Result<XlaOp> {
         let dims = xs.dims()?;
@@ -289,8 +316,23 @@ impl MultiheadAttention {
 
         let (idx_k, k_cache) = ctx.state_in(ty, &[b, h, c, hd])?;
         let (idx_v, v_cache) = ctx.state_in(ty, &[b, h, c, hd])?;
-        let k_cache = k_cache.slice_in_dim1(t, c, 2)?.concat_in_dim(&[k], 2)?;
-        let v_cache = v_cache.slice_in_dim1(t, c, 2)?.concat_in_dim(&[v], 2)?;
+        let (k_cache, v_cache) = if self.ring_kv_cache && t == 1 {
+            // Ring cache: write the new key/value at slot `pos % c`. Combined
+            // with the state aliasing this compiles to an in-place one-slot
+            // update instead of rewriting the whole cache. The matching
+            // validity mask is built by `ring_mask`.
+            let builder = xs.builder();
+            let zero = builder.c0(0i32)?;
+            let slot = pos.rem_(&builder.c0(c as i32)?)?;
+            let k_cache = k_cache.dynamic_update_slice(&k, &[&zero, &zero, &slot, &zero])?;
+            let v_cache = v_cache.dynamic_update_slice(&v, &[&zero, &zero, &slot, &zero])?;
+            (k_cache, v_cache)
+        } else {
+            // Multi-position step: shift the cache, chronological order.
+            let k_cache = k_cache.slice_in_dim1(t, c, 2)?.concat_in_dim(&[k], 2)?;
+            let v_cache = v_cache.slice_in_dim1(t, c, 2)?.concat_in_dim(&[v], 2)?;
+            (k_cache, v_cache)
+        };
         ctx.state_out(idx_k, k_cache.clone());
         ctx.state_out(idx_v, v_cache.clone());
 
@@ -429,10 +471,11 @@ impl TransformerLayer {
         cos: &XlaOp,
         sin: &XlaOp,
         mask: &XlaOp,
+        pos: &XlaOp,
         ctx: &mut StepCtx,
     ) -> Result<XlaOp> {
         let norm1 = self.norm1.forward(xs)?;
-        let mut attn = self.self_attn.step(&norm1, cos, sin, mask, ctx)?;
+        let mut attn = self.self_attn.step(&norm1, cos, sin, mask, pos, ctx)?;
         if let Some(ls) = &self.layer_scale_1 {
             attn = ls.forward(&attn)?;
         }
@@ -451,6 +494,7 @@ pub(crate) struct Transformer {
     head_dim: i64,
     max_period: f32,
     context: i64,
+    ring_kv_cache: bool,
 }
 
 impl Transformer {
@@ -471,6 +515,7 @@ impl Transformer {
             head_dim: (cfg.d_model / cfg.num_heads) as i64,
             max_period: cfg.max_period as f32,
             context: cfg.context as i64,
+            ring_kv_cache: cfg.ring_kv_cache,
         })
     }
 
@@ -493,10 +538,14 @@ impl Transformer {
         let builder = xs.builder();
         let (idx_pos, pos) = ctx.state_in(ElementType::S32, &[])?;
         let (cos, sin) = rope_step(builder, &pos, t, self.head_dim, self.max_period)?;
-        let mask = mask_step(builder, &pos, t, self.context)?;
+        let mask = if self.ring_kv_cache && t == 1 {
+            ring_mask(builder, &pos, self.context)?
+        } else {
+            mask_step(builder, &pos, t, self.context)?
+        };
         let mut xs = xs.clone();
         for layer in &self.layers {
-            xs = layer.step(&xs, &cos, &sin, &mask, ctx)?;
+            xs = layer.step(&xs, &cos, &sin, &mask, &pos, ctx)?;
         }
         ctx.state_out(idx_pos, pos.add_(&builder.c0(t as i32)?)?);
         Ok(xs)

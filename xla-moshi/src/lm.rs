@@ -39,6 +39,7 @@ impl Config {
             positional_embedding: transformer::PositionalEmbedding::Rope,
             conv_layout: false,
             kv_repeat: 1,
+            ring_kv_cache: true,
         };
         Self {
             transformer,
@@ -95,23 +96,24 @@ impl LmModel {
         self.text_in_vocab_size as i32 - 1
     }
 
-    /// One decoding step. `text_token`: `[1]` (s32), the previous text token.
-    /// `audio_codes`: `[1, codebooks, 1]` (s64), one slice of Mimi codes.
-    /// Returns the greedy next text token `[1]` (s32).
+    /// One decoding step. `text_token`: `[b]` (s32), the previous text tokens.
+    /// `audio_codes`: `[b, codebooks, 1]` (s64), one slice of Mimi codes.
+    /// Returns the greedy next text tokens `[b]` (s32).
     pub fn step(
         &self,
         text_token: &XlaOp,
         audio_codes: &XlaOp,
         ctx: &mut StepCtx,
     ) -> Result<XlaOp> {
+        let b = text_token.dims()?[0] as i64;
         let d_model = self.text_emb.dims()?[1] as i64;
-        let mut emb = self.text_emb.take(text_token, 0)?.reshape(&[1, 1, d_model])?;
+        let mut emb = self.text_emb.take(text_token, 0)?.reshape(&[b, 1, d_model])?;
         for (i, audio_emb) in self.audio_embs.iter().enumerate() {
             let id = audio_codes
                 .slice_in_dim1(i as i64, i as i64 + 1, 1)?
-                .reshape(&[1])?
+                .reshape(&[b])?
                 .convert(PrimitiveType::S32)?;
-            let e = audio_emb.take(&id, 0)?.reshape(&[1, 1, d_model])?;
+            let e = audio_emb.take(&id, 0)?.reshape(&[b, 1, d_model])?;
             emb = emb.add_(&e)?;
         }
         let ys = self.transformer.step(&emb, ctx)?;
@@ -121,9 +123,9 @@ impl LmModel {
         // Greedy sampling: the reference uses gumbel_max which degenerates to
         // argmax at temperature 0 (computed over f32 logits).
         Ok(logits
-            .reshape(&[1, logits.dims()?[2] as i64])?
+            .reshape(&[b, logits.dims()?[2] as i64])?
             .convert(PrimitiveType::F32)?
             .argmax(ElementType::S32, -1)?
-            .reshape(&[1])?)
+            .reshape(&[b])?)
     }
 }

@@ -143,9 +143,10 @@ impl StreamableConv1d {
         let carry = self.carry();
         let wd = self.weight.dims()?;
         let in_c = wd[1] as i64 * self.groups;
+        let b = xs.dims()?[0] as i64;
         let combined = if carry > 0 {
             let is_first = ctx.is_first_pred()?;
-            let (idx, state) = ctx.state_in(ElementType::F32, &[1, in_c, carry])?;
+            let (idx, state) = ctx.state_in(ElementType::F32, &[b, in_c, carry])?;
             // The left pad is normally the carried input history (which is
             // zero-initialised, matching `Constant` padding). For `Replicate`
             // padding the whole-file forward replicates the first input column
@@ -154,8 +155,8 @@ impl StreamableConv1d {
                 (PadMode::Replicate, Some(is_first)) => {
                     let repl = xs
                         .slice_in_dim1(0, 1, 2)?
-                        .broadcast_in_dim(&[1, in_c, carry], &[0, 1, 2])?;
-                    is_first.broadcast(&[1, in_c, carry])?.select(&repl, &state)?
+                        .broadcast_in_dim(&[b, in_c, carry], &[0, 1, 2])?;
+                    is_first.broadcast(&[b, in_c, carry])?.select(&repl, &state)?
                 }
                 _ => state,
             };
@@ -227,11 +228,12 @@ impl StreamableConvTranspose1d {
         let carry = (self.k_size - self.stride).max(0);
         let wd = self.weight.dims()?;
         let out_c = wd[1] as i64 * self.groups;
+        let b = xs.dims()?[0] as i64;
         // Raw transposed conv without bias.
         let ys = xs.conv_transpose1d(&self.weight, self.stride, 0, 0, 1, self.groups)?;
         let ot = ys.dims()?[2] as i64;
         let ys = if carry > 0 {
-            let (idx, state) = ctx.state_in(ElementType::F32, &[1, out_c, carry])?;
+            let (idx, state) = ctx.state_in(ElementType::F32, &[b, out_c, carry])?;
             // Overlap-add the carried tail onto the head of this step's output.
             let head = ys.slice_in_dim1(0, carry, 2)?.add_(&state)?;
             let tail = ys.slice_in_dim1(carry, ot, 2)?;
