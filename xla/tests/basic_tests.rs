@@ -425,3 +425,51 @@ fn tuple_literal() -> Result<()> {
     assert_eq!(result[0].to_vec::<f32>()?, [3.1]);
     Ok(())
 }
+
+#[test]
+fn rng_bit_generator_op() -> Result<()> {
+    let client = xla::PjRtClient::cpu()?;
+    let builder = xla::XlaBuilder::new("test");
+    let state = builder.parameter(0, u64::TY, &[2], "state")?;
+    let out =
+        state.rng_bit_generator(xla::RandomAlgorithm::ThreeFry, xla::ElementType::U32, &[8])?;
+    let new_state = out.get_tuple_element(0)?;
+    let bits = out.get_tuple_element(1)?;
+    let exe = builder.tuple(&[&new_state, &bits])?.build()?.compile(&client)?;
+    let seed = xla::Literal::vec1(&[42u64, 0u64]);
+    // The output tuple is flattened into one buffer per element.
+    let r1 = &exe.execute::<xla::Literal>(std::slice::from_ref(&seed))?[0];
+    let s1 = r1[0].to_literal_sync()?.to_vec::<u64>()?;
+    let b1 = r1[1].to_literal_sync()?.to_vec::<u32>()?;
+    assert_eq!(b1.len(), 8);
+    // Deterministic: the same state yields the same bits.
+    let r2 = &exe.execute::<xla::Literal>(&[seed])?[0];
+    assert_eq!(r2[1].to_literal_sync()?.to_vec::<u32>()?, b1);
+    // The returned state differs and yields a different stream.
+    assert_ne!(s1, vec![42u64, 0u64]);
+    let seed2 = xla::Literal::vec1(&s1);
+    let r3 = &exe.execute::<xla::Literal>(&[seed2])?[0];
+    assert_ne!(r3[1].to_literal_sync()?.to_vec::<u32>()?, b1);
+    Ok(())
+}
+
+#[test]
+fn approx_top_k_op() -> Result<()> {
+    let client = xla::PjRtClient::cpu()?;
+    let builder = xla::XlaBuilder::new("test");
+    let xs = builder.parameter(0, f32::TY, &[8], "xs")?;
+    let out = xs.approx_top_k(3, -1, 0.99)?;
+    let values = out.get_tuple_element(0)?;
+    let indices = out.get_tuple_element(1)?;
+    let exe = builder.tuple(&[&values, &indices])?.build()?.compile(&client)?;
+    let xs = xla::Literal::vec1(&[1f32, 7., 3., 9., 5., 2., 8., 4.]);
+    let r = &exe.execute::<xla::Literal>(&[xs])?[0];
+    let mut values = r[0].to_literal_sync()?.to_vec::<f32>()?;
+    let mut indices = r[1].to_literal_sync()?.to_vec::<i32>()?;
+    values.sort_by(|a, b| b.partial_cmp(a).unwrap());
+    indices.sort_unstable();
+    // Small inputs aggregate to the exact top-k.
+    assert_eq!(values, [9., 8., 7.]);
+    assert_eq!(indices, [1, 3, 6]);
+    Ok(())
+}

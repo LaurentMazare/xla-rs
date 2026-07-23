@@ -70,6 +70,11 @@ enum Command {
         /// are printed and should match the batch-1 run exactly.
         #[arg(long)]
         mask_check: bool,
+
+        /// Sampling temperature (0 for greedy decoding). Sampling runs on the
+        /// device with a fixed-seed generator, so runs are reproducible.
+        #[arg(short, long, default_value_t = 0.0)]
+        temperature: f64,
     },
 }
 
@@ -195,8 +200,8 @@ fn main() -> Result<()> {
                 audio_to_audio(input, output, codebooks, cpu)
             }
         }
-        Command::Asr { input, cpu, verbose, dtype, batch_size, mask_check } => {
-            run_asr(input, cpu, verbose, &dtype, batch_size, mask_check)
+        Command::Asr { input, cpu, verbose, dtype, batch_size, mask_check, temperature } => {
+            run_asr(input, cpu, verbose, &dtype, batch_size, mask_check, temperature)
         }
     }
 }
@@ -211,6 +216,9 @@ fn zeros_buffer(client: &PjRtClient, ty: ElementType, dims: &[i64]) -> Result<xl
         ElementType::S32 => client.buffer_from_host_buffer(&vec![0i32; n], &dims_u, None)?,
         ElementType::Bf16 => {
             client.buffer_from_host_raw_bytes(ty, &vec![0u8; 2 * n], &dims_u, None)?
+        }
+        ElementType::U64 => {
+            client.buffer_from_host_raw_bytes(ty, &vec![0u8; 8 * n], &dims_u, None)?
         }
         other => anyhow::bail!("unsupported streaming state dtype {other:?}"),
     })
@@ -487,6 +495,7 @@ fn run_asr(
     dtype: &str,
     batch_size: usize,
     mask_check: bool,
+    temperature: f64,
 ) -> Result<()> {
     use std::io::Write;
 
@@ -572,7 +581,7 @@ fn run_asr(
     lm_ctx.set_is_first(lm_is_first);
     lm_ctx.set_mask(lm_mask);
     lm_ctx.set_reset(lm_reset);
-    let next_token = lm_model.step(&text_in, &codes_in, &mut lm_ctx)?;
+    let next_token = lm_model.step(&text_in, &codes_in, temperature, &mut lm_ctx)?;
     let lm_state_shapes: Vec<_> = lm_ctx.state_shapes().to_vec();
     lm_ctx.setup_aliases(1);
     let mut lm_outs = vec![next_token];

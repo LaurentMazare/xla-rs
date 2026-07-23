@@ -662,6 +662,43 @@ xla_op op_zero_like(const xla_op arg) {
   END_PROTECT_OP(arg)
 }
 
+xla_op op_rng_bit_generator(int algorithm, const xla_op initial_state,
+                            int pr_type, size_t dsize, const int64_t *ds) {
+  BEGIN_PROTECT_OP
+  auto shape = ShapeUtil::MakeShape((PrimitiveType)pr_type,
+                                    absl::Span<const int64_t>(ds, dsize));
+  return new XlaOp(
+      RngBitGenerator((RandomAlgorithm)algorithm, *initial_state, shape));
+  END_PROTECT_OP(initial_state)
+}
+
+xla_op op_approx_top_k(const xla_op operand, int64_t top_k,
+                       int64_t reduction_dim, float recall_target) {
+  BEGIN_PROTECT_OP
+  auto builder = operand->builder();
+  const Shape *shape = builder->GetShapePtr(*operand).value();
+  auto ty = shape->element_type();
+  // Iota indices along the reduction dim, same dimensions as the operand.
+  auto iota_shape =
+      ShapeUtil::MakeShape(PrimitiveType::S32, shape->dimensions());
+  XlaOp iota = Iota(builder, iota_shape, reduction_dim);
+  // The comparator receives scalar (value, value, index, index) pairs and
+  // keeps the larger value.
+  XlaBuilder cb("approx_top_k_gt");
+  auto p0 = Parameter(&cb, 0, ShapeUtil::MakeShape(ty, {}), "lhs_value");
+  auto p1 = Parameter(&cb, 1, ShapeUtil::MakeShape(ty, {}), "rhs_value");
+  Parameter(&cb, 2, ShapeUtil::MakeShape(PrimitiveType::S32, {}), "lhs_index");
+  Parameter(&cb, 3, ShapeUtil::MakeShape(PrimitiveType::S32, {}), "rhs_index");
+  Gt(p0, p1);
+  auto comparator = cb.Build().value();
+  XlaOp init_value = MinValue(builder, ty);
+  XlaOp init_index = ConstantR0<int32_t>(builder, -1);
+  return new XlaOp(ApproxTopK(builder, {*operand, iota},
+                              {init_value, init_index}, top_k, reduction_dim,
+                              comparator, recall_target));
+  END_PROTECT_OP(operand)
+}
+
 xla_op op_reshape(const xla_op arg, size_t dsize, const int64_t *ds) {
   BEGIN_PROTECT_OP
   return new XlaOp(Reshape(*arg, absl::Span<const int64_t>(ds, dsize)));

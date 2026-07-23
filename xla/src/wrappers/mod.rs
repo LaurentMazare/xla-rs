@@ -77,6 +77,15 @@ impl PrimitiveType {
     }
 }
 
+/// The algorithm used by [`XlaOp::rng_bit_generator`](crate::XlaOp::rng_bit_generator).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RandomAlgorithm {
+    /// The backend picks its preferred algorithm.
+    Default = 0,
+    ThreeFry = 1,
+    Philox = 2,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ElementType {
     Pred,

@@ -98,11 +98,15 @@ impl LmModel {
 
     /// One decoding step. `text_token`: `[b]` (s32), the previous text tokens.
     /// `audio_codes`: `[b, codebooks, 1]` (s64), one slice of Mimi codes.
-    /// Returns the greedy next text tokens `[b]` (s32).
+    /// Returns the next text tokens `[b]` (s32): the greedy argmax when
+    /// `temperature` is zero, otherwise gumbel-max sampling driven by an
+    /// on-device three-fry generator whose state threads through the step
+    /// states (zero-initialised, so runs are reproducible).
     pub fn step(
         &self,
         text_token: &XlaOp,
         audio_codes: &XlaOp,
+        temperature: f64,
         ctx: &mut StepCtx,
     ) -> Result<XlaOp> {
         let b = text_token.dims()?[0] as i64;
@@ -144,13 +148,34 @@ impl LmModel {
         let ys = self.out_norm.forward(&ys)?;
         let rank = ys.rank()? as i64;
         let logits = ys.dot_general(&self.text_linear, &[rank - 1], &[1], &[], &[])?;
-        // Greedy sampling: the reference uses gumbel_max which degenerates to
-        // argmax at temperature 0 (computed over f32 logits).
-        let token = logits
-            .reshape(&[b, logits.dims()?[2] as i64])?
-            .convert(PrimitiveType::F32)?
-            .argmax(ElementType::S32, -1)?
-            .reshape(&[b])?;
+        // Gumbel-max sampling over the f32 logits, as in the reference: at
+        // temperature 0 this is a plain argmax and no noise is added.
+        let vocab = logits.dims()?[2] as i64;
+        let mut logits = logits.reshape(&[b, vocab])?.convert(PrimitiveType::F32)?;
+        if temperature > 0.0 {
+            // The rng state is raw: it must keep advancing regardless of the
+            // per-session mask/reset handling (and its leading dim is not the
+            // batch).
+            let (idx_rng, rng_state) = ctx.state_in_no_reset(ElementType::U64, &[2])?;
+            let out = rng_state.rng_bit_generator(
+                xla::RandomAlgorithm::ThreeFry,
+                ElementType::U32,
+                &[b, vocab],
+            )?;
+            ctx.state_out_raw(idx_rng, out.get_tuple_element(0)?);
+            let bits = out.get_tuple_element(1)?;
+            // Uniform in (0, 1), clamped away from the log singularities.
+            let u = bits.convert(PrimitiveType::F32)?;
+            let scale = builder.c0(1.0f32 / 4294967296.0)?.broadcast(&[b, vocab])?;
+            let lo = builder.c0(1e-7f32)?.broadcast(&[b, vocab])?;
+            let hi = builder.c0(0.999f32)?.broadcast(&[b, vocab])?;
+            let u = u.mul_(&scale)?.clamp(&lo, &hi)?;
+            // logits - temperature * log(-log(u)), matching the reference.
+            let noise = u.log()?.neg()?.log()?;
+            let temp = builder.c0(temperature as f32)?.broadcast(&[b, vocab])?;
+            logits = logits.sub_(&noise.mul_(&temp)?)?;
+        }
+        let token = logits.argmax(ElementType::S32, -1)?.reshape(&[b])?;
         // Inactive sessions keep their previous text token so that the
         // on-device chain resumes where it left off.
         match ctx.mask_pred()? {

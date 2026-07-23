@@ -12,6 +12,7 @@
 #include "xla/client/client_library.h"
 #include "xla/debug_options_flags.h"
 #include "xla/hlo/builder/lib/arithmetic.h"
+#include "xla/hlo/builder/lib/approx_topk.h"
 #include "xla/hlo/builder/lib/constants.h"
 #include "xla/hlo/builder/lib/matrix.h"
 #include "xla/hlo/builder/xla_builder.h"
@@ -107,6 +108,8 @@ xla_op op_sub(const xla_op, const xla_op);
 xla_op op_mul(const xla_op, const xla_op);
 xla_op op_div(const xla_op, const xla_op);
 xla_op op_rem(const xla_op, const xla_op);
+xla_op op_rng_bit_generator(int, const xla_op, int, size_t, const int64_t *);
+xla_op op_approx_top_k(const xla_op, int64_t, int64_t, float);
 xla_op op_max(const xla_op, const xla_op);
 xla_op op_min(const xla_op, const xla_op);
 xla_op op_and(const xla_op, const xla_op);

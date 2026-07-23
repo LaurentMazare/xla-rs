@@ -832,6 +832,44 @@ impl XlaOp {
         self.wrap(op)
     }
 
+    /// Generate deterministic pseudo-random bits from an explicit generator
+    /// state (`self`, `u64[2]` for three-fry, `u64[3]` for philox). Returns a
+    /// `(new_state, bits)` tuple: feed the new state to the next call to
+    /// continue the stream. The bits have the requested (integral) element
+    /// type and shape.
+    ///
+    /// See the [semantics](https://openxla.org/xla/operation_semantics#rngbitgenerator).
+    pub fn rng_bit_generator(
+        &self,
+        algorithm: super::RandomAlgorithm,
+        ty: super::ElementType,
+        dims: &[i64],
+    ) -> Result<Self> {
+        let op = unsafe {
+            c_lib::op_rng_bit_generator(
+                algorithm as i32,
+                self.op,
+                ty.primitive_type() as i32,
+                dims.len(),
+                dims.as_ptr(),
+            )
+        };
+        self.wrap(op)
+    }
+
+    /// Approximate top-k along `dim`, returning a `(values, indices)` tuple
+    /// (indices as `s32`). `recall_target` trades accuracy for speed; the
+    /// candidates are aggregated to an exact top-k of the retained set, so
+    /// small inputs come out exact.
+    ///
+    /// See the [documentation](https://openxla.org/xla/operation_semantics)
+    /// and the ApproxTopK paper (https://arxiv.org/abs/2206.14286).
+    pub fn approx_top_k(&self, top_k: i64, dim: i64, recall_target: f32) -> Result<Self> {
+        let dim = self.normalize_index(dim)?;
+        let op = unsafe { c_lib::op_approx_top_k(self.op, top_k, dim, recall_target) };
+        self.wrap(op)
+    }
+
     pub fn take(&self, indices: &XlaOp, axis: i64) -> Result<Self> {
         let axis = self.normalize_index(axis)?;
         let shape = self.array_shape()?;
