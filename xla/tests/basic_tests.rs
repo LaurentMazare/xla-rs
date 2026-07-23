@@ -473,3 +473,40 @@ fn approx_top_k_op() -> Result<()> {
     assert_eq!(indices, [1, 3, 6]);
     Ok(())
 }
+
+#[test]
+fn sample_uniform_normal_ops() -> Result<()> {
+    let client = xla::PjRtClient::cpu()?;
+    let builder = xla::XlaBuilder::new("test");
+    let state = builder.parameter(0, u64::TY, &[2], "state")?;
+    let (state, uniform) = state.sample_uniform(
+        xla::RandomAlgorithm::ThreeFry,
+        xla::ElementType::F32,
+        &[10000],
+        -2.,
+        3.,
+    )?;
+    let (_, normal) =
+        state.sample_normal(xla::RandomAlgorithm::ThreeFry, xla::ElementType::F32, &[10000])?;
+    let exe = builder.tuple(&[&uniform, &normal])?.build()?.compile(&client)?;
+    let seed = xla::Literal::vec1(&[42u64, 1337u64]);
+    let r = &exe.execute::<xla::Literal>(&[seed])?[0];
+    let uniform = r[0].to_literal_sync()?.to_vec::<f32>()?;
+    let normal = r[1].to_literal_sync()?.to_vec::<f32>()?;
+    // Uniform samples respect the bounds and have roughly the right moments.
+    assert!(uniform.iter().all(|&x| (-2.0..3.0).contains(&x)));
+    let mean = uniform.iter().sum::<f32>() / uniform.len() as f32;
+    assert!((mean - 0.5).abs() < 0.05, "uniform mean {mean}");
+    // Normal samples have roughly zero mean and unit variance.
+    let mean = normal.iter().sum::<f32>() / normal.len() as f32;
+    let var = normal.iter().map(|x| (x - mean) * (x - mean)).sum::<f32>() / normal.len() as f32;
+    assert!(mean.abs() < 0.05, "normal mean {mean}");
+    assert!((var - 1.0).abs() < 0.1, "normal var {var}");
+    // The two draws use different states and are uncorrelated with each other.
+    let (u_mean, n_mean) = (0.5f32, 0f32);
+    let cov =
+        uniform.iter().zip(normal.iter()).map(|(u, n)| (u - u_mean) * (n - n_mean)).sum::<f32>()
+            / uniform.len() as f32;
+    assert!(cov.abs() < 0.05, "covariance {cov}");
+    Ok(())
+}

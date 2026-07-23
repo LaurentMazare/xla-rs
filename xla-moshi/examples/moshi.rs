@@ -191,6 +191,8 @@ fn audio_to_audio(
 }
 
 fn main() -> Result<()> {
+    xla::set_tf_min_log_level(xla::TfLogLevel::Warning);
+    xla::set_min_log_level(xla::TfLogLevel::Warning);
     let cli = Cli::parse();
     match cli.command {
         Command::AudioToAudio { input, output, codebooks, cpu, streaming } => {

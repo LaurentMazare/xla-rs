@@ -857,6 +857,64 @@ impl XlaOp {
         self.wrap(op)
     }
 
+    /// Draw uniform samples in `[lo, hi)` using the generator state `self`
+    /// (see [`rng_bit_generator`](Self::rng_bit_generator) for the state
+    /// layout). Returns `(new_state, samples)`: feed the new state to the
+    /// next draw to continue the stream. The samples are computed in f32 from
+    /// 24 random bits and converted to the requested float element type.
+    pub fn sample_uniform(
+        &self,
+        algorithm: super::RandomAlgorithm,
+        ty: super::ElementType,
+        dims: &[i64],
+        lo: f32,
+        hi: f32,
+    ) -> Result<(Self, Self)> {
+        let b = self.builder();
+        let out = self.rng_bit_generator(algorithm, super::ElementType::U32, dims)?;
+        let new_state = out.get_tuple_element(0)?;
+        let bits = out.get_tuple_element(1)?;
+        let mask = b.c0(0x00ff_ffffu32)?.broadcast(dims)?;
+        let u = bits.and(&mask)?.convert(PrimitiveType::F32)?;
+        let scale = b.c0((hi - lo) / 16_777_216f32)?.broadcast(dims)?;
+        let lo = b.c0(lo)?.broadcast(dims)?;
+        let samples = u.mul_(&scale)?.add_(&lo)?.convert(ty.primitive_type())?;
+        Ok((new_state, samples))
+    }
+
+    /// Draw standard-normal samples using the generator state `self`, via the
+    /// Box-Muller transform (the cosine branch). Returns
+    /// `(new_state, samples)` as in [`sample_uniform`](Self::sample_uniform);
+    /// the samples are computed in f32 and converted to the requested float
+    /// element type.
+    pub fn sample_normal(
+        &self,
+        algorithm: super::RandomAlgorithm,
+        ty: super::ElementType,
+        dims: &[i64],
+    ) -> Result<(Self, Self)> {
+        let b = self.builder();
+        // Two uniform draws per sample, stacked on a leading dimension.
+        let mut bdims = vec![2];
+        bdims.extend_from_slice(dims);
+        let out = self.rng_bit_generator(algorithm, super::ElementType::U32, &bdims)?;
+        let new_state = out.get_tuple_element(0)?;
+        let bits = out.get_tuple_element(1)?;
+        let mask = b.c0(0x00ff_ffffu32)?.broadcast(&bdims)?;
+        let u = bits.and(&mask)?.convert(PrimitiveType::F32)?;
+        let at = |i: i64| -> Result<Self> { u.slice_in_dim1(i, i + 1, 0)?.reshape(dims) };
+        let scale = b.c0(1f32 / 16_777_216f32)?.broadcast(dims)?;
+        // u1 in (0, 1] so that the logarithm stays finite, u2 in [0, 1).
+        let one = b.c0(1f32)?.broadcast(dims)?;
+        let u1 = at(0)?.add_(&one)?.mul_(&scale)?;
+        let u2 = at(1)?.mul_(&scale)?;
+        let minus_two = b.c0(-2f32)?.broadcast(dims)?;
+        let r = u1.log()?.mul_(&minus_two)?.sqrt()?;
+        let tau = b.c0(std::f32::consts::TAU)?.broadcast(dims)?;
+        let samples = r.mul_(&u2.mul_(&tau)?.cos()?)?.convert(ty.primitive_type())?;
+        Ok((new_state, samples))
+    }
+
     /// Approximate top-k along `dim`, returning a `(values, indices)` tuple
     /// (indices as `s32`). `recall_target` trades accuracy for speed; the
     /// candidates are aggregated to an exact top-k of the retained set, so

@@ -157,19 +157,16 @@ impl LmModel {
             // per-session mask/reset handling (and its leading dim is not the
             // batch).
             let (idx_rng, rng_state) = ctx.state_in_no_reset(ElementType::U64, &[2])?;
-            let out = rng_state.rng_bit_generator(
+            // Uniform in a range clear of the log singularities, matching the
+            // reference implementation.
+            let (rng_state, u) = rng_state.sample_uniform(
                 xla::RandomAlgorithm::ThreeFry,
-                ElementType::U32,
+                ElementType::F32,
                 &[b, vocab],
+                1e-7,
+                0.999,
             )?;
-            ctx.state_out_raw(idx_rng, out.get_tuple_element(0)?);
-            let bits = out.get_tuple_element(1)?;
-            // Uniform in (0, 1), clamped away from the log singularities.
-            let u = bits.convert(PrimitiveType::F32)?;
-            let scale = builder.c0(1.0f32 / 4294967296.0)?.broadcast(&[b, vocab])?;
-            let lo = builder.c0(1e-7f32)?.broadcast(&[b, vocab])?;
-            let hi = builder.c0(0.999f32)?.broadcast(&[b, vocab])?;
-            let u = u.mul_(&scale)?.clamp(&lo, &hi)?;
+            ctx.state_out_raw(idx_rng, rng_state);
             // logits - temperature * log(-log(u)), matching the reference.
             let noise = u.log()?.neg()?.log()?;
             let temp = builder.c0(temperature as f32)?.broadcast(&[b, vocab])?;
