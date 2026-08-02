@@ -6,6 +6,12 @@ pub struct PjRtLoadedExecutable {
     pub(super) client: super::PjRtClient,
 }
 
+// SAFETY: PJRT executables are thread-safe in the C++ API (execution can be
+// triggered concurrently), and the embedded client handle is reference-counted
+// through an `Arc`.
+unsafe impl Send for PjRtLoadedExecutable {}
+unsafe impl Sync for PjRtLoadedExecutable {}
+
 impl PjRtLoadedExecutable {
     /// The client that owns this executable.
     pub fn client(&self) -> &super::PjRtClient {
