@@ -128,6 +128,22 @@ impl Literal {
         Ok(())
     }
 
+    /// Copy the literal data to a byte slice, regardless of the literal element type. The
+    /// destination has to match the literal size in bytes exactly.
+    pub fn copy_untyped_to(&self, dst: &mut [u8]) -> Result<()> {
+        let size_bytes = self.size_bytes();
+        if dst.len() != size_bytes {
+            Err(Error::BinaryBufferIsTooLarge {
+                element_count: size_bytes,
+                buffer_len: dst.len(),
+            })?
+        }
+        unsafe {
+            c_lib::literal_copy_to(self.0, dst.as_mut_ptr() as *mut libc::c_void, size_bytes)
+        };
+        Ok(())
+    }
+
     /// Copy data from a slice to the literal. This returns an error if the primitive type used
     /// by the literal is not `T` or if number of elements in the slice and the literal are
     /// different.

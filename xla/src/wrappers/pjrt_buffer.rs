@@ -8,6 +8,11 @@ pub struct PjRtBuffer {
     pub(super) client: super::PjRtClient,
 }
 
+// SAFETY: PJRT buffers are thread-safe in the C++ API, and the embedded client
+// handle is reference-counted through an `Arc`.
+unsafe impl Send for PjRtBuffer {}
+unsafe impl Sync for PjRtBuffer {}
+
 impl PjRtBuffer {
     /// The client that owns this buffer.
     pub fn client(&self) -> &super::PjRtClient {
