@@ -133,10 +133,7 @@ impl Literal {
     pub fn copy_untyped_to(&self, dst: &mut [u8]) -> Result<()> {
         let size_bytes = self.size_bytes();
         if dst.len() != size_bytes {
-            Err(Error::BinaryBufferIsTooLarge {
-                element_count: size_bytes,
-                buffer_len: dst.len(),
-            })?
+            Err(Error::BinaryBufferIsTooLarge { element_count: size_bytes, buffer_len: dst.len() })?
         }
         unsafe {
             c_lib::literal_copy_to(self.0, dst.as_mut_ptr() as *mut libc::c_void, size_bytes)
