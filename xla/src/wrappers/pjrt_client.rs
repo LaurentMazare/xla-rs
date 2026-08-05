@@ -196,6 +196,12 @@ impl PjRtClient {
         device: Option<&PjRtDevice>,
     ) -> Result<PjRtBuffer> {
         let mut buffer: c_lib::pjrt_buffer = std::ptr::null_mut();
+        // Sub-byte types are stored packed (two f4 elements per byte), so the
+        // per-element byte accounting below would silently mismatch the
+        // layout PJRT expects.
+        if ty == super::ElementType::F4E2M1FN {
+            Err(Error::UnexpectedElementType(super::PrimitiveType::F4E2M1FN as i32))?
+        }
         let element_count: usize = dims.iter().product();
         let element_size_in_bytes = ty.element_size_in_bytes();
         if element_count * element_size_in_bytes != data.len() {

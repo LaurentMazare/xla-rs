@@ -50,6 +50,15 @@ pub enum PrimitiveType {
     /// 8-bit float with a 4-bit exponent and a 3-bit mantissa, finite-only
     /// (no infinities, a single NaN bit-pattern).
     F8E4M3FN = 20,
+    /// 4-bit float with a 2-bit exponent and a 1-bit mantissa, finite-only.
+    /// This is the MX (microscaling) element type; note that it is sub-byte:
+    /// XLA packs two elements per byte in literals and device buffers, so the
+    /// byte-oriented host-transfer helpers do not support it.
+    F4E2M1FN = 32,
+    /// 8-bit unsigned float with an 8-bit exponent, no mantissa and no sign:
+    /// the power-of-two MX (microscaling) shared-scale type. It has no zero,
+    /// no infinities and a single NaN bit-pattern.
+    F8E8M0FNU = 33,
     C64 = 15,
     C128 = 18,
     Tuple = 13,
@@ -77,6 +86,8 @@ impl PrimitiveType {
             Self::F64 => Ok(ElementType::F64),
             Self::F8E5M2 => Ok(ElementType::F8E5M2),
             Self::F8E4M3FN => Ok(ElementType::F8E4M3FN),
+            Self::F4E2M1FN => Ok(ElementType::F4E2M1FN),
+            Self::F8E8M0FNU => Ok(ElementType::F8E8M0FNU),
             Self::C64 => Ok(ElementType::C64),
             Self::C128 => Ok(ElementType::C128),
             Self::Invalid | Self::Tuple | Self::OpaqueType | Self::Token => {
@@ -112,6 +123,8 @@ pub enum ElementType {
     F64,
     F8E5M2,
     F8E4M3FN,
+    F4E2M1FN,
+    F8E8M0FNU,
     C64,
     C128,
 }
@@ -135,6 +148,12 @@ impl ElementType {
             Self::F64 => 8,
             Self::F8E5M2 => 1,
             Self::F8E4M3FN => 1,
+            // Sub-byte: a single unpacked element fits in one byte, but XLA
+            // stores f4 data packed two elements per byte — sizes derived
+            // from this value must not be used for packed host data (see
+            // `PjRtClient::buffer_from_host_raw_bytes`).
+            Self::F4E2M1FN => 1,
+            Self::F8E8M0FNU => 1,
             Self::C64 => 8,
             Self::C128 => 16,
         }
@@ -157,6 +176,8 @@ impl ElementType {
             Self::F64 => PrimitiveType::F64,
             Self::F8E5M2 => PrimitiveType::F8E5M2,
             Self::F8E4M3FN => PrimitiveType::F8E4M3FN,
+            Self::F4E2M1FN => PrimitiveType::F4E2M1FN,
+            Self::F8E8M0FNU => PrimitiveType::F8E8M0FNU,
             Self::C64 => PrimitiveType::C64,
             Self::C128 => PrimitiveType::C128,
         }
@@ -318,6 +339,18 @@ pub struct F8E4M3FN;
 
 impl ArrayElement for F8E4M3FN {
     const TY: ElementType = ElementType::F8E4M3FN;
+    const ELEMENT_SIZE_IN_BYTES: usize = 1;
+    const ZERO: Self = Self;
+}
+
+// Dummy F8E8M0FNU type, see `F8E5M2`. There is deliberately no marker type
+// for `F4E2M1FN`: it is packed two elements per byte, so none of the
+// byte-per-element host paths gated by `ArrayElement` can handle it.
+#[derive(Copy, Clone, Debug)]
+pub struct F8E8M0FNU;
+
+impl ArrayElement for F8E8M0FNU {
+    const TY: ElementType = ElementType::F8E8M0FNU;
     const ELEMENT_SIZE_IN_BYTES: usize = 1;
     const ZERO: Self = Self;
 }
