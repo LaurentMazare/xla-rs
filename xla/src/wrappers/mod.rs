@@ -45,6 +45,11 @@ pub enum PrimitiveType {
     F32 = 11,
     Bf16 = 16,
     F64 = 12,
+    /// 8-bit float with a 5-bit exponent and a 2-bit mantissa.
+    F8E5M2 = 19,
+    /// 8-bit float with a 4-bit exponent and a 3-bit mantissa, finite-only
+    /// (no infinities, a single NaN bit-pattern).
+    F8E4M3FN = 20,
     C64 = 15,
     C128 = 18,
     Tuple = 13,
@@ -53,7 +58,9 @@ pub enum PrimitiveType {
 }
 
 impl PrimitiveType {
-    fn element_type(self) -> Result<ElementType> {
+    /// The [`ElementType`] for this primitive type, or an error for the
+    /// non-element types (`Invalid`, `Tuple`, `OpaqueType`, `Token`).
+    pub fn element_type(self) -> Result<ElementType> {
         match self {
             Self::Pred => Ok(ElementType::Pred),
             Self::S8 => Ok(ElementType::S8),
@@ -68,6 +75,8 @@ impl PrimitiveType {
             Self::F32 => Ok(ElementType::F32),
             Self::Bf16 => Ok(ElementType::Bf16),
             Self::F64 => Ok(ElementType::F64),
+            Self::F8E5M2 => Ok(ElementType::F8E5M2),
+            Self::F8E4M3FN => Ok(ElementType::F8E4M3FN),
             Self::C64 => Ok(ElementType::C64),
             Self::C128 => Ok(ElementType::C128),
             Self::Invalid | Self::Tuple | Self::OpaqueType | Self::Token => {
@@ -101,6 +110,8 @@ pub enum ElementType {
     F32,
     Bf16,
     F64,
+    F8E5M2,
+    F8E4M3FN,
     C64,
     C128,
 }
@@ -122,6 +133,8 @@ impl ElementType {
             Self::F32 => 4,
             Self::Bf16 => 2,
             Self::F64 => 8,
+            Self::F8E5M2 => 1,
+            Self::F8E4M3FN => 1,
             Self::C64 => 8,
             Self::C128 => 16,
         }
@@ -142,6 +155,8 @@ impl ElementType {
             Self::F32 => PrimitiveType::F32,
             Self::Bf16 => PrimitiveType::Bf16,
             Self::F64 => PrimitiveType::F64,
+            Self::F8E5M2 => PrimitiveType::F8E5M2,
+            Self::F8E4M3FN => PrimitiveType::F8E4M3FN,
             Self::C64 => PrimitiveType::C64,
             Self::C128 => PrimitiveType::C128,
         }
@@ -282,6 +297,28 @@ pub struct Bf16;
 impl ArrayElement for Bf16 {
     const TY: ElementType = ElementType::Bf16;
     const ELEMENT_SIZE_IN_BYTES: usize = 2;
+    const ZERO: Self = Self;
+}
+
+// Dummy F8E5M2 type. Like `F16`/`Bf16` there is no native host representation:
+// values are produced and consumed on the host through `convert` to/from a
+// wider float type.
+#[derive(Copy, Clone, Debug)]
+pub struct F8E5M2;
+
+impl ArrayElement for F8E5M2 {
+    const TY: ElementType = ElementType::F8E5M2;
+    const ELEMENT_SIZE_IN_BYTES: usize = 1;
+    const ZERO: Self = Self;
+}
+
+// Dummy F8E4M3FN type, see `F8E5M2`.
+#[derive(Copy, Clone, Debug)]
+pub struct F8E4M3FN;
+
+impl ArrayElement for F8E4M3FN {
+    const TY: ElementType = ElementType::F8E4M3FN;
+    const ELEMENT_SIZE_IN_BYTES: usize = 1;
     const ZERO: Self = Self;
 }
 
