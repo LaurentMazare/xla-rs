@@ -603,20 +603,6 @@ impl hf_hub::progress::ProgressHandler for DownloadProgress {
     }
 }
 
-// Write a f32 literal out as raw little-endian values. Only used to compare the
-// intermediate tensors with the reference implementation, the shapes are known
-// on the reading side.
-fn dump_f32(literal: &xla::Literal, path: String) -> Result<()> {
-    use std::io::Write;
-    let values = literal.to_vec::<f32>()?;
-    let mut bytes = Vec::with_capacity(values.len() * 4);
-    for v in values.iter() {
-        bytes.extend_from_slice(&v.to_le_bytes())
-    }
-    std::fs::File::create(path)?.write_all(&bytes)?;
-    Ok(())
-}
-
 fn human_bytes(n: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
     let mut v = n as f64;
@@ -734,9 +720,9 @@ struct Args {
     #[arg(long, default_value_t = 1)]
     bench_reps: usize,
 
-    /// When set, write the encoder output to <prefix>-encoder.bin and the logits
-    /// of the first decoder step to <prefix>-logits.bin as raw f32 values, for
-    /// comparison with the reference implementation.
+    /// When set, write the encoder output to <prefix>-encoder.npy and the logits
+    /// of the first decoder step to <prefix>-logits.npy, for comparison with the
+    /// reference implementation.
     #[arg(long)]
     dump_prefix: Option<String>,
 
@@ -915,8 +901,8 @@ fn main() -> Result<()> {
     let tok_s = tokens.len() as f64 / best_decode.as_secs_f64();
     println!("decoded {} tokens in {best_decode:?} -> {tok_s:.1} tok/s", tokens.len());
     if let Some(prefix) = args.dump_prefix.as_ref() {
-        dump_f32(encoder_hidden.as_ref().unwrap(), format!("{prefix}-encoder.bin"))?;
-        dump_f32(first_logits.as_ref().unwrap(), format!("{prefix}-logits.bin"))?;
+        encoder_hidden.as_ref().unwrap().write_npy(format!("{prefix}-encoder.npy"))?;
+        first_logits.as_ref().unwrap().write_npy(format!("{prefix}-logits.npy"))?;
     }
 
     println!("generated ids: {tokens:?}");
