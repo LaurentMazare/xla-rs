@@ -290,6 +290,14 @@ impl<T: NativeType> From<&[T]> for Literal {
     }
 }
 
+// Needed so that literals can be passed to the `AsRef<Literal>` based apis,
+// e.g. `Literal::write_npz`.
+impl AsRef<Literal> for Literal {
+    fn as_ref(&self) -> &Literal {
+        self
+    }
+}
+
 impl Drop for Literal {
     fn drop(&mut self) {
         unsafe { c_lib::literal_free(self.0) }

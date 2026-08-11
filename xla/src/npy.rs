@@ -295,11 +295,10 @@ impl crate::Literal {
         header.push('\n');
         f.write_all(&[(header.len() % 256) as u8, (header.len() / 256) as u8])?;
         f.write_all(header.as_bytes())?;
-        let numel = self.element_count();
-        let element_type = self.element_type()?;
-        let elt_size_in_bytes = element_type.element_size_in_bytes();
-        let mut content = vec![0u8; numel * elt_size_in_bytes];
-        self.copy_raw_to(&mut content)?;
+        // The data is copied out untyped: `copy_raw_to` would check the literal
+        // element type against the type of the destination slice, i.e. u8 here.
+        let mut content = vec![0u8; self.size_bytes()];
+        self.copy_untyped_to(&mut content)?;
         f.write_all(&content)?;
         Ok(())
     }
@@ -329,7 +328,39 @@ impl crate::Literal {
 
 #[cfg(test)]
 mod tests {
-    use super::Header;
+    use super::{FromRawBytes, Header};
+    use crate::Literal;
+
+    #[test]
+    fn npy_round_trip() {
+        let path = std::env::temp_dir().join(format!("xla-rs-npy-{}.npy", std::process::id()));
+        let values: Vec<f32> = (0..24).map(|v| v as f32 * 0.5).collect();
+        let literal = Literal::vec1(&values).reshape(&[2, 3, 4]).unwrap();
+        literal.write_npy(&path).unwrap();
+        let read = Literal::read_npy(&path, &()).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(read.array_shape().unwrap().dims(), [2, 3, 4]);
+        assert_eq!(read.to_vec::<f32>().unwrap(), values);
+    }
+
+    #[test]
+    fn npz_round_trip() {
+        let path = std::env::temp_dir().join(format!("xla-rs-npz-{}.npz", std::process::id()));
+        let f32s: Vec<f32> = vec![1.5, -2.5, 3.0];
+        let i32s: Vec<i32> = vec![7, -8];
+        Literal::write_npz(
+            &[("floats", Literal::vec1(&f32s)), ("ints", Literal::vec1(&i32s))],
+            &path,
+        )
+        .unwrap();
+        let read = Literal::read_npz(&path, &()).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(read.len(), 2);
+        assert_eq!(read[0].0, "floats");
+        assert_eq!(read[0].1.to_vec::<f32>().unwrap(), f32s);
+        assert_eq!(read[1].0, "ints");
+        assert_eq!(read[1].1.to_vec::<i32>().unwrap(), i32s);
+    }
 
     #[test]
     fn parse() {
