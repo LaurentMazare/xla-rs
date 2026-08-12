@@ -365,6 +365,46 @@ impl Path {
         self.inner.var(&self.key(name), dims)
     }
 
+    /// The number of declared weight parameters, see [`VarBuilder::num_vars`].
+    pub fn num_vars(&self) -> usize {
+        self.inner.num_vars()
+    }
+
+    /// The parameter index right after the last declared weight, see
+    /// [`VarBuilder::next_index`].
+    pub fn next_index(&self) -> usize {
+        self.inner.next_index()
+    }
+
+    /// The dtype the weights are declared and loaded as.
+    pub fn dtype(&self) -> ElementType {
+        self.inner.dtype()
+    }
+
+    /// Load the declared weights from safetensors shards, see
+    /// [`VarBuilder::load_buffers`].
+    pub fn load_buffers<P: AsRef<std::path::Path>>(
+        &self,
+        paths: &[P],
+        client: &PjRtClient,
+    ) -> Result<Vec<PjRtBuffer>> {
+        self.inner.load_buffers(paths, client)
+    }
+
+    /// See [`VarBuilder::check_all_used`].
+    pub fn check_all_used<P: AsRef<std::path::Path>>(&self, paths: &[P]) -> Result<()> {
+        self.inner.check_all_used(paths)
+    }
+
+    /// See [`VarBuilder::check_all_used_with_ignore`].
+    pub fn check_all_used_with_ignore<P: AsRef<std::path::Path>>(
+        &self,
+        paths: &[P],
+        ignore_f: impl Fn(&str) -> bool,
+    ) -> Result<()> {
+        self.inner.check_all_used_with_ignore(paths, ignore_f)
+    }
+
     pub fn var_builder(&self) -> &std::rc::Rc<VarBuilder> {
         &self.inner
     }
