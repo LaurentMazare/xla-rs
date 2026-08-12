@@ -16,7 +16,7 @@ pub mod quantization;
 pub mod seanet;
 pub mod transformer;
 
-pub use xla_nn::{Error, Result};
+pub use xla_nn::{Error, Path, Result};
 
 use xla::{ElementType, XlaBuilder, XlaOp};
 
@@ -210,45 +210,6 @@ impl<'a> StepCtx<'a> {
     /// The updated state nodes, in parameter order (each slot must have been set).
     pub fn into_new_states(self) -> Vec<XlaOp> {
         self.new_states.into_iter().map(|o| o.expect("a state slot was never written")).collect()
-    }
-}
-
-/// A thin helper that mirrors the `Path` used in the `xn` reference: it keeps a
-/// dotted prefix and forwards weight declarations to an [`xla_nn::VarBuilder`],
-/// so the safetensors names line up exactly with the reference implementation.
-#[derive(Clone)]
-pub struct Vb<'a> {
-    inner: &'a xla_nn::VarBuilder,
-    prefix: String,
-}
-
-impl<'a> Vb<'a> {
-    pub fn new(inner: &'a xla_nn::VarBuilder) -> Self {
-        Self { inner, prefix: String::new() }
-    }
-
-    /// Push a component onto the prefix (like `cd`-ing into a directory).
-    pub fn pp(&self, s: impl std::fmt::Display) -> Vb<'a> {
-        let prefix =
-            if self.prefix.is_empty() { s.to_string() } else { format!("{}.{s}", self.prefix) };
-        Vb { inner: self.inner, prefix }
-    }
-
-    fn key(&self, name: &str) -> String {
-        if self.prefix.is_empty() {
-            name.to_string()
-        } else {
-            format!("{}.{name}", self.prefix)
-        }
-    }
-
-    /// Declare a weight parameter and return the corresponding graph node.
-    pub fn var(&self, name: &str, dims: &[i64]) -> Result<XlaOp> {
-        self.inner.var(&self.key(name), dims)
-    }
-
-    pub fn var_builder(&self) -> &'a xla_nn::VarBuilder {
-        self.inner
     }
 }
 

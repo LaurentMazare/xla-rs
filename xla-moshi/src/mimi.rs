@@ -4,7 +4,7 @@ use crate::conv::{ConvDownsample1d, ConvTrUpsample1d, Norm, PadMode};
 use crate::quantization::SplitResidualVectorQuantizer;
 use crate::seanet::{self, SeaNetDecoder, SeaNetEncoder};
 use crate::transformer::{self, PositionalEmbedding, ProjectedTransformer};
-use crate::{Result, StepCtx, Vb};
+use crate::{Path, Result, StepCtx};
 use xla::XlaOp;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -98,7 +98,7 @@ pub struct Mimi {
 }
 
 impl Mimi {
-    pub fn load(vb: &Vb, cfg: Config) -> Result<Self> {
+    pub fn load(vb: &Path, cfg: Config) -> Result<Self> {
         let dim = cfg.seanet.dimension as i64;
         let encoder = SeaNetEncoder::load(&vb.pp("encoder"), &cfg.seanet)?;
         let decoder = SeaNetDecoder::load(&vb.pp("decoder"), &cfg.seanet)?;

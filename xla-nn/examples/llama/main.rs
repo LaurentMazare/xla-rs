@@ -7,7 +7,7 @@
 // The tokenizer config can be retrieved from:
 // https://huggingface.co/hf-internal-testing/llama-tokenizer/blob/main/tokenizer.json
 //
-// In order to convert the llama weights to a .npz file, run:
+// In order to convert the llama weights to a llama.safetensors file, run:
 // python examples/llama/convert_checkpoint.py ..../LLaMA/7B/consolidated.00.pth
 use anyhow::Result;
 use clap::Parser;
@@ -15,11 +15,10 @@ use rand::prelude::*;
 
 extern crate xla;
 use xla::{ElementType, PrimitiveType, XlaBuilder, XlaOp};
+use xla_nn::{Linear, Path};
 
 mod sentencepiece;
 use sentencepiece::Tokenizer;
-mod var_store;
-use var_store::{VarBuilder, VarStore};
 
 const CONTEXT_SIZE: usize = 512;
 const START_PROMPT: &str = r"
@@ -107,8 +106,8 @@ struct Embedding {
 }
 
 impl Embedding {
-    fn new(mut vb: VarBuilder, vocab_size: usize, n_embd: usize) -> Result<Self> {
-        let embeddings = vb.var("weight", &[vocab_size, n_embd])?;
+    fn new(vb: &Path, vocab_size: usize, n_embd: usize) -> Result<Self> {
+        let embeddings = vb.var("weight", &[vocab_size as i64, n_embd as i64])?;
         Ok(Self { embeddings })
     }
 
@@ -118,47 +117,14 @@ impl Embedding {
     }
 }
 
-struct Linear {
-    ws: XlaOp,
-    bs: Option<XlaOp>,
-    out_size: usize,
-}
-
-impl Linear {
-    #[allow(dead_code)]
-    fn new(mut vb: VarBuilder, in_size: usize, out_size: usize) -> Result<Self> {
-        let ws = vb.var("weight", &[in_size, out_size])?;
-        let bs = vb.var("bias", &[out_size])?;
-        Ok(Self { ws, bs: Some(bs), out_size })
-    }
-
-    fn new_no_bias(mut vb: VarBuilder, in_size: usize, out_size: usize) -> Result<Self> {
-        let ws = vb.var("weight", &[in_size, out_size])?;
-        Ok(Self { ws, bs: None, out_size })
-    }
-
-    fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
-        let x_rank = x.rank()?;
-        let x = x.dot_general(&self.ws, &[x_rank as i64 - 1], &[0], &[], &[])?;
-        let y = match &self.bs {
-            None => x,
-            Some(bs) => {
-                let bs = bs.reshape(&[1, 1, self.out_size as i64])?;
-                (x + bs)?
-            }
-        };
-        Ok(y)
-    }
-}
-
 struct RmsNorm {
     scale: XlaOp,
     size: i64,
 }
 
 impl RmsNorm {
-    fn new(mut vb: VarBuilder, size: usize) -> Result<Self> {
-        let scale = vb.var("scale", &[size])?;
+    fn new(vb: &Path, size: usize) -> Result<Self> {
+        let scale = vb.var("scale", &[size as i64])?;
         Ok(Self { scale, size: size as i64 })
     }
 
@@ -179,18 +145,19 @@ struct Mlp {
 }
 
 impl Mlp {
-    fn new(vb: VarBuilder, n_embd: usize) -> Result<Self> {
+    fn new(vb: &Path, n_embd: usize) -> Result<Self> {
         let n_hidden = 8 * n_embd / 3;
-        let n_hidden = (n_hidden - 1) / 256 * 256 + 256;
-        let c_fc1 = Linear::new_no_bias(&vb / "c_fc1", n_embd, n_hidden)?;
-        let c_fc2 = Linear::new_no_bias(&vb / "c_fc2", n_embd, n_hidden)?;
-        let c_proj = Linear::new_no_bias(&vb / "c_proj", n_hidden, n_embd)?;
+        let n_hidden = ((n_hidden - 1) / 256 * 256 + 256) as i64;
+        let n_embd = n_embd as i64;
+        let c_fc1 = Linear::load(&vb.pp("c_fc1"), n_embd, n_hidden, false)?;
+        let c_fc2 = Linear::load(&vb.pp("c_fc2"), n_embd, n_hidden, false)?;
+        let c_proj = Linear::load(&vb.pp("c_proj"), n_hidden, n_embd, false)?;
         Ok(Self { c_fc1, c_fc2, c_proj })
     }
 
     fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
         let x = (self.c_fc1.forward(x)?.silu()? * self.c_fc2.forward(x)?)?;
-        self.c_proj.forward(&x)
+        Ok(self.c_proj.forward(&x)?)
     }
 }
 
@@ -209,9 +176,10 @@ struct CausalSelfAttention {
 }
 
 impl CausalSelfAttention {
-    fn new(vb: VarBuilder, n_head: usize, n_embd: usize) -> Result<Self> {
-        let c_attn = Linear::new_no_bias(&vb / "c_attn", n_embd, 3 * n_embd)?;
-        let c_proj = Linear::new_no_bias(&vb / "c_proj", n_embd, n_embd)?;
+    fn new(vb: &Path, n_head: usize, n_embd: usize) -> Result<Self> {
+        let d = n_embd as i64;
+        let c_attn = Linear::load(&vb.pp("c_attn"), d, 3 * d, false)?;
+        let c_proj = Linear::load(&vb.pp("c_proj"), d, d, false)?;
         Ok(Self { c_attn, c_proj, n_head, n_embd })
     }
 
@@ -279,11 +247,11 @@ struct Block {
 }
 
 impl Block {
-    fn new(vb: VarBuilder, config: &Config) -> Result<Self> {
-        let rms_1 = RmsNorm::new(&vb / "rms_1", config.n_embd)?;
-        let attn = CausalSelfAttention::new(&vb / "attn", config.n_head, config.n_embd)?;
-        let rms_2 = RmsNorm::new(&vb / "rms_2", config.n_embd)?;
-        let mlp = Mlp::new(&vb / "mlp", config.n_embd)?;
+    fn new(vb: &Path, config: &Config) -> Result<Self> {
+        let rms_1 = RmsNorm::new(&vb.pp("rms_1"), config.n_embd)?;
+        let attn = CausalSelfAttention::new(&vb.pp("attn"), config.n_head, config.n_embd)?;
+        let rms_2 = RmsNorm::new(&vb.pp("rms_2"), config.n_embd)?;
+        let mlp = Mlp::new(&vb.pp("mlp"), config.n_embd)?;
         Ok(Self { rms_1, attn, rms_2, mlp })
     }
 
@@ -302,13 +270,15 @@ struct Llama {
 }
 
 impl Llama {
-    fn new(vb: VarBuilder, config: &Config) -> Result<Self> {
-        let lm_head = Linear::new_no_bias(&vb / "lm_head", config.n_embd, config.vocab_size)?;
-        let wte = Embedding::new(&vb / "transformer" / "wte", config.vocab_size, config.n_embd)?;
+    fn new(vb: &Path, config: &Config) -> Result<Self> {
+        let lm_head =
+            Linear::load(&vb.pp("lm_head"), config.n_embd as i64, config.vocab_size as i64, false)?;
+        let transformer = vb.pp("transformer");
+        let wte = Embedding::new(&transformer.pp("wte"), config.vocab_size, config.n_embd)?;
         let blocks = (0..config.n_layer)
-            .map(|i| Block::new(&vb / "transformer" / "h" / i, config))
+            .map(|i| Block::new(&transformer.pp("h").pp(i), config))
             .collect::<Result<Vec<_>>>()?;
-        let ln_f = RmsNorm::new(&vb / "transformer" / "ln_f", config.n_embd)?;
+        let ln_f = RmsNorm::new(&transformer.pp("ln_f"), config.n_embd)?;
         Ok(Self { wte, blocks, ln_f, lm_head })
     }
 
@@ -340,20 +310,18 @@ fn precompute_freqs_cis(config: &Config, builder: &XlaBuilder) -> Result<XlaOp> 
     Ok(idx_theta_cos.concat_in_dim(&[&idx_theta_sin], -1)?)
 }
 
-fn llama_computation(args: &Args, bsize: i64) -> Result<(xla::XlaComputation, VarStore)> {
+fn llama_computation(args: &Args, bsize: i64) -> Result<(xla::XlaComputation, Path)> {
     let b = XlaBuilder::new("llama");
-    let mut vb = if args.cpu {
-        VarBuilder::new::<xla::F16, f32>(&b)
-    } else {
-        VarBuilder::new::<xla::F16, xla::Bf16>(&b)
-    };
+    let dtype = if args.cpu { ElementType::F32 } else { ElementType::Bf16 };
+    // Parameter 0 is the token ids, the weights start at parameter 1.
+    let vb = xla_nn::VarBuilder::new(&b, dtype, 1).root();
     let config = Config::config_7b();
     let freqs_cis = precompute_freqs_cis(&config, &b)?;
-    let llama = Llama::new(vb.clone(), &config)?;
-    let input = vb.arg("tokens", ElementType::U32, &[bsize as usize, CONTEXT_SIZE])?;
+    let llama = Llama::new(&vb, &config)?;
+    let input = b.parameter(0, ElementType::U32, &[bsize, CONTEXT_SIZE as i64], "tokens")?;
     let logits = llama.forward(&input, &freqs_cis)?.convert(PrimitiveType::F32)?;
     let prs = (logits / b.c0(args.temperature)?)?.softmax(-1)?;
-    Ok((prs.build()?, vb.into_store()))
+    Ok((prs.build()?, vb))
 }
 
 #[derive(Parser, Debug)]
@@ -381,20 +349,22 @@ fn main() -> Result<()> {
         if args.cpu { xla::PjRtClient::cpu()? } else { xla::PjRtClient::gpu(0.95, false)? };
     println!("{} {} {}", client.platform_name(), client.platform_version(), client.device_count());
     let start_build = std::time::Instant::now();
-    let (llama, mut vs) = llama_computation(&args, 1)?;
+    let (llama, vb) = llama_computation(&args, 1)?;
     println!("generated the computation in {:?}", start_build.elapsed());
     let start_compile = std::time::Instant::now();
     let llama_exe = client.compile(&llama)?;
     println!("compiled the executable in {:?}", start_compile.elapsed());
     let start_load = std::time::Instant::now();
-    let mut buffers = vs.load_from_npz("llama.npz", &client)?;
-    let arg_index = vs.arg_indexes()[0];
-    println!("loaded weights in {:?} ({arg_index})", start_load.elapsed());
+    let weight_buffers = vb.var_builder().load_buffers(&["llama.safetensors"], &client)?;
+    vb.var_builder().check_all_used(&["llama.safetensors"])?;
+    println!("loaded {} weights in {:?}", weight_buffers.len(), start_load.elapsed());
     let mut rng = thread_rng();
     for index in 0..args.sample_len {
         let ctxt: Vec<_> =
             tokens[tokens.len().saturating_sub(CONTEXT_SIZE)..].iter().map(|c| *c as u32).collect();
-        buffers[arg_index] = client.buffer_from_host_buffer(&ctxt, &[1, CONTEXT_SIZE], None)?;
+        let input = client.buffer_from_host_buffer(&ctxt, &[1, CONTEXT_SIZE], None)?;
+        let mut buffers: Vec<&xla::PjRtBuffer> = vec![&input];
+        buffers.extend(weight_buffers.iter());
         let logits = llama_exe.execute_b(&buffers)?;
         let logits = logits[0][0].to_literal_sync()?;
         let logits_v: Vec<f32> = logits.to_vec()?;

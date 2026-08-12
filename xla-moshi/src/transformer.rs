@@ -2,7 +2,7 @@
 //! `kv_repeat = 1` + rope is supported, which is what the Mimi and ASR LM
 //! configs use. The Mimi configs use a layer-norm and a plain gelu MLP, the LM
 //! configs use an rms-norm and a silu-gated MLP.
-use crate::{Result, StepCtx, Vb};
+use crate::{Path, Result, StepCtx};
 use xla::{ElementType, PrimitiveType, XlaBuilder, XlaOp};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -53,7 +53,7 @@ pub(crate) struct Linear {
 }
 
 impl Linear {
-    pub(crate) fn load(vb: &Vb, in_d: i64, out_d: i64, bias: bool) -> Result<Self> {
+    pub(crate) fn load(vb: &Path, in_d: i64, out_d: i64, bias: bool) -> Result<Self> {
         let weight = vb.var("weight", &[out_d, in_d])?;
         let bias = if bias { Some(vb.var("bias", &[out_d])?) } else { None };
         Ok(Self { weight, bias })
@@ -83,7 +83,7 @@ struct LayerScale {
 }
 
 impl LayerScale {
-    fn load(vb: &Vb, d_model: i64) -> Result<Self> {
+    fn load(vb: &Path, d_model: i64) -> Result<Self> {
         Ok(Self { scale: vb.var("scale", &[d_model])? })
     }
 
@@ -102,7 +102,7 @@ pub(crate) enum Norm {
 }
 
 impl Norm {
-    pub(crate) fn load(vb: &Vb, d_model: i64, norm_type: NormType) -> Result<Self> {
+    pub(crate) fn load(vb: &Path, d_model: i64, norm_type: NormType) -> Result<Self> {
         match norm_type {
             NormType::LayerNorm => Ok(Self::LayerNorm {
                 weight: vb.var("weight", &[d_model])?,
@@ -268,7 +268,7 @@ struct MultiheadAttention {
 }
 
 impl MultiheadAttention {
-    fn load(vb: &Vb, cfg: &Config) -> Result<Self> {
+    fn load(vb: &Path, cfg: &Config) -> Result<Self> {
         let d_model = cfg.d_model as i64;
         let num_heads = cfg.num_heads as i64;
         let head_dim = d_model / num_heads;
@@ -442,7 +442,7 @@ enum Mlp {
 }
 
 impl Mlp {
-    fn load(vb: &Vb, cfg: &Config) -> Result<Self> {
+    fn load(vb: &Path, cfg: &Config) -> Result<Self> {
         let d_model = cfg.d_model as i64;
         let ff = cfg.dim_feedforward as i64;
         match cfg.gating {
@@ -489,7 +489,7 @@ struct TransformerLayer {
 }
 
 impl TransformerLayer {
-    fn load(vb: &Vb, cfg: &Config) -> Result<Self> {
+    fn load(vb: &Path, cfg: &Config) -> Result<Self> {
         let d_model = cfg.d_model as i64;
         let self_attn = MultiheadAttention::load(vb, cfg)?;
         let mlp = Mlp::load(vb, cfg)?;
@@ -554,7 +554,7 @@ pub(crate) struct Transformer {
 }
 
 impl Transformer {
-    pub(crate) fn load(vb: &Vb, cfg: &Config) -> Result<Self> {
+    pub(crate) fn load(vb: &Path, cfg: &Config) -> Result<Self> {
         if !cfg.causal || !cfg.norm_first || cfg.kv_repeat != 1 {
             return Err(err("only causal norm_first kv_repeat=1 transformers are supported"));
         }
@@ -622,7 +622,7 @@ pub struct ProjectedTransformer {
 }
 
 impl ProjectedTransformer {
-    pub fn load(vb: &Vb, input_dim: i64, cfg: &Config) -> Result<Self> {
+    pub fn load(vb: &Path, input_dim: i64, cfg: &Config) -> Result<Self> {
         let d_model = cfg.d_model as i64;
         let input_proj = if input_dim != d_model {
             Some(Linear::load(&vb.pp("input_proj"), input_dim, d_model, false)?)

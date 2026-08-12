@@ -6,7 +6,7 @@
 //! text token plus one slice of audio codes in, the greedy next text token
 //! out, with the per-layer kv caches threaded through a [`StepCtx`].
 use crate::transformer::{self, Norm, Transformer};
-use crate::{Result, StepCtx, Vb};
+use crate::{Path, Result, StepCtx};
 use xla::{ElementType, PrimitiveType, XlaOp};
 
 #[derive(Debug, Clone)]
@@ -62,7 +62,7 @@ pub struct LmModel {
 }
 
 impl LmModel {
-    pub fn load(vb: &Vb, cfg: &Config) -> Result<Self> {
+    pub fn load(vb: &Path, cfg: &Config) -> Result<Self> {
         let d_model = cfg.transformer.d_model as i64;
         let text_emb =
             vb.pp("text_emb").var("weight", &[cfg.text_in_vocab_size as i64, d_model])?;
