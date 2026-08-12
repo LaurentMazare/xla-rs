@@ -95,44 +95,27 @@ impl LayerScale {
 }
 
 pub(crate) enum Norm {
-    LayerNorm { weight: XlaOp, bias: XlaOp },
-    // The rms-norm weight is stored as `alpha` of shape `[1, 1, d]` and the
-    // norm uses a 1e-8 epsilon, as in the reference implementation.
-    RmsNorm { alpha: XlaOp },
+    LayerNorm(xla_nn::LayerNorm),
+    RmsNorm(xla_nn::RmsNorm),
 }
 
 impl Norm {
     pub(crate) fn load(vb: &Path, d_model: i64, norm_type: NormType) -> Result<Self> {
         match norm_type {
-            NormType::LayerNorm => Ok(Self::LayerNorm {
-                weight: vb.var("weight", &[d_model])?,
-                bias: vb.var("bias", &[d_model])?,
-            }),
-            NormType::RmsNorm => Ok(Self::RmsNorm { alpha: vb.var("alpha", &[1, 1, d_model])? }),
+            NormType::LayerNorm => Ok(Self::LayerNorm(xla_nn::LayerNorm::load(vb, d_model, 1e-5)?)),
+            // The rms-norm weight is stored as `alpha` of shape `[1, 1, d]` and
+            // the norm uses a 1e-8 epsilon, as in the reference implementation.
+            NormType::RmsNorm => {
+                let alpha = vb.var("alpha", &[1, 1, d_model])?.reshape(&[d_model])?;
+                Ok(Self::RmsNorm(xla_nn::RmsNorm::new(alpha, 1e-8)))
+            }
         }
     }
 
     pub(crate) fn forward(&self, xs: &XlaOp) -> Result<XlaOp> {
         match self {
-            // xla's `layer_norm` multiplies/adds scale and bias without rank
-            // broadcasting, so reshape them to `[1, 1, d]` to match `[b, t, d]`.
-            Self::LayerNorm { weight, bias } => {
-                let d = weight.dims()?[0] as i64;
-                let weight = weight.reshape(&[1, 1, d])?;
-                let bias = bias.reshape(&[1, 1, d])?;
-                Ok(xs.layer_norm(-1, &weight, &bias)?)
-            }
-            Self::RmsNorm { alpha } => {
-                // Computed in f32 and cast back to the input dtype.
-                let b = xs.builder();
-                let dt = xs.ty()?;
-                let xs = xs.convert(PrimitiveType::F32)?;
-                let mean2 = xs.mul_(&xs)?.reduce_mean(&[-1], true)?;
-                let dims: Vec<i64> = mean2.dims()?.iter().map(|d| *d as i64).collect();
-                let eps = b.c0(1e-8f32)?.broadcast(&dims)?;
-                let xs_norm = xs.mul_(&mean2.add_(&eps)?.rsqrt()?)?;
-                Ok(xs_norm.mul_(&alpha.convert(PrimitiveType::F32)?)?.convert(dt)?)
-            }
+            Self::LayerNorm(n) => n.forward(xs),
+            Self::RmsNorm(n) => n.forward(xs),
         }
     }
 }

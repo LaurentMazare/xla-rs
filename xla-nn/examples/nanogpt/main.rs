@@ -10,7 +10,7 @@ use rand::prelude::*;
 
 extern crate xla;
 use xla::{ElementType, PjRtBuffer, PjRtClient, PjRtLoadedExecutable, XlaBuilder, XlaOp};
-use xla_nn::{Linear, Path};
+use xla_nn::{LayerNorm, Linear, Path};
 
 mod tokenizer;
 use tokenizer::Tokenizer;
@@ -42,27 +42,6 @@ impl Embedding {
     fn forward(&self, indexes: &XlaOp) -> Result<XlaOp> {
         let features = self.embeddings.take(indexes, 0)?;
         Ok(features)
-    }
-}
-
-struct LayerNorm {
-    scale: XlaOp,
-    bias: XlaOp,
-    size: i64,
-}
-
-impl LayerNorm {
-    fn new(vb: &Path, size: usize) -> Result<Self> {
-        let scale = vb.var("weight", &[size as i64])?;
-        let bias = vb.var("bias", &[size as i64])?;
-        Ok(Self { scale, bias, size: size as i64 })
-    }
-
-    fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
-        let scale = self.scale.reshape(&[1, 1, self.size])?;
-        let bias = self.bias.reshape(&[1, 1, self.size])?;
-        let x_norm = x.layer_norm(-1, &scale, &bias)?;
-        Ok(x_norm)
     }
 }
 
@@ -161,9 +140,9 @@ impl Default for GptConfig {
 
 impl Block {
     fn new(vb: &Path, config: &GptConfig) -> Result<Self> {
-        let ln1 = LayerNorm::new(&vb.pp("ln_1"), config.n_embd)?;
+        let ln1 = LayerNorm::load(&vb.pp("ln_1"), config.n_embd as i64, 1e-5)?;
         let attn = CausalSelfAttention::new(&vb.pp("attn"), config.n_head, config.n_embd)?;
-        let ln2 = LayerNorm::new(&vb.pp("ln_2"), config.n_embd)?;
+        let ln2 = LayerNorm::load(&vb.pp("ln_2"), config.n_embd as i64, 1e-5)?;
         let mlp = Mlp::new(&vb.pp("mlp"), config)?;
         Ok(Self { ln1, attn, ln2, mlp })
     }
@@ -193,7 +172,7 @@ impl Gpt {
         let blocks = (0..config.n_layer)
             .map(|i| Block::new(&transformer.pp("h").pp(i), config))
             .collect::<Result<Vec<_>>>()?;
-        let ln_f = LayerNorm::new(&transformer.pp("ln_f"), config.n_embd)?;
+        let ln_f = LayerNorm::load(&transformer.pp("ln_f"), config.n_embd as i64, 1e-5)?;
         Ok(Self { lm_head, wte, wpe, blocks, ln_f })
     }
 

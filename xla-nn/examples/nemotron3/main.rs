@@ -60,15 +60,7 @@ fn linear(x: &XlaOp, w: &XlaOp) -> Result<XlaOp> {
 // Nemotron rms-norm: computed in f32, scaled by the plain weight, and cast
 // back to the input dtype.
 fn rms_norm(x: &XlaOp, w: &XlaOp) -> Result<XlaOp> {
-    let b = x.builder();
-    let dt = x.ty()?;
-    let x = x.convert(PrimitiveType::F32)?;
-    let mean2 = (&x * &x)?.reduce_mean(&[-1], true)?;
-    let x_norm = (&x * (mean2 + b.c0(RMS_NORM_EPS)?)?.rsqrt()?)?;
-    let rank = x.rank()? as i64;
-    let w =
-        w.convert(PrimitiveType::F32)?.broadcast_in_dim(x.array_shape()?.dims(), &[rank - 1])?;
-    Ok((x_norm * w)?.convert(dt)?)
+    Ok(xla_nn::RmsNorm::new(w.clone(), RMS_NORM_EPS).forward(x)?)
 }
 
 // Softplus computed in f32 and rounded back to the input dtype, matching the

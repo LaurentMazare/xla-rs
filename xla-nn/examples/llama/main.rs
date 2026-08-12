@@ -15,7 +15,7 @@ use rand::prelude::*;
 
 extern crate xla;
 use xla::{ElementType, PrimitiveType, XlaBuilder, XlaOp};
-use xla_nn::{Linear, Path};
+use xla_nn::{Linear, Path, RmsNorm};
 
 mod sentencepiece;
 use sentencepiece::Tokenizer;
@@ -117,25 +117,10 @@ impl Embedding {
     }
 }
 
-struct RmsNorm {
-    scale: XlaOp,
-    size: i64,
-}
-
-impl RmsNorm {
-    fn new(vb: &Path, size: usize) -> Result<Self> {
-        let scale = vb.var("scale", &[size as i64])?;
-        Ok(Self { scale, size: size as i64 })
-    }
-
-    fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
-        let builder = x.builder();
-        let eps = builder.c0(1e-5)?.convert(x.ty()?)?;
-        let norm_x = (x * x)?.reduce_mean(&[-1], true)?;
-        let x_normed = (x * (norm_x + eps)?.rsqrt()?)?;
-        let scale = self.scale.reshape(&[1, 1, self.size])?;
-        Ok((scale * x_normed)?)
-    }
+// The llama checkpoints store the rms-norm weight under the `scale` name
+// rather than the `weight` name `RmsNorm::load` uses.
+fn rms_norm(vb: &Path, size: usize) -> Result<RmsNorm> {
+    Ok(RmsNorm::new(vb.var("scale", &[size as i64])?, 1e-5))
 }
 
 struct Mlp {
@@ -248,9 +233,9 @@ struct Block {
 
 impl Block {
     fn new(vb: &Path, config: &Config) -> Result<Self> {
-        let rms_1 = RmsNorm::new(&vb.pp("rms_1"), config.n_embd)?;
+        let rms_1 = rms_norm(&vb.pp("rms_1"), config.n_embd)?;
         let attn = CausalSelfAttention::new(&vb.pp("attn"), config.n_head, config.n_embd)?;
-        let rms_2 = RmsNorm::new(&vb.pp("rms_2"), config.n_embd)?;
+        let rms_2 = rms_norm(&vb.pp("rms_2"), config.n_embd)?;
         let mlp = Mlp::new(&vb.pp("mlp"), config.n_embd)?;
         Ok(Self { rms_1, attn, rms_2, mlp })
     }
@@ -278,7 +263,7 @@ impl Llama {
         let blocks = (0..config.n_layer)
             .map(|i| Block::new(&transformer.pp("h").pp(i), config))
             .collect::<Result<Vec<_>>>()?;
-        let ln_f = RmsNorm::new(&transformer.pp("ln_f"), config.n_embd)?;
+        let ln_f = rms_norm(&transformer.pp("ln_f"), config.n_embd)?;
         Ok(Self { wte, blocks, ln_f, lm_head })
     }
 
