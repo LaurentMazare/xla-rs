@@ -5,7 +5,7 @@
 //! Weight-norm is assumed to be pre-fused into a single `weight` tensor, which
 //! is the case for the candle-format Mimi checkpoints used by the AudioToAudio
 //! example.
-use crate::{add_bias, Result, StepCtx, Vb};
+use crate::{add_bias, Path, Result, StepCtx};
 use xla::{ElementType, XlaOp};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -85,7 +85,7 @@ pub struct StreamableConv1d {
 impl StreamableConv1d {
     #[allow(clippy::too_many_arguments)]
     pub fn load(
-        vb: &Vb,
+        vb: &Path,
         in_c: i64,
         out_c: i64,
         k_size: i64,
@@ -193,7 +193,7 @@ pub struct StreamableConvTranspose1d {
 impl StreamableConvTranspose1d {
     #[allow(clippy::too_many_arguments)]
     pub fn load(
-        vb: &Vb,
+        vb: &Path,
         in_c: i64,
         out_c: i64,
         k_size: i64,
@@ -262,7 +262,7 @@ pub struct ConvDownsample1d {
 }
 
 impl ConvDownsample1d {
-    pub fn load(vb: &Vb, stride: i64, dim: i64, causal: bool) -> Result<Self> {
+    pub fn load(vb: &Path, stride: i64, dim: i64, causal: bool) -> Result<Self> {
         let conv = StreamableConv1d::load(
             &vb.pp("conv"),
             dim,
@@ -293,7 +293,7 @@ pub struct ConvTrUpsample1d {
 }
 
 impl ConvTrUpsample1d {
-    pub fn load(vb: &Vb, stride: i64, dim: i64, causal: bool) -> Result<Self> {
+    pub fn load(vb: &Path, stride: i64, dim: i64, causal: bool) -> Result<Self> {
         let convtr = StreamableConvTranspose1d::load(
             &vb.pp("convtr"),
             dim,

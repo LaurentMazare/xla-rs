@@ -78,6 +78,10 @@ impl VarBuilder {
         used
     }
 
+    pub fn root(self) -> Path {
+        Path { inner: std::rc::Rc::new(self), prefix: String::new() }
+    }
+
     /// Check that every tensor present in the given safetensors shards has been
     /// used (declared via [`var`](VarBuilder::var) or marked via
     /// [`mark_used`](VarBuilder::mark_used)), erroring with the sorted list of
@@ -293,4 +297,40 @@ fn to_f32_vec(name: &str, dtype: safetensors::Dtype, data: &[u8]) -> Result<Vec<
         dtype => return Err(Error::UnsupportedSourceDType { name: name.to_string(), dtype }),
     };
     Ok(res)
+}
+
+#[derive(Clone)]
+pub struct Path {
+    inner: std::rc::Rc<VarBuilder>,
+    prefix: String,
+}
+
+impl Path {
+    pub fn new(inner: crate::VarBuilder) -> Self {
+        inner.root()
+    }
+
+    /// Push a component onto the prefix (like `cd`-ing into a directory).
+    pub fn pp(&self, s: impl std::fmt::Display) -> Self {
+        let prefix =
+            if self.prefix.is_empty() { s.to_string() } else { format!("{}.{s}", self.prefix) };
+        Self { inner: self.inner.clone(), prefix }
+    }
+
+    fn key(&self, name: &str) -> String {
+        if self.prefix.is_empty() {
+            name.to_string()
+        } else {
+            format!("{}.{name}", self.prefix)
+        }
+    }
+
+    /// Declare a weight parameter and return the corresponding graph node.
+    pub fn var(&self, name: &str, dims: &[i64]) -> Result<XlaOp> {
+        self.inner.var(&self.key(name), dims)
+    }
+
+    pub fn var_builder(&self) -> &std::rc::Rc<VarBuilder> {
+        &self.inner
+    }
 }

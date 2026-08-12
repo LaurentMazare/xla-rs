@@ -1,6 +1,6 @@
 //! SEANet encoder/decoder, ported from `xn-moshi` (forward path only).
 use crate::conv::{Norm, PadMode, StreamableConv1d, StreamableConvTranspose1d};
-use crate::{Result, StepCtx, Vb};
+use crate::{Path, Result, StepCtx};
 use xla::XlaOp;
 
 #[derive(Debug, Copy, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -65,7 +65,7 @@ struct SeaNetResnetBlock {
 impl SeaNetResnetBlock {
     #[allow(clippy::too_many_arguments)]
     fn load(
-        vb: &Vb,
+        vb: &Path,
         dim: i64,
         k_sizes_and_dilations: &[(i64, i64)],
         activation: Activation,
@@ -154,7 +154,7 @@ pub struct SeaNetEncoder {
 }
 
 impl SeaNetEncoder {
-    pub fn load(vb: &Vb, cfg: &Config) -> Result<Self> {
+    pub fn load(vb: &Path, cfg: &Config) -> Result<Self> {
         if cfg.lstm.unwrap_or(0) > 0 {
             return Err(err("seanet lstm is not supported"));
         }
@@ -278,7 +278,7 @@ pub struct SeaNetDecoder {
 }
 
 impl SeaNetDecoder {
-    pub fn load(vb: &Vb, cfg: &Config) -> Result<Self> {
+    pub fn load(vb: &Path, cfg: &Config) -> Result<Self> {
         if cfg.lstm.unwrap_or(0) > 0 {
             return Err(err("seanet lstm is not supported"));
         }

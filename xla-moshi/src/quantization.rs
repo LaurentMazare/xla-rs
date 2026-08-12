@@ -1,5 +1,5 @@
 //! Residual vector quantization, ported from the `xn-moshi` reference.
-use crate::{Result, Vb};
+use crate::{Path, Result};
 use xla::{ElementType, XlaOp};
 
 /// Contract the last dim of `xs` with the last dim of `w` (i.e. `xs @ w^T`),
@@ -16,7 +16,7 @@ pub struct EuclideanCodebook {
 }
 
 impl EuclideanCodebook {
-    pub fn load(vb: &Vb, dim: i64, codebook_size: i64) -> Result<Self> {
+    pub fn load(vb: &Path, dim: i64, codebook_size: i64) -> Result<Self> {
         let cluster_usage = vb.var("cluster_usage", &[codebook_size])?;
         let embedding_sum = vb.var("embedding_sum", &[codebook_size, dim])?;
         let b = cluster_usage.builder();
@@ -70,7 +70,12 @@ pub struct VectorQuantization {
 }
 
 impl VectorQuantization {
-    pub fn load(vb: &Vb, dim: i64, codebook_size: i64, codebook_dim: Option<i64>) -> Result<Self> {
+    pub fn load(
+        vb: &Path,
+        dim: i64,
+        codebook_size: i64,
+        codebook_dim: Option<i64>,
+    ) -> Result<Self> {
         let codebook_dim = codebook_dim.unwrap_or(dim);
         let (project_in, project_out) = if codebook_dim == dim {
             (None, None)
@@ -110,7 +115,7 @@ pub struct ResidualVectorQuantization {
 
 impl ResidualVectorQuantization {
     pub fn load(
-        vb: &Vb,
+        vb: &Path,
         n_q: i64,
         dim: i64,
         codebook_size: i64,
@@ -175,7 +180,7 @@ pub struct ResidualVectorQuantizer {
 impl ResidualVectorQuantizer {
     #[allow(clippy::too_many_arguments)]
     pub fn load(
-        vb: &Vb,
+        vb: &Path,
         dim: i64,
         input_dim: Option<i64>,
         output_dim: Option<i64>,
@@ -224,7 +229,7 @@ pub struct SplitResidualVectorQuantizer {
 
 impl SplitResidualVectorQuantizer {
     pub fn load(
-        vb: &Vb,
+        vb: &Path,
         dim: i64,
         input_dim: Option<i64>,
         output_dim: Option<i64>,

@@ -4,17 +4,16 @@
 //
 // This example requires the following tokenizer config file:
 // https://openaipublic.blob.core.windows.net/gpt-2/encodings/main/vocab.bpe
-// And the gpt2.npz weight file that can be extracted by running the get_weights.py script.
+// And the gpt2.safetensors weight file that can be extracted by running the get_weights.py script.
 use anyhow::Result;
 use rand::prelude::*;
 
 extern crate xla;
-use xla::{ElementType, Literal, PjRtLoadedExecutable, XlaBuilder, XlaOp};
+use xla::{ElementType, PjRtBuffer, PjRtClient, PjRtLoadedExecutable, XlaBuilder, XlaOp};
+use xla_nn::{LayerNorm, Linear, Path};
 
 mod tokenizer;
-mod var_store;
 use tokenizer::Tokenizer;
-use var_store::VarStore;
 
 const TY: ElementType = ElementType::F32;
 const TEMPERATURE: f32 = 0.8f32;
@@ -31,75 +30,18 @@ fn new_gelu(x: &XlaOp) -> Result<XlaOp> {
 }
 
 struct Embedding {
-    embeddings: Literal,
+    embeddings: XlaOp,
 }
 
 impl Embedding {
-    fn new(mut vs: VarStore, vocab_size: usize, n_embd: usize) -> Result<Self> {
-        let embeddings = vs.take("weight", TY, &[vocab_size, n_embd])?;
+    fn new(vb: &Path, vocab_size: usize, n_embd: usize) -> Result<Self> {
+        let embeddings = vb.var("weight", &[vocab_size as i64, n_embd as i64])?;
         Ok(Self { embeddings })
     }
 
     fn forward(&self, indexes: &XlaOp) -> Result<XlaOp> {
-        let embeddings = indexes.builder().constant_literal(&self.embeddings)?;
-        let features = embeddings.take(indexes, 0)?;
+        let features = self.embeddings.take(indexes, 0)?;
         Ok(features)
-    }
-}
-
-struct LayerNorm {
-    scale: Literal,
-    bias: Literal,
-    size: i64,
-}
-
-impl LayerNorm {
-    fn new(mut vs: VarStore, size: usize) -> Result<Self> {
-        let scale = vs.take("weight", TY, &[size])?;
-        let bias = vs.take("bias", TY, &[size])?;
-        Ok(Self { scale, bias, size: size as i64 })
-    }
-
-    fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
-        let b = x.builder();
-        let scale = b.constant_literal(&self.scale)?.reshape(&[1, 1, self.size])?;
-        let bias = b.constant_literal(&self.bias)?.reshape(&[1, 1, self.size])?;
-        let x_norm = x.layer_norm(-1, &scale, &bias)?;
-        Ok(x_norm)
-    }
-}
-
-struct Linear {
-    ws: Literal,
-    bs: Option<Literal>,
-    out_size: usize,
-}
-
-impl Linear {
-    fn new(mut vs: VarStore, in_size: usize, out_size: usize) -> Result<Self> {
-        let ws = vs.take("weight", TY, &[in_size, out_size])?;
-        let bs = vs.take("bias", TY, &[out_size])?;
-        Ok(Self { ws, bs: Some(bs), out_size })
-    }
-
-    fn new_no_bias(mut vs: VarStore, in_size: usize, out_size: usize) -> Result<Self> {
-        let ws = vs.take("weight", TY, &[in_size, out_size])?;
-        Ok(Self { ws, bs: None, out_size })
-    }
-
-    fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
-        let b = x.builder();
-        let x_rank = x.rank()?;
-        let ws = b.constant_literal(&self.ws)?;
-        let x = x.dot_general(&ws, &[x_rank as i64 - 1], &[0], &[], &[])?;
-        let y = match &self.bs {
-            None => x,
-            Some(bs) => {
-                let bs = b.constant_literal(bs)?.reshape(&[1, 1, self.out_size as i64])?;
-                (x + bs)?
-            }
-        };
-        Ok(y)
     }
 }
 
@@ -118,9 +60,10 @@ struct CausalSelfAttention {
 }
 
 impl CausalSelfAttention {
-    fn new(vs: VarStore, n_head: usize, n_embd: usize) -> Result<Self> {
-        let c_attn = Linear::new(&vs / "c_attn", n_embd, 3 * n_embd)?;
-        let c_proj = Linear::new(&vs / "c_proj", n_embd, n_embd)?;
+    fn new(vb: &Path, n_head: usize, n_embd: usize) -> Result<Self> {
+        let d = n_embd as i64;
+        let c_attn = Linear::load(&vb.pp("c_attn"), d, 3 * d, true)?;
+        let c_proj = Linear::load(&vb.pp("c_proj"), d, d, true)?;
         Ok(Self { c_attn, c_proj, n_head, n_embd })
     }
 
@@ -160,16 +103,17 @@ struct Mlp {
 }
 
 impl Mlp {
-    fn new(vs: VarStore, config: &GptConfig) -> Result<Self> {
-        let c_fc = Linear::new(&vs / "c_fc", config.n_embd, 4 * config.n_embd)?;
-        let c_proj = Linear::new(&vs / "c_proj", 4 * config.n_embd, config.n_embd)?;
+    fn new(vb: &Path, config: &GptConfig) -> Result<Self> {
+        let n_embd = config.n_embd as i64;
+        let c_fc = Linear::load(&vb.pp("c_fc"), n_embd, 4 * n_embd, true)?;
+        let c_proj = Linear::load(&vb.pp("c_proj"), 4 * n_embd, n_embd, true)?;
         Ok(Self { c_fc, c_proj })
     }
 
     fn forward(&self, x: &XlaOp) -> Result<XlaOp> {
         let x = self.c_fc.forward(x)?;
         let x = new_gelu(&x)?;
-        self.c_proj.forward(&x)
+        Ok(self.c_proj.forward(&x)?)
     }
 }
 
@@ -195,11 +139,11 @@ impl Default for GptConfig {
 }
 
 impl Block {
-    fn new(vs: VarStore, config: &GptConfig) -> Result<Self> {
-        let ln1 = LayerNorm::new(&vs / "ln_1", config.n_embd)?;
-        let attn = CausalSelfAttention::new(&vs / "attn", config.n_head, config.n_embd)?;
-        let ln2 = LayerNorm::new(&vs / "ln_2", config.n_embd)?;
-        let mlp = Mlp::new(&vs / "mlp", config)?;
+    fn new(vb: &Path, config: &GptConfig) -> Result<Self> {
+        let ln1 = LayerNorm::load(&vb.pp("ln_1"), config.n_embd as i64, 1e-5)?;
+        let attn = CausalSelfAttention::new(&vb.pp("attn"), config.n_head, config.n_embd)?;
+        let ln2 = LayerNorm::load(&vb.pp("ln_2"), config.n_embd as i64, 1e-5)?;
+        let mlp = Mlp::new(&vb.pp("mlp"), config)?;
         Ok(Self { ln1, attn, ln2, mlp })
     }
 
@@ -219,14 +163,16 @@ struct Gpt {
 }
 
 impl Gpt {
-    fn new(vs: VarStore, config: &GptConfig) -> Result<Self> {
-        let lm_head = Linear::new_no_bias(&vs / "lm_head", config.n_embd, config.vocab_size)?;
-        let wte = Embedding::new(&vs / "transformer" / "wte", config.vocab_size, config.n_embd)?;
-        let wpe = Embedding::new(&vs / "transformer" / "wpe", config.block_size, config.n_embd)?;
+    fn new(vb: &Path, config: &GptConfig) -> Result<Self> {
+        let lm_head =
+            Linear::load(&vb.pp("lm_head"), config.n_embd as i64, config.vocab_size as i64, false)?;
+        let transformer = vb.pp("transformer");
+        let wte = Embedding::new(&transformer.pp("wte"), config.vocab_size, config.n_embd)?;
+        let wpe = Embedding::new(&transformer.pp("wpe"), config.block_size, config.n_embd)?;
         let blocks = (0..config.n_layer)
-            .map(|i| Block::new(&vs / "transformer" / "h" / i, config))
+            .map(|i| Block::new(&transformer.pp("h").pp(i), config))
             .collect::<Result<Vec<_>>>()?;
-        let ln_f = LayerNorm::new(&vs / "transformer" / "ln_f", config.n_embd)?;
+        let ln_f = LayerNorm::load(&transformer.pp("ln_f"), config.n_embd as i64, 1e-5)?;
         Ok(Self { lm_head, wte, wpe, blocks, ln_f })
     }
 
@@ -249,17 +195,25 @@ impl Gpt {
     }
 }
 
-fn gpt_computation(vs: VarStore, bsize: i64) -> Result<xla::XlaComputation> {
+fn gpt_computation(bsize: i64) -> Result<(xla::XlaComputation, Path)> {
     let b = XlaBuilder::new("gpt");
+    // Parameter 0 is the token ids, the weights start at parameter 1.
+    let vb = xla_nn::VarBuilder::new(&b, TY, 1).root();
     let config = GptConfig::default();
-    let gpt = Gpt::new(vs, &config)?;
+    let gpt = Gpt::new(&vb, &config)?;
     let input = b.parameter(0, ElementType::S32, &[bsize, config.block_size as i64], "tokens")?;
     let logits = gpt.forward(&input)?;
     let prs = (logits / b.c0(TEMPERATURE))?.softmax(-1)?;
-    Ok(prs.build()?)
+    Ok((prs.build()?, vb))
 }
 
-fn sample(exe: &PjRtLoadedExecutable, tokenizer: &Tokenizer, cnt: usize) -> Result<String> {
+fn sample(
+    client: &PjRtClient,
+    exe: &PjRtLoadedExecutable,
+    weights: &[PjRtBuffer],
+    tokenizer: &Tokenizer,
+    cnt: usize,
+) -> Result<String> {
     let input_str = include_str!("tokenizer.rs");
     let mut input = tokenizer.encode(input_str)?;
     input.pop(); // Remove the <endoftext> token.
@@ -267,9 +221,11 @@ fn sample(exe: &PjRtLoadedExecutable, tokenizer: &Tokenizer, cnt: usize) -> Resu
     let mut rng = thread_rng();
     let mut new_tokens = vec![];
     for _i in 1..=cnt {
-        let input_l =
-            Literal::vec1(&input[input.len().saturating_sub(1024)..]).reshape(&[1, 1024])?;
-        let logits = exe.execute(&[input_l])?;
+        let ctxt = &input[input.len().saturating_sub(1024)..];
+        let input_b = client.buffer_from_host_buffer(ctxt, &[1, 1024], None)?;
+        let mut buffers: Vec<&PjRtBuffer> = vec![&input_b];
+        buffers.extend(weights.iter());
+        let logits = exe.execute_b(&buffers)?;
         let logits = logits[0][0].to_literal_sync()?;
         let logits_v: Vec<f32> = logits.to_vec()?;
         let distr = rand::distributions::WeightedIndex::new(&logits_v)?;
@@ -285,18 +241,19 @@ fn main() -> Result<()> {
     println!("{} {} {}", client.platform_name(), client.platform_version(), client.device_count());
     let tokenizer = Tokenizer::new("vocab.bpe")?;
     println!("loaded tokenizer config, vocab_size: {}", tokenizer.vocab_size());
-    let start_load = std::time::Instant::now();
-    let vs = VarStore::new("gpt2.npz")?;
-    println!("loaded {} literals in {:?}", vs.len(), start_load.elapsed());
     let start_build = std::time::Instant::now();
-    let gpt = gpt_computation(vs, 1)?;
+    let (gpt, vb) = gpt_computation(1)?;
     println!("generated the computation in {:?}", start_build.elapsed());
     let start_compile = std::time::Instant::now();
     let gpt_exe = client.compile(&gpt)?;
     println!("compiled the executable in {:?}", start_compile.elapsed());
+    let start_load = std::time::Instant::now();
+    let weights = vb.var_builder().load_buffers(&["gpt2.safetensors"], &client)?;
+    vb.var_builder().check_all_used(&["gpt2.safetensors"])?;
+    println!("loaded {} weights in {:?}", weights.len(), start_load.elapsed());
     for _i in 0..NUM_SAMPLES {
         let start_eval = std::time::Instant::now();
-        let samples = sample(&gpt_exe, &tokenizer, 100)?;
+        let samples = sample(&client, &gpt_exe, &weights, &tokenizer, 100)?;
         println!("generated the samples in {:?}", start_eval.elapsed());
         println!("----\n{samples}\n----");
     }
