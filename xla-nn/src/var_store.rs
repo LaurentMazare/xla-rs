@@ -79,7 +79,7 @@ impl VarBuilder {
     }
 
     pub fn root(self) -> Path {
-        Path { inner: std::rc::Rc::new(self), prefix: String::new() }
+        Path { inner: std::rc::Rc::new(self), prefix: String::new(), names: None }
     }
 
     /// Check that every tensor present in the given safetensors shards has been
@@ -299,10 +299,29 @@ fn to_f32_vec(name: &str, dtype: safetensors::Dtype, data: &[u8]) -> Result<Vec<
     Ok(res)
 }
 
+/// The tensor names declared in the given safetensors shards, to seed
+/// [`Path::with_names`]. Only the headers are parsed, the tensor data is never
+/// touched.
+pub fn safetensors_tensor_names<P: AsRef<std::path::Path>>(paths: &[P]) -> Result<HashSet<String>> {
+    let mut names = HashSet::new();
+    for path in paths.iter() {
+        let file = std::fs::File::open(path.as_ref())?;
+        let mmap = unsafe { memmap2::Mmap::map(&file)? };
+        let st = safetensors::SafeTensors::deserialize(&mmap)?;
+        names.extend(st.names().into_iter().map(|n| n.to_string()));
+    }
+    Ok(names)
+}
+
 #[derive(Clone)]
 pub struct Path {
     inner: std::rc::Rc<VarBuilder>,
     prefix: String,
+    /// The tensor names present in the checkpoint, when known. Weight
+    /// declarations happen while building the graph, before any file is read,
+    /// so modules that support several checkpoint layouts need this to pick
+    /// the right names. See [`safetensors_tensor_names`].
+    names: Option<std::rc::Rc<HashSet<String>>>,
 }
 
 impl Path {
@@ -310,11 +329,27 @@ impl Path {
         inner.root()
     }
 
+    /// Attach the set of tensor names present in the checkpoint, enabling
+    /// [`contains`](Path::contains). See [`safetensors_tensor_names`].
+    pub fn with_names(mut self, names: HashSet<String>) -> Self {
+        self.names = Some(std::rc::Rc::new(names));
+        self
+    }
+
+    /// Whether the checkpoint holds a tensor of this name (under the current
+    /// prefix). Always false when the name set was not provided.
+    pub fn contains(&self, name: &str) -> bool {
+        match &self.names {
+            None => false,
+            Some(names) => names.contains(&self.key(name)),
+        }
+    }
+
     /// Push a component onto the prefix (like `cd`-ing into a directory).
     pub fn pp(&self, s: impl std::fmt::Display) -> Self {
         let prefix =
             if self.prefix.is_empty() { s.to_string() } else { format!("{}.{s}", self.prefix) };
-        Self { inner: self.inner.clone(), prefix }
+        Self { inner: self.inner.clone(), prefix, names: self.names.clone() }
     }
 
     fn key(&self, name: &str) -> String {
