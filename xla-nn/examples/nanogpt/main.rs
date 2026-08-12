@@ -248,8 +248,8 @@ fn main() -> Result<()> {
     let gpt_exe = client.compile(&gpt)?;
     println!("compiled the executable in {:?}", start_compile.elapsed());
     let start_load = std::time::Instant::now();
-    let weights = vb.var_builder().load_buffers(&["gpt2.safetensors"], &client)?;
-    vb.var_builder().check_all_used(&["gpt2.safetensors"])?;
+    let weights = vb.load_buffers(&["gpt2.safetensors"], &client)?;
+    vb.check_all_used(&["gpt2.safetensors"])?;
     println!("loaded {} weights in {:?}", weights.len(), start_load.elapsed());
     for _i in 0..NUM_SAMPLES {
         let start_eval = std::time::Instant::now();

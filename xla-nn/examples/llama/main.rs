@@ -340,8 +340,8 @@ fn main() -> Result<()> {
     let llama_exe = client.compile(&llama)?;
     println!("compiled the executable in {:?}", start_compile.elapsed());
     let start_load = std::time::Instant::now();
-    let weight_buffers = vb.var_builder().load_buffers(&["llama.safetensors"], &client)?;
-    vb.var_builder().check_all_used(&["llama.safetensors"])?;
+    let weight_buffers = vb.load_buffers(&["llama.safetensors"], &client)?;
+    vb.check_all_used(&["llama.safetensors"])?;
     println!("loaded {} weights in {:?}", weight_buffers.len(), start_load.elapsed());
     let mut rng = thread_rng();
     for index in 0..args.sample_len {

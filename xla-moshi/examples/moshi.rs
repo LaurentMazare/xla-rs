@@ -145,11 +145,11 @@ fn audio_to_audio(
     // --- Load weights and run ---
     println!("Loading weights...");
     let start = std::time::Instant::now();
-    let weight_buffers = vb.var_builder().load_buffers(&[&model_path], &client)?;
+    let weight_buffers = vb.load_buffers(&[&model_path], &client)?;
     // Assert every tensor in the checkpoint was consumed. The codebook running
     // statistics are only used during training, and the checkpoint ships more
     // codebooks than we decode, so those are ignored.
-    vb.var_builder().check_all_used_with_ignore(&[&model_path], |name| {
+    vb.check_all_used_with_ignore(&[&model_path], |name| {
         name.ends_with("_codebook._initialized")
             || name.ends_with("_codebook.cluster_usage")
             || name.ends_with("_codebook.embedding_sum")
@@ -258,7 +258,7 @@ fn audio_to_audio_streaming(
     let frame = enc_builder.parameter(0, ElementType::F32, &[1, 1, frame_size as i64], "frame")?;
     let enc_vb = xla_nn::VarBuilder::new(&enc_builder, ElementType::F32, 1).root();
     let enc_model = Mimi::load(&enc_vb, config.clone())?;
-    let enc_w = enc_vb.var_builder().num_vars() as i64;
+    let enc_w = enc_vb.num_vars() as i64;
     // `is_first` (param after the weights) is 1 on the first step and 0 after,
     // so the downsample reproduces its replicate left padding exactly.
     let is_first = enc_builder.parameter(1 + enc_w, ElementType::S32, &[], "is_first")?;
@@ -273,14 +273,13 @@ fn audio_to_audio_streaming(
     enc_outs.extend(enc_ctx.into_new_states());
     let enc_exe =
         client.compile(&enc_builder.tuple(&enc_outs.iter().collect::<Vec<_>>())?.build()?)?;
-    let enc_weights = enc_vb.var_builder().load_buffers(&[&model_path], &client)?;
+    let enc_weights = enc_vb.load_buffers(&[&model_path], &client)?;
 
     let dec_builder = XlaBuilder::new("mimi-decode-step");
     let codes_in = dec_builder.parameter(0, ElementType::S64, &[1, n_q, 1], "codes")?;
     let dec_vb = xla_nn::VarBuilder::new(&dec_builder, ElementType::F32, 1).root();
     let dec_model = Mimi::load(&dec_vb, config.clone())?;
-    let mut dec_ctx =
-        xla_moshi::StepCtx::new(&dec_builder, 1 + dec_vb.var_builder().num_vars() as i64);
+    let mut dec_ctx = xla_moshi::StepCtx::new(&dec_builder, 1 + dec_vb.num_vars() as i64);
     let audio_out = dec_model.decode_step(&codes_in, &mut dec_ctx)?;
     let dec_state_shapes: Vec<_> = dec_ctx.state_shapes().to_vec();
     dec_ctx.setup_aliases(1);
@@ -288,7 +287,7 @@ fn audio_to_audio_streaming(
     dec_outs.extend(dec_ctx.into_new_states());
     let dec_exe =
         client.compile(&dec_builder.tuple(&dec_outs.iter().collect::<Vec<_>>())?.build()?)?;
-    let dec_weights = dec_vb.var_builder().load_buffers(&[&model_path], &client)?;
+    let dec_weights = dec_vb.load_buffers(&[&model_path], &client)?;
     println!("  compiled in {:?}", start.elapsed());
 
     // --- Streaming encode: one 1920-sample frame -> one code slice ---
@@ -551,7 +550,7 @@ fn run_asr(
     let frame = enc_builder.parameter(0, ElementType::F32, &[bs, 1, FRAME_SIZE as i64], "frame")?;
     let enc_vb = xla_nn::VarBuilder::new(&enc_builder, ElementType::F32, 1).root();
     let enc_model = Mimi::load(&enc_vb, mimi_config)?;
-    let enc_w = enc_vb.var_builder().num_vars() as i64;
+    let enc_w = enc_vb.num_vars() as i64;
     let is_first = enc_builder.parameter(1 + enc_w, ElementType::S32, &[bs], "is_first")?;
     let enc_mask = enc_builder.parameter(2 + enc_w, ElementType::S32, &[bs], "mask")?;
     let enc_reset = enc_builder.parameter(3 + enc_w, ElementType::S32, &[bs], "reset")?;
@@ -578,8 +577,7 @@ fn run_asr(
     let lm_reset = lm_builder.parameter(4, ElementType::S32, &[bs], "reset")?;
     let lm_vb = xla_nn::VarBuilder::new(&lm_builder, lm_dtype, 5).root();
     let lm_model = xla_moshi::lm::LmModel::load(&lm_vb, &lm_config)?;
-    let mut lm_ctx =
-        xla_moshi::StepCtx::new(&lm_builder, 5 + lm_vb.var_builder().num_vars() as i64);
+    let mut lm_ctx = xla_moshi::StepCtx::new(&lm_builder, 5 + lm_vb.num_vars() as i64);
     lm_ctx.set_is_first(lm_is_first);
     lm_ctx.set_mask(lm_mask);
     lm_ctx.set_reset(lm_reset);
@@ -595,17 +593,15 @@ fn run_asr(
     // --- Load the weights ---
     println!("Loading weights...");
     let start = std::time::Instant::now();
-    let enc_weights = enc_vb.var_builder().load_buffers(&[&mimi_path], &client)?;
-    enc_vb.var_builder().check_all_used_with_ignore(&[&mimi_path], |name| {
+    let enc_weights = enc_vb.load_buffers(&[&mimi_path], &client)?;
+    enc_vb.check_all_used_with_ignore(&[&mimi_path], |name| {
         name.ends_with("_codebook._initialized")
             || name.ends_with("_codebook.cluster_usage")
             || name.ends_with("_codebook.embedding_sum")
     })?;
-    let lm_weights = lm_vb.var_builder().load_buffers(&[&lm_path], &client)?;
+    let lm_weights = lm_vb.load_buffers(&[&lm_path], &client)?;
     // The depformer heads (`linears.*`) are only used for audio generation.
-    lm_vb
-        .var_builder()
-        .check_all_used_with_ignore(&[&lm_path], |name| name.starts_with("linears."))?;
+    lm_vb.check_all_used_with_ignore(&[&lm_path], |name| name.starts_with("linears."))?;
     println!("  loaded {} weights in {:?}", enc_weights.len() + lm_weights.len(), start.elapsed());
 
     // --- Streaming ASR loop ---
