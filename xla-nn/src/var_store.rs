@@ -285,15 +285,24 @@ fn dtype_size(name: &str, dtype: safetensors::Dtype) -> Result<usize> {
 
 fn to_f32_vec(name: &str, dtype: safetensors::Dtype, data: &[u8]) -> Result<Vec<f32>> {
     let res = match dtype {
-        safetensors::Dtype::F32 => {
-            data.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
-        }
-        safetensors::Dtype::BF16 => {
-            data.chunks_exact(2).map(|c| half::bf16::from_le_bytes([c[0], c[1]]).to_f32()).collect()
-        }
-        safetensors::Dtype::F16 => {
-            data.chunks_exact(2).map(|c| half::f16::from_le_bytes([c[0], c[1]]).to_f32()).collect()
-        }
+        safetensors::Dtype::F32 => data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect(),
+        safetensors::Dtype::BF16 => data
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| half::bf16::from_le_bytes([c[0], c[1]]).to_f32())
+            .collect(),
+        safetensors::Dtype::F16 => data
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| half::f16::from_le_bytes([c[0], c[1]]).to_f32())
+            .collect(),
         dtype => return Err(Error::UnsupportedSourceDType { name: name.to_string(), dtype }),
     };
     Ok(res)

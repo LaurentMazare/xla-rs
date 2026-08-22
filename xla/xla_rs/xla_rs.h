@@ -9,6 +9,10 @@
 #pragma GCC diagnostic ignored "-Wreturn-type"
 #include "absl/log/globals.h"
 #include "absl/status/statusor.h"
+#include "llvm/Support/raw_ostream.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/OwningOpRef.h"
 #include "xla/client/client_library.h"
 #include "xla/debug_options_flags.h"
 #include "xla/hlo/builder/lib/arithmetic.h"
@@ -17,6 +21,7 @@
 #include "xla/hlo/builder/lib/matrix.h"
 #include "xla/hlo/builder/xla_builder.h"
 #include "xla/hlo/parser/hlo_parser.h"
+#include "xla/hlo/translate/stablehlo.h"
 #include "xla/literal_util.h"
 #include "xla/pjrt/gpu/gpu_helpers.h"
 #include "xla/pjrt/gpu/se_gpu_pjrt_client.h"
@@ -270,6 +275,10 @@ status hlo_module_proto_parse_and_return_unverified_module(const char *, size_t,
 status hlo_module_proto_parse_proto(const char *, size_t, bool,
                                     hlo_module_proto *);
 xla_computation xla_computation_from_hlo_module_proto(const hlo_module_proto);
+status hlo_module_proto_to_string(const hlo_module_proto, char **);
+status hlo_module_proto_to_pbtxt(const hlo_module_proto, char **);
+status hlo_module_proto_serialize(const hlo_module_proto, char **, size_t *);
+status hlo_module_proto_to_stablehlo_string(const hlo_module_proto, char **);
 void hlo_module_proto_free(hlo_module_proto);
 
 char *xla_computation_name(xla_computation);
