@@ -1323,6 +1323,57 @@ xla_computation_from_hlo_module_proto(const hlo_module_proto p) {
   return new XlaComputation(*p);
 }
 
+status hlo_module_proto_to_string(const hlo_module_proto p, char **output) {
+  ASSIGN_OR_RETURN_STATUS(config, HloModule::CreateModuleConfigFromProto(*p, {}));
+  ASSIGN_OR_RETURN_STATUS(hm, HloModule::CreateFromProto(*p, config));
+  *output = strdup(hm->ToString().c_str());
+  return nullptr;
+}
+
+status hlo_module_proto_to_pbtxt(const hlo_module_proto p, char **output) {
+  std::string data;
+  if (!tsl::protobuf::TextFormat::PrintToString(*p, &data)) {
+    return new Status(
+        InvalidArgument("Failed to serialize HLO module as protobuf text"));
+  }
+  *output = strdup(data.c_str());
+  return nullptr;
+}
+
+// The serialized proto is not null terminated and can contain null bytes so
+// the length is returned separately. The buffer is malloc'ed and has to be
+// freed by the caller.
+status hlo_module_proto_serialize(const hlo_module_proto p, char **output,
+                                  size_t *output_len) {
+  std::string data;
+  if (!p->SerializeToString(&data)) {
+    return new Status(
+        InvalidArgument("Failed to serialize HLO module as protobuf binary"));
+  }
+  char *buf = (char *)malloc(data.size());
+  if (buf == nullptr && data.size() != 0) {
+    return new Status(ResourceExhausted(
+        "Failed to allocate %d bytes for the serialized HLO module",
+        data.size()));
+  }
+  memcpy(buf, data.data(), data.size());
+  *output = buf;
+  *output_len = data.size();
+  return nullptr;
+}
+
+status hlo_module_proto_to_stablehlo_string(const hlo_module_proto p,
+                                            char **output) {
+  mlir::MLIRContext context;
+  ASSIGN_OR_RETURN_STATUS(module, ConvertHloToStablehlo(context, p));
+  std::string data;
+  llvm::raw_string_ostream os(data);
+  module->print(os);
+  os.flush();
+  *output = strdup(data.c_str());
+  return nullptr;
+}
+
 void hlo_module_proto_free(hlo_module_proto p) { delete p; }
 
 hlo_module_proto xla_computation_proto(const xla_computation c) {

@@ -464,6 +464,58 @@ impl HloModuleProto {
         handle_status(status)?;
         Ok(Self(ptr))
     }
+
+    /// The HLO module using the human readable text format.
+    #[allow(clippy::inherent_to_string)]
+    pub fn to_string(&self) -> Result<String> {
+        let mut ptr: *mut libc::c_char = std::ptr::null_mut();
+        let status = unsafe { c_lib::hlo_module_proto_to_string(self.0, &mut ptr) };
+        handle_status(status)?;
+        Ok(unsafe { c_ptr_to_string(ptr) })
+    }
+
+    /// The HLO module serialized as a protobuf using the text format (pbtxt).
+    pub fn to_pbtxt(&self) -> Result<String> {
+        let mut ptr: *mut libc::c_char = std::ptr::null_mut();
+        let status = unsafe { c_lib::hlo_module_proto_to_pbtxt(self.0, &mut ptr) };
+        handle_status(status)?;
+        Ok(unsafe { c_ptr_to_string(ptr) })
+    }
+
+    /// The HLO module serialized as a protobuf using the binary format.
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
+        let mut ptr: *mut libc::c_char = std::ptr::null_mut();
+        let mut len = 0usize;
+        let status = unsafe { c_lib::hlo_module_proto_serialize(self.0, &mut ptr, &mut len) };
+        handle_status(status)?;
+        let data = unsafe { std::slice::from_raw_parts(ptr as *const u8, len).to_vec() };
+        unsafe { libc::free(ptr as *mut libc::c_void) };
+        Ok(data)
+    }
+
+    /// Convert the HLO module to StableHLO, using the MLIR text format.
+    pub fn to_stablehlo_string(&self) -> Result<String> {
+        let mut ptr: *mut libc::c_char = std::ptr::null_mut();
+        let status = unsafe { c_lib::hlo_module_proto_to_stablehlo_string(self.0, &mut ptr) };
+        handle_status(status)?;
+        Ok(unsafe { c_ptr_to_string(ptr) })
+    }
+
+    /// Write the HLO module to a file using the human readable text format.
+    pub fn to_text_file<P: AsRef<std::path::Path>>(&self, path: P) -> Result<()> {
+        std::fs::write(path.as_ref(), self.to_string()?)?;
+        Ok(())
+    }
+
+    /// Write the HLO module to a proto file, either in binary or pbtxt format.
+    pub fn to_proto_file<P: AsRef<std::path::Path>>(&self, path: P, binary: bool) -> Result<()> {
+        if binary {
+            std::fs::write(path.as_ref(), self.to_bytes()?)?;
+        } else {
+            std::fs::write(path.as_ref(), self.to_pbtxt()?)?;
+        }
+        Ok(())
+    }
 }
 
 impl Drop for HloModuleProto {
