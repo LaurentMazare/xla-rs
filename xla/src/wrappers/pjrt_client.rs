@@ -122,7 +122,9 @@ impl PjRtClient {
         Ok(Self(Arc::new(PjRtClientInternal(ptr))))
     }
 
-    /// A client for the best available platform: try TPU, then GPU, then fall
+    /// A client for the best available platform: the PJRT plugin named by the
+    /// `XLA_PJRT_PLUGIN` environment variable (`<device_type>:<library_path>`,
+    /// see [`Self::plugin`]) when set, otherwise try TPU, then GPU, then fall
     /// back to CPU. When `force_cpu` is set, a CPU client is created directly.
     ///
     /// The client constructors return an error when their runtime is missing
@@ -131,6 +133,15 @@ impl PjRtClient {
     pub fn auto(force_cpu: bool) -> Result<Self> {
         if force_cpu {
             return Self::cpu();
+        }
+        if let Ok(spec) = std::env::var("XLA_PJRT_PLUGIN") {
+            // A misconfigured plugin is an error rather than a silent fallback
+            // to another platform.
+            let (device_type, path) = spec.split_once(':').ok_or_else(|| Error::XlaError {
+                msg: format!("XLA_PJRT_PLUGIN should be <device_type>:<library_path>, got {spec}"),
+                backtrace: String::new(),
+            })?;
+            return Self::plugin(device_type, path);
         }
         if let Ok(client) = Self::tpu(1) {
             return Ok(client);
