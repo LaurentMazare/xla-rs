@@ -14,7 +14,7 @@ use num_traits::FromPrimitive;
 
 pub use literal::Literal;
 pub use pjrt_buffer::PjRtBuffer;
-pub use pjrt_client::PjRtClient;
+pub use pjrt_client::{PjRtClient, PluginOption};
 pub use pjrt_device::PjRtDevice;
 pub use pjrt_loaded_executable::PjRtLoadedExecutable;
 pub use shape::{ArrayShape, Shape};
