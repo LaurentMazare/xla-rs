@@ -63,6 +63,36 @@ impl XlaBuilder {
         self.wrap(op)
     }
 
+    /// A custom call to a backend-specific target (e.g. a Neuron NKI kernel
+    /// via `AwsNeuronCustomNativeKernel`): `operands` are the call's tensor
+    /// inputs, the result has element type `ty` and shape `dims`, and
+    /// `opaque` is the backend config passed through verbatim.
+    pub fn custom_call<B: std::borrow::Borrow<XlaOp>>(
+        &self,
+        target_name: &str,
+        operands: &[B],
+        ty: super::ElementType,
+        dims: &[i64],
+        opaque: &[u8],
+    ) -> Result<XlaOp> {
+        let target_name = std::ffi::CString::new(target_name).unwrap();
+        let operands: Vec<_> = operands.iter().map(|a| a.borrow().op).collect();
+        let op = unsafe {
+            c_lib::op_custom_call(
+                self.ptr(),
+                target_name.as_ptr(),
+                operands.as_ptr(),
+                operands.len(),
+                ty.primitive_type() as i32,
+                dims.as_ptr(),
+                dims.len(),
+                opaque.as_ptr() as *const std::ffi::c_char,
+                opaque.len(),
+            )
+        };
+        self.wrap(op)
+    }
+
     /// Create a node with a constant scalar value using the type of the element that is passed as
     /// argument.
     pub fn constant_r0<T: NativeType>(&self, f: T) -> Result<XlaOp> {
