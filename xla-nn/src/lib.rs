@@ -11,4 +11,4 @@ pub mod var_store;
 pub use error::{Error, Result};
 pub use linear::Linear;
 pub use norm::{LayerNorm, RmsNorm};
-pub use var_store::{safetensors_tensor_names, Path, PleTable, VarBuilder};
+pub use var_store::{safetensors_tensor_names, Path, PleTable, Shard, VarBuilder};

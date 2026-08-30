@@ -10,6 +10,20 @@ use xla::{ElementType, Literal, PjRtBuffer, PjRtClient, XlaBuilder, XlaOp};
 
 type Vars = std::rc::Rc<std::cell::RefCell<Vec<(String, Vec<i64>)>>>;
 
+/// How one declared weight is cut from the full checkpoint tensor for one
+/// tensor-parallel rank (see [`VarBuilder::load_buffers_sharded`]).
+#[derive(Clone, Debug)]
+pub enum Shard {
+    /// The full tensor (replicated).
+    Full,
+    /// Concatenate these `[start, end)` row ranges of dim 0 (column-parallel
+    /// layers, packed projections included).
+    Rows(Vec<(usize, usize)>),
+    /// Take this `[start, end)` column range of dim 1 (row-parallel layers;
+    /// 2-D tensors only).
+    Cols(usize, usize),
+}
+
 /// Declares model weights as XLA parameters and loads their values from
 /// safetensors shards, in declaration order.
 pub struct VarBuilder {
@@ -214,6 +228,100 @@ impl VarBuilder {
         Ok(())
     }
 
+    /// Load the declared weights from safetensors shards, in declaration
+    /// order, with a per-weight tensor-parallel shard cut from the full
+    /// checkpoint tensor. Each declared shape must match the sharded shape;
+    /// `Shard::Full` weights land unchanged. Buffers are created on `dev`
+    /// (the client's default device when `None`).
+    pub fn load_buffers_sharded<P: AsRef<std::path::Path>>(
+        &self,
+        paths: &[P],
+        client: &PjRtClient,
+        dev: Option<&xla::PjRtDevice>,
+        shard: impl Fn(&str, &[i64]) -> Shard,
+    ) -> Result<Vec<PjRtBuffer>> {
+        let mut mmaps = Vec::with_capacity(paths.len());
+        for path in paths.iter() {
+            let file = std::fs::File::open(path.as_ref())?;
+            mmaps.push(unsafe { memmap2::Mmap::map(&file)? });
+        }
+        let sts = mmaps
+            .iter()
+            .map(|m| safetensors::SafeTensors::deserialize(m))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let vars = self.vars.borrow();
+        let mut buffers = Vec::with_capacity(vars.len());
+        for (name, dims) in vars.iter() {
+            let view = sts
+                .iter()
+                .find_map(|st| st.tensor(name).ok())
+                .ok_or_else(|| Error::TensorNotFound { name: name.clone() })?;
+            let file_dims: Vec<i64> = view.shape().iter().map(|d| *d as i64).collect();
+            let esz = match view.dtype() {
+                safetensors::Dtype::F32 => 4usize,
+                safetensors::Dtype::BF16 | safetensors::Dtype::F16 => 2,
+                dtype => {
+                    return Err(Error::Msg(format!(
+                        "unsupported sharded dtype {dtype:?} for {name}"
+                    )));
+                }
+            };
+            let (bytes, cut_dims): (std::borrow::Cow<[u8]>, Vec<i64>) =
+                match shard(name, &file_dims) {
+                    Shard::Full => (std::borrow::Cow::Borrowed(view.data()), file_dims.clone()),
+                    Shard::Rows(ranges) => {
+                        let d0 = file_dims[0] as usize;
+                        let row_bytes = view.data().len() / d0.max(1);
+                        let mut out = Vec::new();
+                        let mut rows = 0usize;
+                        for &(s, e) in ranges.iter() {
+                            if e > d0 || s > e {
+                                return Err(Error::Msg(format!(
+                                    "row shard {s}..{e} out of bounds for {name} ({d0} rows)"
+                                )));
+                            }
+                            out.extend_from_slice(&view.data()[s * row_bytes..e * row_bytes]);
+                            rows += e - s;
+                        }
+                        let mut d = file_dims.clone();
+                        d[0] = rows as i64;
+                        (std::borrow::Cow::Owned(out), d)
+                    }
+                    Shard::Cols(s, e) => {
+                        if file_dims.len() != 2 {
+                            return Err(Error::Msg(format!(
+                                "col shard needs a 2-D tensor: {name}"
+                            )));
+                        }
+                        let (d0, d1) = (file_dims[0] as usize, file_dims[1] as usize);
+                        if e > d1 || s > e {
+                            return Err(Error::Msg(format!(
+                                "col shard {s}..{e} out of bounds for {name} ({d1} cols)"
+                            )));
+                        }
+                        let mut out = Vec::with_capacity(d0 * (e - s) * esz);
+                        for r in 0..d0 {
+                            let base = (r * d1 + s) * esz;
+                            out.extend_from_slice(&view.data()[base..base + (e - s) * esz]);
+                        }
+                        (std::borrow::Cow::Owned(out), vec![d0 as i64, (e - s) as i64])
+                    }
+                };
+            if cut_dims != *dims {
+                return Err(Error::ShapeMismatch {
+                    name: name.clone(),
+                    expected: dims.clone(),
+                    got: cut_dims,
+                });
+            }
+            let dims_usize: Vec<usize> = dims.iter().map(|d| *d as usize).collect();
+            let buffer =
+                buffer_from_view(client, name, view.dtype(), &bytes, &dims_usize, self.dtype, dev)?;
+            buffers.push(buffer)
+        }
+        Ok(buffers)
+    }
+
     /// Load the declared weights from safetensors shards, in declaration order.
     pub fn load_buffers<P: AsRef<std::path::Path>>(
         &self,
@@ -245,8 +353,15 @@ impl VarBuilder {
                 });
             }
             let dims_usize: Vec<usize> = dims.iter().map(|d| *d as usize).collect();
-            let buffer =
-                buffer_from_view(client, name, view.dtype(), view.data(), &dims_usize, self.dtype)?;
+            let buffer = buffer_from_view(
+                client,
+                name,
+                view.dtype(),
+                view.data(),
+                &dims_usize,
+                self.dtype,
+                None,
+            )?;
             buffers.push(buffer)
         }
         Ok(buffers)
@@ -326,7 +441,7 @@ impl PleTable {
             data.extend_from_slice(&self.mmap[start..start + row_bytes]);
         }
         let dims = [ids.len(), self.row_elems];
-        buffer_from_view(client, "ple table", self.dtype, &data, &dims, self.target)
+        buffer_from_view(client, "ple table", self.dtype, &data, &dims, self.target, None)
     }
 }
 
@@ -339,6 +454,7 @@ fn buffer_from_view(
     data: &[u8],
     dims: &[usize],
     target: ElementType,
+    dev: Option<&xla::PjRtDevice>,
 ) -> Result<PjRtBuffer> {
     let src_matches = matches!(
         (src, target),
@@ -348,20 +464,20 @@ fn buffer_from_view(
     );
     let buffer = if src_matches {
         // Same source and target dtype, pass the raw bytes through.
-        client.buffer_from_host_raw_bytes(target, data, dims, None)?
+        client.buffer_from_host_raw_bytes(target, data, dims, dev)?
     } else {
         let data = to_f32_vec(name, src, data)?;
         match target {
-            ElementType::F32 => client.buffer_from_host_buffer(&data, dims, None)?,
+            ElementType::F32 => client.buffer_from_host_buffer(&data, dims, dev)?,
             ElementType::Bf16 => {
                 let data: Vec<u8> =
                     data.iter().flat_map(|&v| half::bf16::from_f32(v).to_le_bytes()).collect();
-                client.buffer_from_host_raw_bytes(target, &data, dims, None)?
+                client.buffer_from_host_raw_bytes(target, &data, dims, dev)?
             }
             ElementType::F16 => {
                 let data: Vec<u8> =
                     data.iter().flat_map(|&v| half::f16::from_f32(v).to_le_bytes()).collect();
-                client.buffer_from_host_raw_bytes(target, &data, dims, None)?
+                client.buffer_from_host_raw_bytes(target, &data, dims, dev)?
             }
             dtype => return Err(Error::UnsupportedTargetDType { dtype }),
         }
@@ -526,6 +642,17 @@ impl Path {
         client: &PjRtClient,
     ) -> Result<Vec<PjRtBuffer>> {
         self.inner.load_buffers(paths, client)
+    }
+
+    /// See [`VarBuilder::load_buffers_sharded`].
+    pub fn load_buffers_sharded<P: AsRef<std::path::Path>>(
+        &self,
+        paths: &[P],
+        client: &PjRtClient,
+        dev: Option<&xla::PjRtDevice>,
+        shard: impl Fn(&str, &[i64]) -> Shard,
+    ) -> Result<Vec<PjRtBuffer>> {
+        self.inner.load_buffers_sharded(paths, client, dev, shard)
     }
 
     /// See [`VarBuilder::check_all_used`].

@@ -25,6 +25,10 @@ pub enum Error {
     #[error("token id {id} out of range for the table ({rows} rows)")]
     IndexOutOfRange { id: usize, rows: usize },
 
+    /// A generic loader error (e.g. an out-of-bounds tensor-parallel shard).
+    #[error("{0}")]
+    Msg(String),
+
     /// Some tensors present in the shards were never used.
     #[error("{} unused tensors {names:?}", names.len())]
     UnusedTensors { names: Vec<String> },
