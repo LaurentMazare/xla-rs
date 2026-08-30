@@ -377,3 +377,232 @@ fn tp2_backbone_step() -> xla::Result<()> {
     assert!(finite);
     Ok(())
 }
+
+// ---- depformer ---------------------------------------------------------
+// One TTS frame runs the whole 31-slice chain as a single graph: each slice
+// has its own weights (4 layers, d=1024, 16 heads x 64, gated-SiLU ff 3072),
+// attends over the k/v of all previous slices (in-graph concat, no external
+// cache), and feeds its argmax token to the next slice's embedding. TP shards
+// heads and MLP hidden; 2 all-reduces per layer, 8 per slice, 248 per step.
+const DD: i64 = 1024;
+const DHD: i64 = 64;
+const DL: usize = 4;
+const NSLICES: usize = 31;
+const VOCAB: i64 = 2049;
+
+fn dhl() -> i64 {
+    16 / tp()
+}
+fn dffl() -> i64 {
+    3072 / tp()
+}
+
+fn df_rmsnorm(x: &XlaOp) -> xla::Result<XlaOp> {
+    let xf = x.convert(PrimitiveType::F32)?;
+    let mean = xf.mul_(&xf)?.reduce_mean(&[1], true)?;
+    let b = x.builder();
+    let inv = b
+        .c0(1f32)?
+        .broadcast(&[B, 1])?
+        .div_(&mean.add_(&b.c0(1e-8f32)?.broadcast(&[B, 1])?)?.sqrt()?)?;
+    xf.mul_(&inv.broadcast_in_dim(&[B, DD], &[0, 1])?)?.convert(PrimitiveType::Bf16)
+}
+
+#[test]
+fn tp2_depformer_step() -> xla::Result<()> {
+    let Some(client) = plugin_client() else { return Ok(()) };
+    let ty = ElementType::Bf16;
+    let dt = PrimitiveType::Bf16;
+
+    let b = XlaBuilder::new("tp2-depformer-step");
+    let pc = std::cell::Cell::new(0i64);
+    let param = |t: ElementType, dims: &[i64], name: &str| {
+        let op = b.parameter(pc.get(), t, dims, name);
+        pc.set(pc.get() + 1);
+        op
+    };
+    let ys = param(ty, &[B, D], "ys")?; // backbone hidden
+    let text = param(ElementType::S32, &[B], "text")?;
+    // per-slice weights: linear_in, emb, linear_out, then per layer
+    // wqkv/wo/w_in/w_out over local heads / local hidden
+    let mut slice_ops = Vec::new();
+    for s in 0..NSLICES {
+        let mut ops = Vec::new();
+        for (n, dims) in
+            [("lin_in", vec![D, DD]), ("emb", vec![VOCAB, DD]), ("lin_out", vec![DD, VOCAB - 1])]
+        {
+            ops.push(param(ty, &dims, &format!("{n}_{s}"))?);
+        }
+        for l in 0..DL {
+            for (n, dims) in [
+                ("wqkv", vec![DD, 3 * dhl() * DHD]),
+                ("wo", vec![dhl() * DHD, DD]),
+                ("w_in", vec![DD, 2 * dffl()]),
+                ("w_out", vec![dffl(), DD]),
+            ] {
+                ops.push(param(ty, &dims, &format!("{n}_{s}_{l}"))?);
+            }
+        }
+        slice_ops.push(ops);
+    }
+    let addf = add_computation(ElementType::F32)?;
+    let scale = b.c0(1f32 / (DHD as f32).sqrt())?;
+
+    let mut ks: Vec<Vec<XlaOp>> = vec![Vec::new(); DL];
+    let mut vs: Vec<Vec<XlaOp>> = vec![Vec::new(); DL];
+    let mut tokens = text.clone();
+    let mut all_tokens = Vec::new();
+    let mut last_hidden = ys.clone();
+    for s in 0..NSLICES {
+        let w = &slice_ops[s];
+        let xs = ys.dot(&w[0])?; // [B, DD]
+                                 // one-hot embedding matmul (gathers are slow on neuron, cf
+        // XLA_MOSHI_EMBEDDING_ONEHOT in the worker)
+        let iota_v = b.iota(ElementType::S32, &[B, VOCAB], 1)?;
+        let oh = iota_v
+            .eq(&tokens.reshape(&[B, 1])?.broadcast_in_dim(&[B, VOCAB], &[0, 1])?)?
+            .convert(dt)?;
+        let emb = oh.dot(&w[1])?; // [B, DD]
+        let mut x = xs.add_(&emb)?;
+        for l in 0..DL {
+            let h = df_rmsnorm(&x)?;
+            let qkv = h.dot(&w[3 + 4 * l])?.reshape(&[B, 3, dhl(), DHD])?;
+            let q = qkv.slice_in_dim1(0, 1, 1)?.reshape(&[B, dhl(), DHD])?;
+            let k = qkv.slice_in_dim1(1, 2, 1)?.reshape(&[B, dhl(), 1, DHD])?;
+            let v = qkv.slice_in_dim1(2, 3, 1)?.reshape(&[B, dhl(), 1, DHD])?;
+            ks[l].push(k);
+            vs[l].push(v);
+            let t = ks[l].len() as i64;
+            let kcat = if t == 1 {
+                ks[l][0].clone()
+            } else {
+                ks[l][0].concat_in_dim(&ks[l][1..].iter().collect::<Vec<_>>(), 2)?
+            };
+            let vcat = if t == 1 {
+                vs[l][0].clone()
+            } else {
+                vs[l][0].concat_in_dim(&vs[l][1..].iter().collect::<Vec<_>>(), 2)?
+            };
+            // q [B,h,HD] x k [B,h,t,HD] -> [B,h,t]
+            let attn = q.dot_general(&kcat, &[2], &[3], &[0, 1], &[0, 1])?;
+            let attn = attn
+                .convert(PrimitiveType::F32)?
+                .mul_(&scale.broadcast(&[B, dhl(), t])?)?
+                .softmax(2)?
+                .convert(dt)?;
+            let a = attn.dot_general(&vcat, &[2], &[2], &[0, 1], &[0, 1])?; // [B,h,HD]
+            let o = a.reshape(&[B, dhl() * DHD])?.dot(&w[4 + 4 * l])?;
+            let red = if tp() > 1 {
+                o.convert(PrimitiveType::F32)?.all_reduce(&addf)?
+            } else {
+                o.convert(PrimitiveType::F32)?
+            };
+            x = x.add_(&red.convert(dt)?)?;
+            let h = df_rmsnorm(&x)?;
+            let g = h.dot(&w[5 + 4 * l])?;
+            let ga = g.slice_in_dim1(0, dffl(), 1)?;
+            let gb = g.slice_in_dim1(dffl(), 2 * dffl(), 1)?;
+            let silu = ga
+                .convert(PrimitiveType::F32)?
+                .logistic()?
+                .mul_(&ga.convert(PrimitiveType::F32)?)?
+                .convert(dt)?;
+            let m = silu.mul_(&gb)?.dot(&w[6 + 4 * l])?;
+            let red = if tp() > 1 {
+                m.convert(PrimitiveType::F32)?.all_reduce(&addf)?
+            } else {
+                m.convert(PrimitiveType::F32)?
+            };
+            x = x.add_(&red.convert(dt)?)?;
+        }
+        let logits = df_rmsnorm(&x)?.dot(&w[2])?.convert(PrimitiveType::F32)?; // [B, VOCAB-1]
+        tokens = logits.argmax(ElementType::S32, 1)?;
+        all_tokens.push(tokens.reshape(&[B, 1])?);
+        last_hidden = x;
+    }
+    let codes = all_tokens[0].concat_in_dim(&all_tokens[1..].iter().collect::<Vec<_>>(), 1)?;
+    let hf32 = last_hidden.convert(PrimitiveType::F32)?;
+    let computation = b.tuple(&[&codes, &hf32])?.build()?;
+    let exe = client.compile_replicated(&computation, tp() as usize)?;
+    eprintln!("compiled");
+
+    let devs = client.addressable_devices();
+    let mut weights: Vec<Vec<PjRtBuffer>> = Vec::new();
+    for (r, dev) in devs.iter().take(tp() as usize).enumerate() {
+        let mut ws = Vec::new();
+        for s in 0..NSLICES {
+            for (i, dims) in [vec![D, DD], vec![VOCAB, DD], vec![DD, VOCAB - 1]].iter().enumerate()
+            {
+                ws.push(bf16_buffer(&client, dims, (r * 100_000 + s * 100 + i) as u32, dev)?);
+            }
+            for l in 0..DL {
+                for (i, dims) in [
+                    vec![DD, 3 * dhl() * DHD],
+                    vec![dhl() * DHD, DD],
+                    vec![DD, 2 * dffl()],
+                    vec![dffl(), DD],
+                ]
+                .iter()
+                .enumerate()
+                {
+                    ws.push(bf16_buffer(
+                        &client,
+                        dims,
+                        (r * 100_000 + s * 100 + 10 + l * 4 + i) as u32,
+                        dev,
+                    )?);
+                }
+            }
+        }
+        weights.push(ws);
+    }
+    let ys_host: Vec<f32> = (0..(B * D) as usize).map(|i| ((i % 13) as f32 - 6.0) / 8.0).collect();
+    let mut ys_bytes = Vec::with_capacity(2 * ys_host.len());
+    for v in &ys_host {
+        ys_bytes.extend_from_slice(&v.to_bits().to_le_bytes()[2..4]);
+    }
+    let mut ys_bufs = Vec::new();
+    let mut text_bufs = Vec::new();
+    for dev in devs.iter().take(tp() as usize) {
+        ys_bufs.push(client.buffer_from_host_raw_bytes(
+            ElementType::Bf16,
+            &ys_bytes,
+            &[B as usize, D as usize],
+            Some(dev),
+        )?);
+        text_bufs.push(client.buffer_from_host_buffer(
+            &vec![3i32; B as usize],
+            &[B as usize],
+            Some(dev),
+        )?);
+    }
+    let run = || -> xla::Result<Vec<Vec<PjRtBuffer>>> {
+        let mut all: Vec<Vec<&PjRtBuffer>> = Vec::new();
+        for r in 0..tp() as usize {
+            let mut a: Vec<&PjRtBuffer> = vec![&ys_bufs[r], &text_bufs[r]];
+            a.extend(weights[r].iter());
+            all.push(a);
+        }
+        exe.execute_replicated_b(&all)
+    };
+    let out = run()?;
+    eprintln!("first step ok");
+    for _ in 0..5 {
+        run()?;
+    }
+    let iters = 50;
+    let t0 = std::time::Instant::now();
+    let mut last = None;
+    for _ in 0..iters {
+        last = Some(run()?);
+    }
+    let last = last.unwrap();
+    let _ = last[0][0].to_literal_sync()?;
+    let ms = t0.elapsed().as_secs_f64() * 1e3 / iters as f64;
+    eprintln!("TP={} depformer step through xla-rs: {ms:.1} ms over {iters} iters", tp());
+    let hf = out[0][1].to_literal_sync()?.to_vec::<f32>()?;
+    let finite = hf.iter().all(|v| v.is_finite());
+    eprintln!("finite: {finite}");
+    assert!(finite);
+    Ok(())
+}
