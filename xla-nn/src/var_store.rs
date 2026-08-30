@@ -6,7 +6,7 @@
 // tensor.
 use crate::error::{Error, Result};
 use std::collections::HashSet;
-use xla::{ElementType, PjRtBuffer, PjRtClient, XlaBuilder, XlaOp};
+use xla::{ElementType, Literal, PjRtBuffer, PjRtClient, XlaBuilder, XlaOp};
 
 type Vars = std::rc::Rc<std::cell::RefCell<Vec<(String, Vec<i64>)>>>;
 
@@ -22,6 +22,20 @@ pub struct VarBuilder {
     // The first parameter index available for weights; the indices before it
     // are reserved for the non-weight arguments (token ids, position, ...).
     first_weight_index: usize,
+    // When set, `var` inlines the weight values from these safetensors shards
+    // as graph constants instead of declaring parameters, so the compiler can
+    // pick their layout at compile time. `num_vars` stays 0 and `load_buffers`
+    // returns no buffers: callers pass nothing extra at execution.
+    inline_paths: Option<std::rc::Rc<Vec<std::path::PathBuf>>>,
+    // When set together with `inline_paths`, only names accepted by the
+    // filter are inlined; the rest stay parameters (serialized modules must
+    // fit protobuf's 2 GB ceiling, so callers inline the hot subset).
+    inline_filter: Option<std::rc::Rc<dyn Fn(&str) -> bool>>,
+    // Content-addressed cache for inlined constants: tensors with identical
+    // bytes and shape share one graph constant (e.g. weight groups that a
+    // per-step schedule materialized under several names), keeping the
+    // serialized module under protobuf's 2 GB ceiling.
+    inline_cache: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<(u64, Vec<i64>), XlaOp>>>,
 }
 
 impl VarBuilder {
@@ -35,20 +49,99 @@ impl VarBuilder {
             vars: Default::default(),
             extra_used: Default::default(),
             first_weight_index,
+            inline_paths: None,
+            inline_filter: None,
+            inline_cache: Default::default(),
         }
+    }
+
+    /// Inline the weight values from these safetensors shards as graph
+    /// constants instead of declaring parameters. The values are read and
+    /// converted at graph-build time; [`load_buffers`](VarBuilder::load_buffers)
+    /// then returns no buffers and callers pass nothing extra at execution.
+    pub fn with_inlined_weights<P: AsRef<std::path::Path>>(mut self, paths: &[P]) -> Self {
+        let paths = paths.iter().map(|p| p.as_ref().to_path_buf()).collect();
+        self.inline_paths = Some(std::rc::Rc::new(paths));
+        self
+    }
+
+    /// Like [`with_inlined_weights`](VarBuilder::with_inlined_weights) but only
+    /// names accepted by `filter` are inlined; the rest stay parameters. Use
+    /// this to keep the serialized module under protobuf's 2 GB ceiling by
+    /// inlining just the hot subset.
+    pub fn with_inlined_weights_filter<P: AsRef<std::path::Path>>(
+        mut self,
+        paths: &[P],
+        filter: impl Fn(&str) -> bool + 'static,
+    ) -> Self {
+        let paths = paths.iter().map(|p| p.as_ref().to_path_buf()).collect();
+        self.inline_paths = Some(std::rc::Rc::new(paths));
+        self.inline_filter = Some(std::rc::Rc::new(filter));
+        self
     }
 
     pub fn dtype(&self) -> ElementType {
         self.dtype
     }
 
-    /// Declare a weight parameter with the given safetensors name.
+    /// Declare a weight parameter with the given safetensors name, or inline
+    /// its value as a constant when the builder was created via
+    /// [`with_inlined_weights`](VarBuilder::with_inlined_weights).
     pub fn var(&self, name: &str, dims: &[i64]) -> Result<XlaOp> {
+        if let Some(paths) = &self.inline_paths {
+            if self.inline_filter.as_ref().is_none_or(|f| f(name)) {
+                let op = self.inline_var(paths, name, dims)?;
+                self.mark_used(name);
+                return Ok(op);
+            }
+        }
         let mut vars = self.vars.borrow_mut();
         let index = vars.len() + self.first_weight_index;
         let op = self.builder.parameter(index as i64, self.dtype, dims, name)?;
         vars.push((name.to_string(), dims.to_vec()));
         Ok(op)
+    }
+
+    fn inline_var(
+        &self,
+        paths: &std::rc::Rc<Vec<std::path::PathBuf>>,
+        name: &str,
+        dims: &[i64],
+    ) -> Result<XlaOp> {
+        for path in paths.iter() {
+            let file = std::fs::File::open(path)?;
+            let mmap = unsafe { memmap2::Mmap::map(&file)? };
+            let st = safetensors::SafeTensors::deserialize(&mmap)?;
+            let view = match st.tensor(name) {
+                Ok(view) => view,
+                Err(_) => continue,
+            };
+            let view_dims: Vec<i64> = view.shape().iter().map(|d| *d as i64).collect();
+            if view_dims != dims {
+                return Err(Error::ShapeMismatch {
+                    name: name.to_string(),
+                    expected: dims.to_vec(),
+                    got: view_dims,
+                });
+            }
+            let key = {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                view.data().hash(&mut h);
+                (self.dtype as u32).hash(&mut h);
+                (h.finish(), dims.to_vec())
+            };
+            if let Some(op) = self.inline_cache.borrow().get(&key) {
+                return Ok(op.clone());
+            }
+            let dims_usize: Vec<usize> = dims.iter().map(|d| *d as usize).collect();
+            let literal =
+                literal_from_view(name, view.dtype(), view.data(), &dims_usize, self.dtype)?;
+            let op = self.builder.constant_literal(&literal)?;
+            self.inline_cache.borrow_mut().insert(key, op.clone());
+            return Ok(op);
+        }
+        Err(Error::TensorNotFound { name: name.to_string() })
     }
 
     /// The number of declared weight parameters.
@@ -273,6 +366,40 @@ fn buffer_from_view(
         }
     };
     Ok(buffer)
+}
+
+/// Create a host literal from raw safetensors bytes, converting to `target`
+/// if the source dtype differs.
+fn literal_from_view(
+    name: &str,
+    src: safetensors::Dtype,
+    data: &[u8],
+    dims: &[usize],
+    target: ElementType,
+) -> Result<Literal> {
+    let src_matches = matches!(
+        (src, target),
+        (safetensors::Dtype::F32, ElementType::F32)
+            | (safetensors::Dtype::BF16, ElementType::Bf16)
+            | (safetensors::Dtype::F16, ElementType::F16)
+    );
+    let literal = if src_matches {
+        Literal::create_from_shape_and_untyped_data(target, dims, data)?
+    } else {
+        let data = to_f32_vec(name, src, data)?;
+        let data: Vec<u8> = match target {
+            ElementType::F32 => data.iter().flat_map(|v| v.to_le_bytes()).collect(),
+            ElementType::Bf16 => {
+                data.iter().flat_map(|&v| half::bf16::from_f32(v).to_le_bytes()).collect()
+            }
+            ElementType::F16 => {
+                data.iter().flat_map(|&v| half::f16::from_f32(v).to_le_bytes()).collect()
+            }
+            dtype => return Err(Error::UnsupportedTargetDType { dtype }),
+        };
+        Literal::create_from_shape_and_untyped_data(target, dims, &data)?
+    };
+    Ok(literal)
 }
 
 fn dtype_size(name: &str, dtype: safetensors::Dtype) -> Result<usize> {
