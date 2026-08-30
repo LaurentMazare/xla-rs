@@ -843,6 +843,27 @@ xla_op op_concat_in_dim(const xla_op arg, const xla_op *args, size_t nargs,
   END_PROTECT_OP(arg)
 }
 
+xla_op op_custom_call_inplace(const xla_builder b, const char *target_name,
+                              const xla_op *operands, size_t noperands,
+                              int pr_type, const int64_t *dims, size_t ndims,
+                              const char *opaque, size_t opaque_len,
+                              int64_t aliased_operand) {
+  BEGIN_PROTECT_OP
+  std::vector<XlaOp> operands_;
+  for (size_t i = 0; i < noperands; ++i) {
+    operands_.push_back(*operands[i]);
+  }
+  auto shape = ShapeUtil::MakeShape((PrimitiveType)pr_type,
+                                    absl::Span<const int64_t>(dims, ndims));
+  std::vector<std::pair<ShapeIndex, std::pair<int64_t, ShapeIndex>>> aliasing;
+  aliasing.push_back({ShapeIndex{}, {aliased_operand, ShapeIndex{}}});
+  return new XlaOp(CustomCall(b, std::string(target_name),
+                              absl::Span<const XlaOp>(operands_), shape,
+                              std::string(opaque, opaque_len),
+                              /*has_side_effect=*/false, aliasing));
+  END_PROTECT_OP_B(b)
+}
+
 xla_op op_custom_call(const xla_builder b, const char *target_name,
                       const xla_op *operands, size_t noperands, int pr_type,
                       const int64_t *dims, size_t ndims, const char *opaque,

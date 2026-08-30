@@ -93,6 +93,38 @@ impl XlaBuilder {
         self.wrap(op)
     }
 
+    /// Like [`custom_call`](XlaBuilder::custom_call) but the result buffer
+    /// aliases operand `aliased_operand`: the backend may update it in place,
+    /// so a kernel that writes only part of its output leaves the rest of the
+    /// operand's contents intact (an in-place cache update, for instance).
+    pub fn custom_call_inplace<B: std::borrow::Borrow<XlaOp>>(
+        &self,
+        target_name: &str,
+        operands: &[B],
+        ty: super::ElementType,
+        dims: &[i64],
+        opaque: &[u8],
+        aliased_operand: i64,
+    ) -> Result<XlaOp> {
+        let target_name = std::ffi::CString::new(target_name).unwrap();
+        let operands: Vec<_> = operands.iter().map(|a| a.borrow().op).collect();
+        let op = unsafe {
+            c_lib::op_custom_call_inplace(
+                self.ptr(),
+                target_name.as_ptr(),
+                operands.as_ptr(),
+                operands.len(),
+                ty.primitive_type() as i32,
+                dims.as_ptr(),
+                dims.len(),
+                opaque.as_ptr() as *const std::ffi::c_char,
+                opaque.len(),
+                aliased_operand,
+            )
+        };
+        self.wrap(op)
+    }
+
     /// Create a node with a constant scalar value using the type of the element that is passed as
     /// argument.
     pub fn constant_r0<T: NativeType>(&self, f: T) -> Result<XlaOp> {
