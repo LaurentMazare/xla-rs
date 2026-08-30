@@ -204,6 +204,9 @@ xla_op op_rng_uniform(const xla_op, const xla_op, int, int, const int64_t *);
 xla_op op_rng_normal(const xla_op, const xla_op, int, int, const int64_t *);
 xla_op op_slice_in_dim(const xla_op, int64_t, int64_t, int64_t, int64_t);
 xla_op op_concat_in_dim(const xla_op, const xla_op *, size_t, int64_t);
+xla_op op_custom_call_inplace(const xla_builder, const char *,
+                              const xla_op *, size_t, int, const int64_t *,
+                              size_t, const char *, size_t, int64_t);
 xla_op op_custom_call(const xla_builder, const char *, const xla_op *,
                       size_t, int, const int64_t *, size_t, const char *,
                       size_t);
