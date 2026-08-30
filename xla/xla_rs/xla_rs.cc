@@ -864,6 +864,12 @@ xla_op op_custom_call_inplace(const xla_builder b, const char *target_name,
   END_PROTECT_OP_B(b)
 }
 
+xla_op op_all_reduce(const xla_op operand, const xla_computation reduction) {
+  BEGIN_PROTECT_OP
+  return new XlaOp(AllReduce(*operand, *reduction));
+  END_PROTECT_OP(operand)
+}
+
 xla_op op_custom_call(const xla_builder b, const char *target_name,
                       const xla_op *operands, size_t noperands, int pr_type,
                       const int64_t *dims, size_t ndims, const char *opaque,
@@ -1214,6 +1220,58 @@ status compile_on_device(const pjrt_client client,
 // xla_gpu_dump_autotune_results_to debug options, scoped to this compilation
 // rather than set process-wide through XLA_FLAGS. Other debug options keep
 // their XLA_FLAGS provided or default values.
+status compile_replicated(const pjrt_client client,
+                          const xla_computation computation, int num_replicas,
+                          pjrt_loaded_executable *output) {
+  CompileOptions options;
+  auto devices = (*client)->addressable_devices();
+  if (num_replicas < 1 || num_replicas > (int)devices.size()) {
+    return new Status(absl::InvalidArgumentError(
+        absl::StrCat("num_replicas ", num_replicas, " out of range (",
+                     devices.size(), " addressable devices)")));
+  }
+  options.executable_build_options.set_num_replicas(num_replicas);
+  options.executable_build_options.set_num_partitions(1);
+  xla::DeviceAssignment assignment(num_replicas, 1);
+  for (int r = 0; r < num_replicas; ++r) {
+    assignment(r, 0) = devices[r]->id();
+  }
+  options.executable_build_options.set_device_assignment(assignment);
+  ASSIGN_OR_RETURN_STATUS(executable,
+                          (*client)->CompileAndLoad(*computation, options));
+  *output = executable.release();
+  return nullptr;
+}
+
+status execute_replicated_b(const pjrt_loaded_executable exe,
+                            const pjrt_buffer *const *inputs,
+                            const int *ninputs, int nreplicas,
+                            pjrt_buffer ***outputs) {
+  ExecuteOptions options;
+  options.strict_shape_checking = false;
+  std::vector<std::vector<PjRtBuffer *>> args;
+  args.reserve(nreplicas);
+  for (int r = 0; r < nreplicas; ++r) {
+    args.emplace_back(inputs[r], inputs[r] + ninputs[r]);
+  }
+  ASSIGN_OR_RETURN_STATUS(results, exe->Execute(args, options));
+  pjrt_buffer **out =
+      (pjrt_buffer **)malloc((results.size() + 1) * sizeof(pjrt_buffer *));
+  for (size_t i = 0; i < results.size(); ++i) {
+    auto &replica_results = results[i];
+    pjrt_buffer *per_replica_outputs = (pjrt_buffer *)malloc(
+        (replica_results.size() + 1) * sizeof(pjrt_buffer));
+    for (size_t j = 0; j < replica_results.size(); ++j) {
+      per_replica_outputs[j] = replica_results[j].release();
+    }
+    per_replica_outputs[replica_results.size()] = nullptr;
+    out[i] = per_replica_outputs;
+  }
+  out[results.size()] = nullptr;
+  *outputs = out;
+  return nullptr;
+}
+
 status compile_with_autotune_cache(const pjrt_client client,
                                    const xla_computation computation,
                                    const char *load_from, const char *dump_to,

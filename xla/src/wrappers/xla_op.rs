@@ -660,6 +660,14 @@ impl XlaOp {
     ///
     /// See the [semantics](https://www.tensorflow.org/xla/operation_semantics#scatter).
     #[allow(clippy::too_many_arguments)]
+    /// Cross-replica all-reduce of this op with the given scalar reduction
+    /// computation (e.g. an add built on a sub-builder), across all replicas
+    /// of a computation compiled with `PjRtClient::compile_replicated`.
+    pub fn all_reduce(&self, reduction: &XlaComputation) -> Result<Self> {
+        let op = unsafe { c_lib::op_all_reduce(self.op, reduction.0) };
+        self.wrap(op)
+    }
+
     pub fn scatter(
         &self,
         scatter_indices: &XlaOp,

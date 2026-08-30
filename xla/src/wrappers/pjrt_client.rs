@@ -168,6 +168,22 @@ impl PjRtClient {
     /// ordinal rather than device 0; buffers fed to the executable must live
     /// on that device (see [`PjRtBuffer::copy_to_device`] and the `device`
     /// argument of the `buffer_from_host_*` functions).
+    /// Compile for `num_replicas` addressable devices (SPMD replication):
+    /// the same program runs on devices `0..num_replicas`, and cross-replica
+    /// ops (`XlaOp::all_reduce`) reduce across them. Execute with
+    /// [`PjRtLoadedExecutable::execute_replicated_b`].
+    pub fn compile_replicated(
+        &self,
+        c: &XlaComputation,
+        num_replicas: usize,
+    ) -> Result<PjRtLoadedExecutable> {
+        let mut exe: c_lib::pjrt_loaded_executable = std::ptr::null_mut();
+        let status =
+            unsafe { c_lib::compile_replicated(self.ptr(), c.0, num_replicas as i32, &mut exe) };
+        super::handle_status(status)?;
+        Ok(PjRtLoadedExecutable { exe, client: self.clone() })
+    }
+
     pub fn compile_on_device(
         &self,
         c: &XlaComputation,

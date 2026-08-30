@@ -68,6 +68,28 @@ impl PjRtLoadedExecutable {
         super::handle_status(status)?;
         Ok(self.process_execute_outputs(outputs))
     }
+
+    /// Execute a replicated executable (see `PjRtClient::compile_replicated`)
+    /// with one argument list per replica; each replica's buffers must live on
+    /// that replica's device. Returns one output vector per replica.
+    pub fn execute_replicated_b(&self, args: &[Vec<&PjRtBuffer>]) -> Result<Vec<Vec<PjRtBuffer>>> {
+        let mut outputs = std::ptr::null_mut();
+        let per_replica: Vec<Vec<c_lib::pjrt_buffer>> =
+            args.iter().map(|a| a.iter().map(|x| x.buffer).collect()).collect();
+        let ptrs: Vec<*const c_lib::pjrt_buffer> = per_replica.iter().map(|a| a.as_ptr()).collect();
+        let lens: Vec<i32> = per_replica.iter().map(|a| a.len() as i32).collect();
+        let status = unsafe {
+            c_lib::execute_replicated_b(
+                self.exe,
+                ptrs.as_ptr(),
+                lens.as_ptr(),
+                args.len() as i32,
+                &mut outputs,
+            )
+        };
+        super::handle_status(status)?;
+        Ok(self.process_execute_outputs(outputs))
+    }
 }
 
 impl Drop for PjRtLoadedExecutable {

@@ -207,6 +207,7 @@ xla_op op_concat_in_dim(const xla_op, const xla_op *, size_t, int64_t);
 xla_op op_custom_call_inplace(const xla_builder, const char *,
                               const xla_op *, size_t, int, const int64_t *,
                               size_t, const char *, size_t, int64_t);
+xla_op op_all_reduce(const xla_op, const xla_computation);
 xla_op op_custom_call(const xla_builder, const char *, const xla_op *,
                       size_t, int, const int64_t *, size_t, const char *,
                       size_t);
@@ -259,6 +260,11 @@ status get_dimensions_size(const xla_builder, const xla_op, int *);
 status get_dimensions(const xla_builder, const xla_op, size_t *);
 
 status build(const xla_builder, const xla_op, xla_computation *);
+status compile_replicated(const pjrt_client, const xla_computation, int,
+                          pjrt_loaded_executable *);
+status execute_replicated_b(const pjrt_loaded_executable,
+                            const pjrt_buffer *const *, const int *, int,
+                            pjrt_buffer ***);
 status compile(const pjrt_client, const xla_computation,
                pjrt_loaded_executable *);
 // Compile for the addressable device with the given ordinal (the default
