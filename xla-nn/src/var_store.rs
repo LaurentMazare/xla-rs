@@ -35,7 +35,8 @@ pub struct VarBuilder {
     // bytes and shape share one graph constant (e.g. weight groups that a
     // per-step schedule materialized under several names), keeping the
     // serialized module under protobuf's 2 GB ceiling.
-    inline_cache: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<(u64, Vec<i64>), XlaOp>>>,
+    inline_cache:
+        std::rc::Rc<std::cell::RefCell<std::collections::HashMap<(u64, Vec<i64>), XlaOp>>>,
 }
 
 impl VarBuilder {

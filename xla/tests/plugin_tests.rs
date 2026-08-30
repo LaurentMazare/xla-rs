@@ -68,15 +68,17 @@ fn plugin_gather_patterns() -> xla::Result<()> {
     let client = PjRtClient::plugin(&device_type, &path)?;
     let (rows, d, n) = (8001i64, 128i64, 32i64);
     let table_host: Vec<f32> = (0..rows * d).map(|i| ((i % 251) as f32) * 0.01).collect();
-    let table_bf16: Vec<u8> = table_host
-        .iter()
-        .flat_map(|&v| ((v.to_bits() >> 16) as u16).to_le_bytes())
-        .collect();
+    let table_bf16: Vec<u8> =
+        table_host.iter().flat_map(|&v| ((v.to_bits() >> 16) as u16).to_le_bytes()).collect();
     let variants: [(&str, Vec<i32>, bool); 4] = [
         ("plain-valid", (0..n as i32).map(|i| i * 200).collect(), false),
         ("plain-last-row", vec![rows as i32 - 1; n as usize], false),
         ("clamp-select-valid", (0..n as i32).map(|i| i * 200).collect(), true),
-        ("clamp-select-neg", (0..n as i32).map(|i| if i % 2 == 0 { -1 } else { i * 200 }).collect(), true),
+        (
+            "clamp-select-neg",
+            (0..n as i32).map(|i| if i % 2 == 0 { -1 } else { i * 200 }).collect(),
+            true,
+        ),
     ];
     for (name, ids_host, clamp_select) in variants.iter() {
         let builder = XlaBuilder::new(name);
@@ -136,10 +138,14 @@ fn plugin_sampling_chain() -> xla::Result<()> {
     let host_argmax: Vec<i32> = (0..b)
         .map(|r| {
             let row = &logits_host[(r * vocab) as usize..((r + 1) * vocab) as usize];
-            row.iter().enumerate().fold((0usize, f32::MIN), |acc, (i, &v)| if v > acc.1 { (i, v) } else { acc }).0 as i32
+            row.iter()
+                .enumerate()
+                .fold((0usize, f32::MIN), |acc, (i, &v)| if v > acc.1 { (i, v) } else { acc })
+                .0 as i32
         })
         .collect();
-    let logits_buf = client.buffer_from_host_buffer(&logits_host, &[b as usize, vocab as usize], None)?;
+    let logits_buf =
+        client.buffer_from_host_buffer(&logits_host, &[b as usize, vocab as usize], None)?;
 
     // A: plain argmax.
     {
@@ -150,7 +156,12 @@ fn plugin_sampling_chain() -> xla::Result<()> {
         match exe.execute_b(&[&logits_buf]) {
             Ok(out) => {
                 let got = out[0][0].to_literal_sync()?.to_vec::<i32>()?;
-                eprintln!("argmax: ok, matches host = {}, got[..4]={:?} host[..4]={:?}", got == host_argmax, &got[..4], &host_argmax[..4]);
+                eprintln!(
+                    "argmax: ok, matches host = {}, got[..4]={:?} host[..4]={:?}",
+                    got == host_argmax,
+                    &got[..4],
+                    &host_argmax[..4]
+                );
             }
             Err(e) => eprintln!("argmax: FAILED {e}"),
         }
@@ -165,7 +176,13 @@ fn plugin_sampling_chain() -> xla::Result<()> {
         let logits = builder.parameter(0, ElementType::F32, &[b, vocab], "logits")?;
         let temp = builder.parameter(1, ElementType::F32, &[b], "temp")?;
         let rng = builder.parameter(2, ElementType::U64, &[2], "rng")?;
-        let (new_rng, u) = rng.sample_uniform(xla::RandomAlgorithm::Default, ElementType::F32, &[b, vocab], 1e-7, 0.999)?;
+        let (new_rng, u) = rng.sample_uniform(
+            xla::RandomAlgorithm::Default,
+            ElementType::F32,
+            &[b, vocab],
+            1e-7,
+            0.999,
+        )?;
         let noise = u.log()?.neg()?.log()?;
         let t = temp.broadcast_in_dim(&[b, vocab], &[0])?;
         let shifted = logits.sub_(&noise.mul_(&t)?)?;
@@ -178,22 +195,40 @@ fn plugin_sampling_chain() -> xla::Result<()> {
                 let umin = u.iter().cloned().fold(f32::MAX, f32::min);
                 let umax = u.iter().cloned().fold(f32::MIN, f32::max);
                 let nan = u.iter().filter(|v| v.is_nan()).count();
-                let bad: Vec<i32> = tok.iter().cloned().filter(|&t| t < 0 || t >= vocab as i32).collect();
-                eprintln!("gumbel: ok, tokens={:?} out-of-range={:?} u in [{umin}, {umax}] nan={nan}", &tok[..8], bad);
+                let bad: Vec<i32> =
+                    tok.iter().cloned().filter(|&t| t < 0 || t >= vocab as i32).collect();
+                eprintln!(
+                    "gumbel: ok, tokens={:?} out-of-range={:?} u in [{umin}, {umax}] nan={nan}",
+                    &tok[..8],
+                    bad
+                );
             }
             Err(e) => eprintln!("gumbel: FAILED {e}"),
         }
     }
     // C: sampled tokens (dup to 2b) into the embedding gather.
     {
-        let table_host: Vec<u8> = (0..(vocab + 1) * d).flat_map(|i| ((((i % 251) as f32 * 0.01).to_bits() >> 16) as u16).to_le_bytes()).collect();
-        let table_buf = client.buffer_from_host_raw_bytes(ElementType::Bf16, &table_host, &[(vocab + 1) as usize, d as usize], None)?;
+        let table_host: Vec<u8> = (0..(vocab + 1) * d)
+            .flat_map(|i| ((((i % 251) as f32 * 0.01).to_bits() >> 16) as u16).to_le_bytes())
+            .collect();
+        let table_buf = client.buffer_from_host_raw_bytes(
+            ElementType::Bf16,
+            &table_host,
+            &[(vocab + 1) as usize, d as usize],
+            None,
+        )?;
         let builder = XlaBuilder::new("chain");
         let logits = builder.parameter(0, ElementType::F32, &[b, vocab], "logits")?;
         let temp = builder.parameter(1, ElementType::F32, &[b], "temp")?;
         let rng = builder.parameter(2, ElementType::U64, &[2], "rng")?;
         let table = builder.parameter(3, ElementType::Bf16, &[vocab + 1, d], "table")?;
-        let (_new_rng, u) = rng.sample_uniform(xla::RandomAlgorithm::Default, ElementType::F32, &[b, vocab], 1e-7, 0.999)?;
+        let (_new_rng, u) = rng.sample_uniform(
+            xla::RandomAlgorithm::Default,
+            ElementType::F32,
+            &[b, vocab],
+            1e-7,
+            0.999,
+        )?;
         let noise = u.log()?.neg()?.log()?;
         let t = temp.broadcast_in_dim(&[b, vocab], &[0])?;
         let tok = logits.sub_(&noise.mul_(&t)?)?.argmax(ElementType::S32, -1)?.reshape(&[b])?;
@@ -227,16 +262,31 @@ fn plugin_sampling_chain_aliased() -> xla::Result<()> {
     let client = PjRtClient::plugin(&device_type, &path)?;
     let (b, vocab, d) = (16i64, 2048i64, 128i64);
     let logits_host = vec![0.5f32; (b * vocab) as usize];
-    let logits_buf = client.buffer_from_host_buffer(&logits_host, &[b as usize, vocab as usize], None)?;
-    let temp_buf = client.buffer_from_host_buffer(&vec![0.6f32; b as usize], &[b as usize], None)?;
-    let table_host: Vec<u8> = (0..(vocab + 1) * d).flat_map(|i| ((((i % 251) as f32 * 0.01).to_bits() >> 16) as u16).to_le_bytes()).collect();
-    let table_buf = client.buffer_from_host_raw_bytes(ElementType::Bf16, &table_host, &[(vocab + 1) as usize, d as usize], None)?;
+    let logits_buf =
+        client.buffer_from_host_buffer(&logits_host, &[b as usize, vocab as usize], None)?;
+    let temp_buf =
+        client.buffer_from_host_buffer(&vec![0.6f32; b as usize], &[b as usize], None)?;
+    let table_host: Vec<u8> = (0..(vocab + 1) * d)
+        .flat_map(|i| ((((i % 251) as f32 * 0.01).to_bits() >> 16) as u16).to_le_bytes())
+        .collect();
+    let table_buf = client.buffer_from_host_raw_bytes(
+        ElementType::Bf16,
+        &table_host,
+        &[(vocab + 1) as usize, d as usize],
+        None,
+    )?;
     let builder = XlaBuilder::new("chain-aliased");
     let logits = builder.parameter(0, ElementType::F32, &[b, vocab], "logits")?;
     let temp = builder.parameter(1, ElementType::F32, &[b], "temp")?;
     let table = builder.parameter(2, ElementType::Bf16, &[vocab + 1, d], "table")?;
     let rng = builder.parameter(3, ElementType::U64, &[2], "rng")?;
-    let (new_rng, u) = rng.sample_uniform(xla::RandomAlgorithm::Default, ElementType::F32, &[b, vocab], 1e-7, 0.999)?;
+    let (new_rng, u) = rng.sample_uniform(
+        xla::RandomAlgorithm::Default,
+        ElementType::F32,
+        &[b, vocab],
+        1e-7,
+        0.999,
+    )?;
     let noise = u.log()?.neg()?.log()?;
     let t = temp.broadcast_in_dim(&[b, vocab], &[0])?;
     let tok = logits.sub_(&noise.mul_(&t)?)?.argmax(ElementType::S32, -1)?.reshape(&[b])?;
@@ -251,14 +301,22 @@ fn plugin_sampling_chain_aliased() -> xla::Result<()> {
     // Output 0: codes, output 1: new rng (aliased to param 3), output 2: embedding sums.
     builder.setup_alias(1, 3);
     let exe = client.compile(&builder.tuple(&[&codes, &new_rng, &out])?.build()?)?;
-    let mut rng_buf = client.buffer_from_host_buffer(&[0x1234_5678_9abc_def0u64, 0x0fed_cba9_8765_4321u64], &[2], None)?;
+    let mut rng_buf = client.buffer_from_host_buffer(
+        &[0x1234_5678_9abc_def0u64, 0x0fed_cba9_8765_4321u64],
+        &[2],
+        None,
+    )?;
     for step in 0..3 {
         match exe.execute_b(&[&logits_buf, &temp_buf, &table_buf, &rng_buf]) {
             Ok(mut out) => {
                 let mut outs = out.remove(0);
                 let codes = outs[0].to_literal_sync()?.to_vec::<i64>()?;
                 let sums = outs[2].to_literal_sync()?.to_vec::<f32>()?;
-                eprintln!("aliased step {step}: ok codes[..4]={:?} sums[..2]={:?}", &codes[..4], &sums[..2]);
+                eprintln!(
+                    "aliased step {step}: ok codes[..4]={:?} sums[..2]={:?}",
+                    &codes[..4],
+                    &sums[..2]
+                );
                 rng_buf = outs.remove(1);
             }
             Err(e) => {
