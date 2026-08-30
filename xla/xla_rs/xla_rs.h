@@ -255,6 +255,10 @@ status get_dimensions(const xla_builder, const xla_op, size_t *);
 status build(const xla_builder, const xla_op, xla_computation *);
 status compile(const pjrt_client, const xla_computation,
                pjrt_loaded_executable *);
+// Compile for the addressable device with the given ordinal (the default
+// is device 0).
+status compile_on_device(const pjrt_client, const xla_computation, int,
+                         pjrt_loaded_executable *);
 status compile_with_autotune_cache(const pjrt_client, const xla_computation,
                                    const char *load_from, const char *dump_to,
                                    pjrt_loaded_executable *);

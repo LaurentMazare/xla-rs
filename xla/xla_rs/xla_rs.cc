@@ -1145,6 +1145,30 @@ status compile(const pjrt_client client, const xla_computation computation,
   return nullptr;
 }
 
+status compile_on_device(const pjrt_client client,
+                         const xla_computation computation, int device_ordinal,
+                         pjrt_loaded_executable *output) {
+  CompileOptions options;
+  auto devices = (*client)->addressable_devices();
+  if (device_ordinal < 0 || device_ordinal >= (int)devices.size()) {
+    return new Status(absl::InvalidArgumentError(
+        absl::StrCat("device ordinal ", device_ordinal, " out of range (",
+                     devices.size(), " addressable devices)")));
+  }
+  // Both forms: some clients read the ordinal, plugins (e.g. Neuron) want an
+  // explicit single-device assignment.
+  options.executable_build_options.set_device_ordinal(device_ordinal);
+  options.executable_build_options.set_num_replicas(1);
+  options.executable_build_options.set_num_partitions(1);
+  xla::DeviceAssignment assignment(1, 1);
+  assignment(0, 0) = devices[device_ordinal]->id();
+  options.executable_build_options.set_device_assignment(assignment);
+  ASSIGN_OR_RETURN_STATUS(executable,
+                          (*client)->CompileAndLoad(*computation, options));
+  *output = executable.release();
+  return nullptr;
+}
+
 // Compile with the gemm autotuner results pinned to a file: load_from reuses
 // previously dumped results (making the kernel selection deterministic and
 // skipping the tuning), dump_to writes the results of this compilation.

@@ -2,6 +2,7 @@ use crate::{c_lib, Result};
 use std::marker::PhantomData;
 
 /// A device attached to a [`super::PjRtClient`].
+#[derive(Clone, Copy)]
 pub struct PjRtDevice<'a> {
     pub(super) device: c_lib::pjrt_device,
     pub(super) marker: PhantomData<&'a super::PjRtClient>,

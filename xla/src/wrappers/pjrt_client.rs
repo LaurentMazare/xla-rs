@@ -164,6 +164,22 @@ impl PjRtClient {
         Ok(PjRtLoadedExecutable { exe, client: self.clone() })
     }
 
+    /// Compile a computation for the addressable device with the given
+    /// ordinal rather than device 0; buffers fed to the executable must live
+    /// on that device (see [`PjRtBuffer::copy_to_device`] and the `device`
+    /// argument of the `buffer_from_host_*` functions).
+    pub fn compile_on_device(
+        &self,
+        c: &XlaComputation,
+        device_ordinal: usize,
+    ) -> Result<PjRtLoadedExecutable> {
+        let mut exe: c_lib::pjrt_loaded_executable = std::ptr::null_mut();
+        let status =
+            unsafe { c_lib::compile_on_device(self.ptr(), c.0, device_ordinal as i32, &mut exe) };
+        super::handle_status(status)?;
+        Ok(PjRtLoadedExecutable { exe, client: self.clone() })
+    }
+
     /// Compile a computation with the gpu gemm autotuner results pinned to a
     /// file: `load_from` reuses previously dumped results, making the kernel
     /// selection deterministic and skipping the tuning, `dump_to` writes the
