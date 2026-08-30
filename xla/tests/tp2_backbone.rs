@@ -67,6 +67,17 @@ fn hl() -> i64 {
 fn ffl() -> i64 {
     8448 / tp()
 }
+/// With `XLA_TP_EXTRAS=1`, the backbone test also carries the worker's
+/// embedding/head extras: 32 one-hot audio embeddings ([2049, D] each), the
+/// text embedding ([20001, D] through the out1/out2 pair) and the 4-class
+/// text head with an argmax readout — ~563 MB of extra weight stream.
+fn extras() -> bool {
+    std::env::var("XLA_TP_EXTRAS").is_ok_and(|v| v == "1")
+}
+const AUDIO_VOCAB: i64 = 2049;
+const N_AUDIO_EMB: usize = 32;
+const TEXT_VOCAB: i64 = 20001;
+const TEXT_OUT: i64 = 4;
 
 fn bf16_buffer(
     client: &PjRtClient,
@@ -130,6 +141,19 @@ fn tp2_backbone_step() -> xla::Result<()> {
     };
     let x_in = param(ty, &[B, D], "x")?;
     let pos = param(ElementType::S32, &[B], "pos")?;
+    let mut extra_ops = Vec::new();
+    if extras() {
+        extra_ops.push(param(ElementType::S32, &[B, N_AUDIO_EMB as i64], "audio_tokens")?);
+        extra_ops.push(param(ElementType::S32, &[B], "text_tok1")?);
+        extra_ops.push(param(ElementType::S32, &[B], "text_tok2")?);
+        for i in 0..N_AUDIO_EMB {
+            extra_ops.push(param(ty, &[AUDIO_VOCAB, D], &format!("audio_emb_{i}"))?);
+        }
+        extra_ops.push(param(ty, &[TEXT_VOCAB, D], "text_emb")?);
+        extra_ops.push(param(ty, &[D, D], "text_out1")?);
+        extra_ops.push(param(ty, &[D, D], "text_out2")?);
+        extra_ops.push(param(ty, &[D, TEXT_OUT], "text_head")?);
+    }
     let mut weight_ops = Vec::new();
     for l in 0..L {
         let names = [
@@ -176,6 +200,21 @@ fn tp2_backbone_step() -> xla::Result<()> {
     let scale = b.c0(1f32 / (HD as f32).sqrt())?;
 
     let mut x = x_in.clone();
+    if extras() {
+        let onehot = |tok: &XlaOp, vocab: i64| -> xla::Result<XlaOp> {
+            let iota = b.iota(ElementType::S32, &[B, vocab], 1)?;
+            iota.eq(&tok.reshape(&[B, 1])?.broadcast_in_dim(&[B, vocab], &[0, 1])?)?.convert(dt)
+        };
+        let audio_tokens = &extra_ops[0];
+        for i in 0..N_AUDIO_EMB {
+            let tok = audio_tokens.slice_in_dim1(i as i64, i as i64 + 1, 1)?.reshape(&[B])?;
+            x = x.add_(&onehot(&tok, AUDIO_VOCAB)?.dot(&extra_ops[3 + i])?)?;
+        }
+        let te = &extra_ops[3 + N_AUDIO_EMB];
+        let e1 = onehot(&extra_ops[1], TEXT_VOCAB)?.dot(te)?.dot(&extra_ops[4 + N_AUDIO_EMB])?;
+        let e2 = onehot(&extra_ops[2], TEXT_VOCAB)?.dot(te)?.dot(&extra_ops[5 + N_AUDIO_EMB])?;
+        x = x.add_(&e1)?.add_(&e2)?;
+    }
     let mut new_caches = Vec::new();
     for l in 0..L {
         let w = &weight_ops[l];
@@ -251,7 +290,20 @@ fn tp2_backbone_step() -> xla::Result<()> {
         x = x.add_(&red.convert(dt)?)?;
         new_caches.push((kc, vc));
     }
-    let xf32 = x.convert(PrimitiveType::F32)?;
+    let xf32 = if extras() {
+        let logits = rmsnorm(&x)?.dot(&extra_ops[6 + N_AUDIO_EMB])?.convert(PrimitiveType::F32)?;
+        let action = logits.argmax(ElementType::S32, 1)?;
+        // fold the sampled action back into the f32 readout so nothing is DCE'd
+        x.convert(PrimitiveType::F32)?.add_(
+            &action
+                .convert(PrimitiveType::F32)?
+                .reshape(&[B, 1])?
+                .broadcast_in_dim(&[B, D], &[0, 1])?
+                .mul_(&b.c0(1e-6f32)?.broadcast(&[B, D])?)?,
+        )?
+    } else {
+        x.convert(PrimitiveType::F32)?
+    };
     let mut outs = vec![x];
     for (kc, vc) in &new_caches {
         outs.push(kc.clone());
@@ -270,7 +322,38 @@ fn tp2_backbone_step() -> xla::Result<()> {
     let devs = client.addressable_devices();
     let mut weights: Vec<Vec<PjRtBuffer>> = Vec::new();
     let mut caches: Vec<Vec<PjRtBuffer>> = Vec::new();
+    let mut extra_bufs: Vec<Vec<PjRtBuffer>> = Vec::new();
     for (r, dev) in devs.iter().take(tp() as usize).enumerate() {
+        if extras() {
+            let mut es = Vec::new();
+            es.push(client.buffer_from_host_buffer(
+                &vec![5i32; (B as usize) * N_AUDIO_EMB],
+                &[B as usize, N_AUDIO_EMB],
+                Some(dev),
+            )?);
+            for _ in 0..2 {
+                es.push(client.buffer_from_host_buffer(
+                    &vec![7i32; B as usize],
+                    &[B as usize],
+                    Some(dev),
+                )?);
+            }
+            for i in 0..N_AUDIO_EMB {
+                es.push(bf16_buffer(
+                    &client,
+                    &[AUDIO_VOCAB, D],
+                    (7_000_000 + r * 1000 + i) as u32,
+                    dev,
+                )?);
+            }
+            es.push(bf16_buffer(&client, &[TEXT_VOCAB, D], (7_100_000 + r) as u32, dev)?);
+            es.push(bf16_buffer(&client, &[D, D], (7_200_000 + r) as u32, dev)?);
+            es.push(bf16_buffer(&client, &[D, D], (7_300_000 + r) as u32, dev)?);
+            es.push(bf16_buffer(&client, &[D, TEXT_OUT], (7_400_000 + r) as u32, dev)?);
+            extra_bufs.push(es);
+        } else {
+            extra_bufs.push(Vec::new());
+        }
         let mut ws = Vec::new();
         for l in 0..L {
             for (i, dims) in [
@@ -335,6 +418,7 @@ fn tp2_backbone_step() -> xla::Result<()> {
         let mut all: Vec<Vec<&PjRtBuffer>> = Vec::new();
         for r in 0..tp() as usize {
             let mut a: Vec<&PjRtBuffer> = vec![&xbufs[r], &pos_bufs[r]];
+            a.extend(extra_bufs[r].iter());
             a.extend(weights[r].iter());
             a.extend(caches[r].iter());
             all.push(a);
@@ -369,7 +453,11 @@ fn tp2_backbone_step() -> xla::Result<()> {
     // sync
     let _ = xbufs[0].to_literal_sync()?;
     let ms = t0.elapsed().as_secs_f64() * 1e3 / iters as f64;
-    eprintln!("TP={} backbone step through xla-rs: {ms:.1} ms over {iters} iters", tp());
+    eprintln!(
+        "TP={} extras={} backbone step through xla-rs: {ms:.1} ms over {iters} iters",
+        tp(),
+        extras()
+    );
     let lf = last_f32.borrow();
     let xf = lf[0].to_literal_sync()?.to_vec::<f32>()?;
     let finite = xf.iter().all(|v| v.is_finite());
@@ -457,7 +545,7 @@ fn tp2_depformer_step() -> xla::Result<()> {
         let w = &slice_ops[s];
         let xs = ys.dot(&w[0])?; // [B, DD]
                                  // one-hot embedding matmul (gathers are slow on neuron, cf
-        // XLA_MOSHI_EMBEDDING_ONEHOT in the worker)
+                                 // XLA_MOSHI_EMBEDDING_ONEHOT in the worker)
         let iota_v = b.iota(ElementType::S32, &[B, VOCAB], 1)?;
         let oh = iota_v
             .eq(&tokens.reshape(&[B, 1])?.broadcast_in_dim(&[B, VOCAB], &[0, 1])?)?
