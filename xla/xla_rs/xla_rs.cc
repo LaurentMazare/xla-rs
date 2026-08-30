@@ -51,22 +51,83 @@ status pjrt_gpu_client_create(pjrt_client *output, double memory_fraction,
   return nullptr;
 }
 
+static absl::StatusOr<PjRtValueType> parse_plugin_option(int tag,
+                                                          const char *value) {
+  std::string v(value);
+  switch (tag) {
+  case 0:
+    return PjRtValueType(v);
+  case 1:
+    if (v == "true")
+      return PjRtValueType(true);
+    if (v == "false")
+      return PjRtValueType(false);
+    return absl::InvalidArgumentError("bool option must be true or false");
+  case 2: {
+    int64_t i;
+    if (!absl::SimpleAtoi(v, &i))
+      return absl::InvalidArgumentError("invalid int64 option " + v);
+    return PjRtValueType(i);
+  }
+  case 3: {
+    float f;
+    if (!absl::SimpleAtof(v, &f))
+      return absl::InvalidArgumentError("invalid float option " + v);
+    return PjRtValueType(f);
+  }
+  case 4: {
+    std::vector<int64_t> is;
+    for (absl::string_view part : absl::StrSplit(v, ',', absl::SkipEmpty())) {
+      int64_t i;
+      if (!absl::SimpleAtoi(part, &i))
+        return absl::InvalidArgumentError("invalid int64 list option " + v);
+      is.push_back(i);
+    }
+    return PjRtValueType(is);
+  }
+  default:
+    return absl::InvalidArgumentError("unknown option tag");
+  }
+}
+
+status pjrt_plugin_client_create(pjrt_client *output, const char *device_type,
+                                 const char *library_path, int n,
+                                 const char *const *keys, const int *tags,
+                                 const char *const *values) {
+  // The registry is process-wide: a second client on the same plugin reuses
+  // the loaded library rather than failing on the duplicate registration.
+  if (!pjrt::PjrtApi(device_type).ok()) {
+    ASSIGN_OR_RETURN_STATUS(api,
+                            pjrt::LoadPjrtPlugin(device_type, library_path));
+    (void)api;
+  }
+  // LoadPjrtPlugin only calls SetPjrtApi; the plugin's own init
+  // (PJRT_Plugin_Initialize) must run before a client is created, otherwise
+  // e.g. libtpu aborts trying to access the TPU device files before init.
+  ASSIGN_OR_RETURN_STATUS(initialized,
+                          pjrt::IsPjrtPluginInitialized(device_type));
+  if (!initialized) {
+    MAYBE_RETURN_STATUS(pjrt::InitializePjrtPlugin(device_type));
+  }
+  absl::flat_hash_map<std::string, PjRtValueType> options;
+  for (int i = 0; i < n; ++i) {
+    ASSIGN_OR_RETURN_STATUS(value, parse_plugin_option(tags[i], values[i]));
+    options[keys[i]] = std::move(value);
+  }
+  ASSIGN_OR_RETURN_STATUS(client, xla::GetCApiClient(device_type, options));
+  *output = new std::shared_ptr(std::move(client));
+  return nullptr;
+}
+
 status pjrt_tpu_client_create(pjrt_client *output,
                               int max_inflight_computations) {
   (void)max_inflight_computations;
   const char *env = std::getenv("TPU_LIBRARY_PATH");
   std::string library_path = env != nullptr ? env : "libtpu.so";
-  ASSIGN_OR_RETURN_STATUS(api, pjrt::LoadPjrtPlugin("tpu", library_path));
-  (void)api;
-  // LoadPjrtPlugin only calls SetPjrtApi; the plugin's own init
-  // (PJRT_Plugin_Initialize) must run before a client is created, otherwise
-  // libtpu aborts trying to access the TPU device files before init.
-  MAYBE_RETURN_STATUS(pjrt::InitializePjrtPlugin("tpu"));
-  // Match EXLA (elixir-nx): register the plugin as "tpu" but create the client
-  // with the upper-case "TPU" device type.
-  ASSIGN_OR_RETURN_STATUS(client, xla::GetCApiClient("TPU"));
-  *output = new std::shared_ptr(std::move(client));
-  return nullptr;
+  // The registry is case insensitive, so this matches EXLA (elixir-nx) which
+  // registers "tpu" and creates the client with the device type "TPU".
+  return pjrt_plugin_client_create(output, "tpu", library_path.c_str(), 0,
+                                   nullptr, nullptr, nullptr);
 }
 
 int pjrt_client_device_count(pjrt_client c) { return (*c)->device_count(); }

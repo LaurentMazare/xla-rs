@@ -12,6 +12,41 @@ pub(super) struct PjRtClientInternal(pub(self) c_lib::pjrt_client);
 unsafe impl Send for PjRtClientInternal {}
 unsafe impl Sync for PjRtClientInternal {}
 
+/// A value in the options handed to a PJRT plugin when creating a client, see
+/// [`PjRtClient::plugin_with_options`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum PluginOption {
+    Str(String),
+    Bool(bool),
+    Int(i64),
+    Float(f32),
+    IntList(Vec<i64>),
+}
+
+impl PluginOption {
+    /// The type tag understood by `pjrt_plugin_client_create`.
+    fn tag(&self) -> i32 {
+        match self {
+            Self::Str(_) => 0,
+            Self::Bool(_) => 1,
+            Self::Int(_) => 2,
+            Self::Float(_) => 3,
+            Self::IntList(_) => 4,
+        }
+    }
+
+    /// The string encoding decoded on the C++ side according to [`Self::tag`].
+    fn encode(&self) -> String {
+        match self {
+            Self::Str(s) => s.clone(),
+            Self::Bool(b) => b.to_string(),
+            Self::Int(i) => i.to_string(),
+            Self::Float(f) => format!("{f:?}"),
+            Self::IntList(is) => is.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(","),
+        }
+    }
+}
+
 /// A client represents a device that can be used to run some computations. A computation graph is
 /// compiled in a way that is specific to a device before it can be run.
 #[derive(Clone)]
@@ -37,6 +72,47 @@ impl PjRtClient {
         Ok(Self(Arc::new(PjRtClientInternal(ptr))))
     }
 
+    /// A client on a PJRT C-API plugin: `library_path` is a shared library
+    /// exporting `GetPjrtApi` (e.g. jax's `xla_cuda_plugin.so`, `libtpu.so`,
+    /// or `libneuronpjrt.so`), and `device_type` the name it is registered
+    /// under in the process-wide plugin registry (case insensitive). A second
+    /// client for an already loaded plugin reuses the library.
+    pub fn plugin<P: AsRef<std::path::Path>>(device_type: &str, library_path: P) -> Result<Self> {
+        Self::plugin_with_options(device_type, library_path, &[])
+    }
+
+    /// Same as [`Self::plugin`], with the plugin's client creation options,
+    /// e.g. `("memory_fraction", PluginOption::Float(0.5))` for the cuda one.
+    pub fn plugin_with_options<P: AsRef<std::path::Path>>(
+        device_type: &str,
+        library_path: P,
+        options: &[(&str, PluginOption)],
+    ) -> Result<Self> {
+        use std::ffi::CString;
+        let device_type = CString::new(device_type)?;
+        let library_path = CString::new(library_path.as_ref().to_string_lossy().as_bytes())?;
+        type Strings = std::result::Result<Vec<CString>, std::ffi::NulError>;
+        let keys = options.iter().map(|(k, _)| CString::new(*k)).collect::<Strings>()?;
+        let values = options.iter().map(|(_, v)| CString::new(v.encode())).collect::<Strings>()?;
+        let tags: Vec<i32> = options.iter().map(|(_, v)| v.tag()).collect();
+        let key_ptrs: Vec<*const std::ffi::c_char> = keys.iter().map(|k| k.as_ptr()).collect();
+        let value_ptrs: Vec<*const std::ffi::c_char> = values.iter().map(|v| v.as_ptr()).collect();
+        let mut ptr: c_lib::pjrt_client = std::ptr::null_mut();
+        let status = unsafe {
+            c_lib::pjrt_plugin_client_create(
+                &mut ptr,
+                device_type.as_ptr(),
+                library_path.as_ptr(),
+                options.len() as i32,
+                key_ptrs.as_ptr(),
+                tags.as_ptr(),
+                value_ptrs.as_ptr(),
+            )
+        };
+        super::handle_status(status)?;
+        Ok(Self(Arc::new(PjRtClientInternal(ptr))))
+    }
+
     /// A TPU client.
     pub fn tpu(max_inflight_computations: usize) -> Result<Self> {
         let mut ptr: c_lib::pjrt_client = std::ptr::null_mut();
@@ -46,7 +122,9 @@ impl PjRtClient {
         Ok(Self(Arc::new(PjRtClientInternal(ptr))))
     }
 
-    /// A client for the best available platform: try TPU, then GPU, then fall
+    /// A client for the best available platform: the PJRT plugin named by the
+    /// `XLA_PJRT_PLUGIN` environment variable (`<device_type>:<library_path>`,
+    /// see [`Self::plugin`]) when set, otherwise try TPU, then GPU, then fall
     /// back to CPU. When `force_cpu` is set, a CPU client is created directly.
     ///
     /// The client constructors return an error when their runtime is missing
@@ -55,6 +133,15 @@ impl PjRtClient {
     pub fn auto(force_cpu: bool) -> Result<Self> {
         if force_cpu {
             return Self::cpu();
+        }
+        if let Ok(spec) = std::env::var("XLA_PJRT_PLUGIN") {
+            // A misconfigured plugin is an error rather than a silent fallback
+            // to another platform.
+            let (device_type, path) = spec.split_once(':').ok_or_else(|| Error::XlaError {
+                msg: format!("XLA_PJRT_PLUGIN should be <device_type>:<library_path>, got {spec}"),
+                backtrace: String::new(),
+            })?;
+            return Self::plugin(device_type, path);
         }
         if let Ok(client) = Self::tpu(1) {
             return Ok(client);

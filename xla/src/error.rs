@@ -12,6 +12,10 @@ pub enum Error {
     #[error("unexpected element type {0}")]
     UnexpectedElementType(i32),
 
+    /// A string handed to the C++ side contains an interior nul byte.
+    #[error("interior nul byte in string: {0}")]
+    NulError(#[from] std::ffi::NulError),
+
     #[error("unexpected number of dimensions, expected: {expected}, got: {got} ({dims:?})")]
     UnexpectedNumberOfDims { expected: usize, got: usize, dims: Vec<i64> },
 

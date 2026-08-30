@@ -29,6 +29,8 @@
 #include "xla/pjrt/pjrt_stream_executor_client.h"
 #include "xla/pjrt/plugin/xla_cpu/xla_cpu_pjrt_client.h"
 #include "xla/pjrt/plugin/xla_gpu/xla_gpu_client_options.h"
+#include "absl/strings/numbers.h"
+#include "absl/strings/str_split.h"
 #include "xla/pjrt/pjrt_api.h"
 #include "xla/pjrt/c_api_client/pjrt_c_api_client.h"
 #include "xla/service/hlo.pb.h"
@@ -66,6 +68,17 @@ typedef struct _hlo_module_proto *hlo_module_proto;
 status pjrt_cpu_client_create(pjrt_client *);
 status pjrt_gpu_client_create(pjrt_client *, double, bool);
 status pjrt_tpu_client_create(pjrt_client *, int);
+// Load a PJRT C-API plugin (a shared library exporting `GetPjrtApi`) and
+// create a client on it. `device_type` names the plugin in the process-wide
+// registry (case insensitive, e.g. "cuda", "neuron", "tpu"); loading and
+// initialization are skipped when the plugin is already registered.
+// Options are passed as parallel arrays of `n` keys, type tags and string
+// encoded values, the tags being 0: string, 1: bool ("true"/"false"),
+// 2: int64, 3: float, 4: comma separated int64 list.
+status pjrt_plugin_client_create(pjrt_client *, const char *device_type,
+                                 const char *library_path, int n,
+                                 const char *const *keys, const int *tags,
+                                 const char *const *values);
 void pjrt_client_free(pjrt_client);
 int pjrt_client_device_count(pjrt_client);
 int pjrt_client_addressable_device_count(pjrt_client);
