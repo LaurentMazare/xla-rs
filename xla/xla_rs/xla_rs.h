@@ -122,6 +122,7 @@ void outfeed(const xla_op, int, int, const int64_t *, const char *);
 
 // Ops
 xla_op op_add(const xla_op, const xla_op);
+xla_op op_all_reduce(const xla_op, const xla_computation);
 xla_op op_sub(const xla_op, const xla_op);
 xla_op op_mul(const xla_op, const xla_op);
 xla_op op_div(const xla_op, const xla_op);
@@ -255,6 +256,11 @@ status get_dimensions(const xla_builder, const xla_op, size_t *);
 status build(const xla_builder, const xla_op, xla_computation *);
 status compile(const pjrt_client, const xla_computation,
                pjrt_loaded_executable *);
+// Compile for the first num_replicas addressable devices (SPMD replication):
+// the same program runs on every replica and cross-replica ops
+// (op_all_reduce) reduce across them.
+status compile_replicated(const pjrt_client, const xla_computation, int,
+                          pjrt_loaded_executable *);
 status compile_with_autotune_cache(const pjrt_client, const xla_computation,
                                    const char *load_from, const char *dump_to,
                                    pjrt_loaded_executable *);
@@ -263,6 +269,12 @@ status execute(const pjrt_loaded_executable, const literal *, int,
                pjrt_buffer ***);
 status execute_b(const pjrt_loaded_executable, const pjrt_buffer *, int,
                  pjrt_buffer ***);
+// Execute a replicated executable with one argument list per replica
+// (inputs[r] has ninputs[r] buffers living on replica r's device); the
+// outputs are grouped per replica.
+status execute_replicated_b(const pjrt_loaded_executable,
+                            const pjrt_buffer *const *, const int *, int,
+                            pjrt_buffer ***);
 status first_error(const xla_builder);
 status get_current_status(const xla_builder);
 

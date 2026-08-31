@@ -164,6 +164,24 @@ impl PjRtClient {
         Ok(PjRtLoadedExecutable { exe, client: self.clone() })
     }
 
+    /// Compile for `num_replicas` addressable devices (SPMD replication):
+    /// the same program runs on devices `0..num_replicas`, and cross-replica
+    /// ops ([`XlaOp::all_reduce`]) reduce across them. Execute with
+    /// [`PjRtLoadedExecutable::execute_replicated_b`].
+    ///
+    /// [`XlaOp::all_reduce`]: crate::XlaOp::all_reduce
+    pub fn compile_replicated(
+        &self,
+        c: &XlaComputation,
+        num_replicas: usize,
+    ) -> Result<PjRtLoadedExecutable> {
+        let mut exe: c_lib::pjrt_loaded_executable = std::ptr::null_mut();
+        let status =
+            unsafe { c_lib::compile_replicated(self.ptr(), c.0, num_replicas as i32, &mut exe) };
+        super::handle_status(status)?;
+        Ok(PjRtLoadedExecutable { exe, client: self.clone() })
+    }
+
     /// Compile a computation with the gpu gemm autotuner results pinned to a
     /// file: `load_from` reuses previously dumped results, making the kernel
     /// selection deterministic and skipping the tuning, `dump_to` writes the
