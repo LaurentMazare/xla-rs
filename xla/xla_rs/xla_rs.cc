@@ -1,4 +1,5 @@
 #include "xla_rs.h"
+#include "xla/service/custom_call_target_registry.h"
 
 #define ASSIGN_OR_RETURN_STATUS(lhs, rexpr)                                    \
   ASSIGN_OR_RETURN_STATUS_IMPL(                                                \
@@ -849,6 +850,29 @@ xla_op op_concat_in_dim(const xla_op arg, const xla_op *args, size_t nargs,
   return new XlaOp(
       ConcatInDim(arg->builder(), absl::Span<const XlaOp>(args_), dim));
   END_PROTECT_OP(arg)
+}
+
+xla_op op_custom_call(const xla_builder b, const char *target_name,
+                      const xla_op *operands, size_t noperands, int pr_type,
+                      const int64_t *dims, size_t ndims, const char *opaque,
+                      size_t opaque_len) {
+  BEGIN_PROTECT_OP
+  std::vector<XlaOp> operands_;
+  for (size_t i = 0; i < noperands; ++i) {
+    operands_.push_back(*operands[i]);
+  }
+  auto shape = ShapeUtil::MakeShape((PrimitiveType)pr_type,
+                                    absl::Span<const int64_t>(dims, ndims));
+  return new XlaOp(CustomCall(b, std::string(target_name),
+                              absl::Span<const XlaOp>(operands_), shape,
+                              std::string(opaque, opaque_len)));
+  END_PROTECT_OP_B(b)
+}
+
+void register_custom_call_target(const char *name, void *fn,
+                                 const char *platform) {
+  xla::CustomCallTargetRegistry::Global()->Register(std::string(name), fn,
+                                               std::string(platform));
 }
 
 xla_op op_tuple(const xla_builder b, const xla_op *args, size_t nargs) {
