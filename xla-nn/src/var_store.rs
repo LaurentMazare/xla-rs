@@ -8,7 +8,7 @@ use crate::error::{Error, Result};
 use std::collections::HashSet;
 use xla::{ElementType, PjRtBuffer, PjRtClient, XlaBuilder, XlaOp};
 
-type Vars = std::rc::Rc<std::cell::RefCell<Vec<(String, Vec<i64>)>>>;
+type Vars = std::rc::Rc<std::cell::RefCell<Vec<(String, Vec<i64>, ElementType)>>>;
 
 /// Declares model weights as XLA parameters and loads their values from
 /// safetensors shards, in declaration order.
@@ -47,7 +47,7 @@ impl VarBuilder {
         let mut vars = self.vars.borrow_mut();
         let index = vars.len() + self.first_weight_index;
         let op = self.builder.parameter(index as i64, self.dtype, dims, name)?;
-        vars.push((name.to_string(), dims.to_vec()));
+        vars.push((name.to_string(), dims.to_vec(), self.dtype));
         Ok(op)
     }
 
@@ -73,7 +73,8 @@ impl VarBuilder {
     /// The set of tensor names that have been used so far, i.e. declared via
     /// [`var`](VarBuilder::var) or marked via [`mark_used`](VarBuilder::mark_used).
     pub fn used_names(&self) -> HashSet<String> {
-        let mut used: HashSet<String> = self.vars.borrow().iter().map(|(n, _)| n.clone()).collect();
+        let mut used: HashSet<String> =
+            self.vars.borrow().iter().map(|(n, _, _)| n.clone()).collect();
         used.extend(self.extra_used.borrow().iter().cloned());
         used
     }
@@ -137,7 +138,7 @@ impl VarBuilder {
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let vars = self.vars.borrow();
         let mut buffers = Vec::with_capacity(vars.len());
-        for (name, dims) in vars.iter() {
+        for (name, dims, dtype) in vars.iter() {
             let view = sts
                 .iter()
                 .find_map(|st| st.tensor(name).ok())
@@ -152,7 +153,7 @@ impl VarBuilder {
             }
             let dims_usize: Vec<usize> = dims.iter().map(|d| *d as usize).collect();
             let buffer =
-                buffer_from_view(client, name, view.dtype(), view.data(), &dims_usize, self.dtype)?;
+                buffer_from_view(client, name, view.dtype(), view.data(), &dims_usize, *dtype)?;
             buffers.push(buffer)
         }
         Ok(buffers)
@@ -359,6 +360,25 @@ impl Path {
         let prefix =
             if self.prefix.is_empty() { s.to_string() } else { format!("{}.{s}", self.prefix) };
         Self { inner: self.inner.clone(), prefix, names: self.names.clone() }
+    }
+
+    /// The same path with the variables declared under it in another dtype.
+    /// The variable list, hence the parameter indices and the buffer order of
+    /// [`load_buffers`](Self::load_buffers), stays shared with the original;
+    /// each variable is loaded in the dtype it was declared with.
+    pub fn with_dtype(&self, dtype: ElementType) -> Self {
+        let inner = VarBuilder {
+            builder: self.inner.builder.clone(),
+            dtype,
+            vars: self.inner.vars.clone(),
+            extra_used: self.inner.extra_used.clone(),
+            first_weight_index: self.inner.first_weight_index,
+        };
+        Self {
+            inner: std::rc::Rc::new(inner),
+            prefix: self.prefix.clone(),
+            names: self.names.clone(),
+        }
     }
 
     fn key(&self, name: &str) -> String {
