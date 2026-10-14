@@ -91,7 +91,8 @@ fn rms_norm(x: &XlaOp, w: &XlaOp) -> Result<XlaOp> {
     let mean2 = (&x * &x)?.reduce_mean(&[-1], true)?;
     let x_norm = (&x * (mean2 + b.c0(RMS_NORM_EPS)?)?.rsqrt()?)?;
     let rank = x.rank()? as i64;
-    let w = w.convert(PrimitiveType::F32)?.broadcast_in_dim(x.array_shape()?.dims(), &[rank - 1])?;
+    let w =
+        w.convert(PrimitiveType::F32)?.broadcast_in_dim(x.array_shape()?.dims(), &[rank - 1])?;
     Ok((x_norm * w)?.convert(dt)?)
 }
 
@@ -415,7 +416,12 @@ fn build_decode(
     for layer_idx in 0..cfg.num_layers {
         let dims = [b, t, cfg.num_kv_heads, HEAD_DIM];
         for name in ["k_cache", "v_cache"] {
-            let p = builder.parameter(param_idx, dtype, &dims, &format!("layers.{layer_idx}.{name}"))?;
+            let p = builder.parameter(
+                param_idx,
+                dtype,
+                &dims,
+                &format!("layers.{layer_idx}.{name}"),
+            )?;
             param_idx += 1;
             states.push(p);
         }
