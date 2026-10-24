@@ -2,15 +2,15 @@
 Experimentation using the xla compiler from rust
 
 Pre-compiled binaries for the xla library can be downloaded from the
-[elixir-nx/xla repo](https://github.com/elixir-nx/xla/releases/tag/v0.10.0).
+[elixir-nx/xla repo](https://github.com/elixir-nx/xla/releases/tag/v0.11.0).
 These should be extracted at the root of this repository, resulting
 in a `xla_extension` subdirectory being created, the currently supported version
-is 0.10.0.
+is 0.11.0.
 
 For a linux platform, this can be done via:
 ```bash
-wget https://github.com/elixir-nx/xla/releases/download/v0.10.0/xla_extension-0.10.0-x86_64-linux-gnu-cpu.tar.gz
-tar -xzvf xla_extension-0.10.0-x86_64-linux-gnu-cpu.tar.gz
+wget https://github.com/elixir-nx/xla/releases/download/v0.11.0/xla_extension-0.11.0-x86_64-linux-gnu-cpu.tar.gz
+tar -xzvf xla_extension-0.11.0-x86_64-linux-gnu-cpu.tar.gz
 ```
 
 If the `xla_extension` directory is not in the main project directory, the path
@@ -31,7 +31,7 @@ one of `0.8b`, `2b` (the default), `4b`, or `9b`:
 
 ```bash
 # Run the example, use --cpu to run on cpu rather than gpu.
-cargo run --example qwen35 --release --features hf-hub -- \
+cargo run --example qwen35 --release -- \
   --which 2b \
   --prompt "What is the capital of France? Answer in one word." \
   --sample-len 30
@@ -90,7 +90,7 @@ kernel selection deterministic and speeding up the compilation (~14s down to
 ~4.5s for the 4B model) as all the gemm tuning is skipped:
 
 ```bash
-cargo run --example qwen35 --release --features hf-hub -- \
+cargo run --example qwen35 --release -- \
   --which 4b --autotune-cache qwen35-4b.pbtxt \
   --prompt "What is the capital of France? Answer in one word."
 ```
@@ -143,7 +143,7 @@ and make a token available via `HF_TOKEN` or `~/.cache/huggingface/token` for
 the initial download.
 
 ```bash
-cargo run --example gemma4 --release --features hf-hub -- \
+cargo run --example gemma4 --release -- \
   --which e4b \
   --prompt "What is the capital of France? Answer in one word."
 ```
@@ -195,7 +195,7 @@ across steps. Generation runs in bf16 and the `--autotune-cache` flag is
 supported.
 
 ```bash
-cargo run --example nemotron3 --release --features hf-hub -- \
+cargo run --example nemotron3 --release -- \
   --prompt "What is the capital of France? Answer in one word."
 ```
 
