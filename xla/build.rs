@@ -23,12 +23,16 @@ impl OS {
     }
 }
 
-fn make_shared_lib<P: AsRef<Path>>(os: OS, xla_dir: P) {
+fn make_shared_lib<P: AsRef<Path>>(os: OS, xla_dir: P, out_dir: &Path) {
     println!("cargo:rerun-if-changed=xla_rs/xla_rs.cc");
     println!("cargo:rerun-if-changed=xla_rs/xla_rs.h");
+    let mut build = cc::Build::new();
+    if let Some(overlay) = patched_headers(xla_dir.as_ref(), out_dir) {
+        build.include(overlay);
+    }
     match os {
         OS::Linux | OS::MacOS => {
-            cc::Build::new()
+            build
                 .cpp(true)
                 .pic(true)
                 .warnings(false)
@@ -47,7 +51,7 @@ fn make_shared_lib<P: AsRef<Path>>(os: OS, xla_dir: P) {
                 .compile("xla_rs");
         }
         OS::Windows => {
-            cc::Build::new()
+            build
                 .cpp(true)
                 .pic(true)
                 .warnings(false)
@@ -57,6 +61,38 @@ fn make_shared_lib<P: AsRef<Path>>(os: OS, xla_dir: P) {
                 .compile("xla_rs");
         }
     };
+}
+
+/// The pre-built headers are compiled with clang upstream and some of them do
+/// not go through gcc. Rather than requiring clang, the offending headers are
+/// copied with a minimal fix into an include directory that is searched before
+/// the xla_extension one. Returns that directory when a header was patched.
+///
+/// xla_extension 0.11.0, `xla/tsl/concurrency/future.h`: the const& overload
+/// of `Future<T>::Flatten` is declared with `!is_move_only` in its enable_if
+/// but defined with `!Future<T>::is_move_only`; gcc does not consider the two
+/// expressions equivalent and rejects the definition ("no declaration
+/// matches"). Both are spelled as the underlying trait, which is what
+/// `Future<T>::is_move_only` evaluates to.
+fn patched_headers(xla_dir: &Path, out_dir: &Path) -> Option<PathBuf> {
+    let rel = Path::new("xla/tsl/concurrency/future.h");
+    let src = xla_dir.join("include").join(rel);
+    println!("cargo:rerun-if-changed={}", src.display());
+    let content = std::fs::read_to_string(&src).ok()?;
+    let decl = "std::enable_if_t<internal::IsFuture<U>::value &&\n                                             !is_move_only>* = nullptr>";
+    let def = "std::enable_if_t<internal::IsFuture<U>::value &&\n                                       !Future<T>::is_move_only>*>";
+    if !content.contains(decl) || !content.contains(def) {
+        return None;
+    }
+    let trait_ = "internal::IsMoveOnly<T>::value";
+    let patched = content
+        .replace(decl, &decl.replace("!is_move_only", &format!("!{trait_}")))
+        .replace(def, &def.replace("!Future<T>::is_move_only", &format!("!{trait_}")));
+    let overlay = out_dir.join("include");
+    let dst = overlay.join(rel);
+    std::fs::create_dir_all(dst.parent().unwrap()).ok()?;
+    std::fs::write(&dst, patched).ok()?;
+    Some(overlay)
 }
 
 fn env_var_rerun(name: &str) -> Option<String> {
@@ -83,7 +119,7 @@ fn main() {
     if std::env::var("DOCS_RS").is_ok() {
         return;
     }
-    make_shared_lib(os, &xla_dir);
+    make_shared_lib(os, &xla_dir, &out_path);
     // The --copy-dt-needed-entries -lstdc++ are helpful to get around some
     // "DSO missing from command line" error
     // undefined reference to symbol '_ZStlsIcSt11char_traitsIcESaIcEERSt13basic_ostreamIT_T0_ES7_RKNSt7__cxx1112basic_stringIS4_S5_T1_EE@@GLIBCXX_3.4.21'

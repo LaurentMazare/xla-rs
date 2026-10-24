@@ -29,22 +29,22 @@ apt-get install -y -q clang libclang-dev pkg-config >/dev/null 2>&1 || true
 # XLA TPU extension (download only if missing)
 if [ ! -f /content/xla_extension/lib/libxla_extension.so ]; then
   cd /content
-  wget -q https://github.com/elixir-nx/xla/releases/download/v0.10.0/xla_extension-0.10.0-x86_64-linux-gnu-tpu.tar.gz
-  tar -xzf xla_extension-0.10.0-x86_64-linux-gnu-tpu.tar.gz
+  wget -q https://github.com/elixir-nx/xla/releases/download/v0.11.0/xla_extension-0.11.0-x86_64-linux-gnu-tpu.tar.gz
+  tar -xzf xla_extension-0.11.0-x86_64-linux-gnu-tpu.tar.gz
 fi
 
 # repo (clone if missing, else update)
 if [ -d /content/xla-rs ]; then cd /content/xla-rs && git pull; \
 else cd /content && git clone https://github.com/LaurentMazare/xla-rs.git; fi
 
-# THE key step: a libtpu whose PJRT version is >= the extension's framework (0.90)
-pip install -q --force-reinstall libtpu==0.0.44
+# THE key step: a libtpu whose PJRT version is >= the extension's framework (0.115)
+pip install -q --force-reinstall libtpu==0.0.48
 
 # build & run
 export XLA_EXTENSION_DIR=/content/xla_extension
 export TPU_LIBRARY_PATH=/usr/local/lib/python3.12/dist-packages/libtpu/libtpu.so
 cd /content/xla-rs
-cargo run --example qwen35 --release --features hf-hub -- \
+cargo run --example qwen35 --release -- \
   --which 2b --prompt "What is the capital of France?" --sample-len 200
 ```
 
@@ -73,12 +73,12 @@ source $HOME/.cargo/env
 apt-get update && apt-get install -y clang libclang-dev pkg-config
 ```
 
-## 4. Download the XLA TPU extension (v0.10.0, x86_64 host)
+## 4. Download the XLA TPU extension (v0.11.0, x86_64 host)
 
 ```bash
 cd /content
-wget https://github.com/elixir-nx/xla/releases/download/v0.10.0/xla_extension-0.10.0-x86_64-linux-gnu-tpu.tar.gz
-tar -xzf xla_extension-0.10.0-x86_64-linux-gnu-tpu.tar.gz     # -> /content/xla_extension
+wget https://github.com/elixir-nx/xla/releases/download/v0.11.0/xla_extension-0.11.0-x86_64-linux-gnu-tpu.tar.gz
+tar -xzf xla_extension-0.11.0-x86_64-linux-gnu-tpu.tar.gz     # -> /content/xla_extension
 ```
 
 ## 5. Clone the repository
@@ -91,7 +91,7 @@ git clone https://github.com/LaurentMazare/xla-rs.git
 ## 6. Get a new-enough libtpu (the key step)
 
 The extension is compiled against a specific PJRT C-API version — its
-"framework" version (`0.90` for xla_extension 0.10.0). The `libtpu.so` you run
+"framework" version (`0.115` for xla_extension 0.11.0). The `libtpu.so` you run
 against must report a PJRT API version **>= that framework version**, otherwise
 client init or HLO compilation fails. Two traps:
 
@@ -99,13 +99,13 @@ client init or HLO compilation fails. Two traps:
   stale build scaffolding (PJRT `0.38`). Do **not** use it — it's too old for
   both the extension and Colab's TPU driver (`Couldn't allocate MSIX interrupts`).
 - Colab's **stock** pip libtpu can also lag the framework (e.g. PJRT `0.75` vs
-  `0.90`), which surfaces as `reshape.NNN instruction contains invalid operand id(s)`.
+  `0.115`), which surfaces as `reshape.NNN instruction contains invalid operand id(s)`.
 
-So force-install the **latest** pip libtpu, which is newer than the framework
-(`0.0.44` reports PJRT `0.113`):
+So force-install the **latest** pip libtpu, which matches the framework
+(`0.0.48`, the version pinned by jax 0.11.2, reports PJRT `0.115`):
 
 ```bash
-pip install -q --force-reinstall libtpu==0.0.44
+pip install -q --force-reinstall libtpu==0.0.48
 ```
 
 Optionally verify it (reads the PJRT version straight out of the `.so`):
@@ -116,7 +116,7 @@ import ctypes
 so = "/usr/local/lib/python3.12/dist-packages/libtpu/libtpu.so"
 lib = ctypes.CDLL(so); lib.GetPjrtApi.restype = ctypes.c_void_p
 p = lib.GetPjrtApi(); maj, mino = (ctypes.c_int * 2).from_address(p + 32)
-print(f"{so}: PJRT API {maj}.{mino}")   # want >= framework (0.90 for xla 0.10.0)
+print(f"{so}: PJRT API {maj}.{mino}")   # want >= framework (0.115 for xla 0.11.0)
 PY
 ```
 
@@ -126,7 +126,7 @@ PY
 export XLA_EXTENSION_DIR=/content/xla_extension
 export TPU_LIBRARY_PATH=/usr/local/lib/python3.12/dist-packages/libtpu/libtpu.so
 cd /content/xla-rs
-cargo run --example qwen35 --release --features hf-hub -- \
+cargo run --example qwen35 --release -- \
   --which 2b --prompt "What is the capital of France?" --sample-len 200
 ```
 
