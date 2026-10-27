@@ -84,3 +84,17 @@ pub fn set_tf_min_log_level(log_level: TfLogLevel) {
 pub fn set_min_log_level(log_level: TfLogLevel) {
     unsafe { c_lib::set_min_log_level(log_level.as_severity()) }
 }
+
+/// Register `fn_ptr` as the custom call target `name` for `platform` (e.g.
+/// `"CUDA"`), to be invoked by [`XlaBuilder::custom_call`] ops naming it.
+/// Targets follow XLA's original custom-call API: `extern "C" fn(stream:
+/// *mut c_void, buffers: *mut *mut c_void, opaque: *const c_char, opaque_len:
+/// usize)` where `buffers` holds the operand buffers followed by the result
+/// buffer(s) and `stream` is the platform stream (a `CUstream` on CUDA).
+pub fn register_custom_call_target(name: &str, fn_ptr: *const std::ffi::c_void, platform: &str) {
+    let name = std::ffi::CString::new(name).unwrap();
+    let platform = std::ffi::CString::new(platform).unwrap();
+    unsafe {
+        c_lib::register_custom_call_target(name.as_ptr(), fn_ptr as *mut _, platform.as_ptr())
+    }
+}
