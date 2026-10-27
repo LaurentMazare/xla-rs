@@ -252,6 +252,8 @@ fn buffer_from_view(
         (safetensors::Dtype::F32, ElementType::F32)
             | (safetensors::Dtype::BF16, ElementType::Bf16)
             | (safetensors::Dtype::F16, ElementType::F16)
+            | (safetensors::Dtype::F8_E4M3, ElementType::F8E4M3FN)
+            | (safetensors::Dtype::F8_E5M2, ElementType::F8E5M2)
     );
     let buffer = if src_matches {
         // Same source and target dtype, pass the raw bytes through.
