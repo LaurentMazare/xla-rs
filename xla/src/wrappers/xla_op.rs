@@ -473,6 +473,35 @@ impl XlaOp {
         self.wrap(op)
     }
 
+    /// Same as [`XlaOp::dot_general`] with the result in `ty`, e.g. to accumulate the product of
+    /// fp8 operands in a wider type.
+    pub fn dot_general_with_type(
+        &self,
+        rhs: &XlaOp,
+        lhs_contracting_dims: &[i64],
+        rhs_contracting_dims: &[i64],
+        lhs_batch_dims: &[i64],
+        rhs_batch_dims: &[i64],
+        ty: PrimitiveType,
+    ) -> Result<Self> {
+        let op = unsafe {
+            c_lib::op_dot_general_typed(
+                self.op,
+                rhs.op,
+                lhs_contracting_dims.as_ptr(),
+                lhs_contracting_dims.len(),
+                rhs_contracting_dims.as_ptr(),
+                rhs_contracting_dims.len(),
+                lhs_batch_dims.as_ptr(),
+                lhs_batch_dims.len(),
+                rhs_batch_dims.as_ptr(),
+                rhs_batch_dims.len(),
+                ty as i32,
+            )
+        };
+        self.wrap(op)
+    }
+
     /// Low-level general convolution, mapping directly to XLA's `ConvGeneralDilated`.
     /// `padding` holds the (low, high) padding for each spatial dimension; `window_strides`,
     /// `lhs_dilation`, `rhs_dilation` and the three `*_spatial` slices all have one entry per

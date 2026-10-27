@@ -140,6 +140,9 @@ xla_op op_dot(const xla_op, const xla_op);
 xla_op op_dot_general(const xla_op, const xla_op, const int64_t *, size_t,
                       const int64_t *, size_t, const int64_t *, size_t,
                       const int64_t *, size_t);
+xla_op op_dot_general_typed(const xla_op, const xla_op, const int64_t *,
+                            size_t, const int64_t *, size_t, const int64_t *,
+                            size_t, const int64_t *, size_t, int);
 xla_op op_conv_general_dilated(
     const xla_op lhs, const xla_op rhs, const int64_t *window_strides,
     size_t n_strides, const int64_t *padding_low, const int64_t *padding_high,

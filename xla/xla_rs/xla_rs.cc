@@ -463,6 +463,26 @@ xla_op op_dot_general(const xla_op lhs, const xla_op rhs, const int64_t *lhs_c,
   END_PROTECT_OP(lhs)
 }
 
+xla_op op_dot_general_typed(const xla_op lhs, const xla_op rhs,
+                            const int64_t *lhs_c, size_t nlhs_c,
+                            const int64_t *rhs_c, size_t nrhs_c,
+                            const int64_t *lhs_b, size_t nlhs_b,
+                            const int64_t *rhs_b, size_t nrhs_b, int pr_type) {
+  BEGIN_PROTECT_OP
+  DotDimensionNumbers dnums;
+  for (size_t i = 0; i < nlhs_c; ++i)
+    dnums.add_lhs_contracting_dimensions(lhs_c[i]);
+  for (size_t i = 0; i < nrhs_c; ++i)
+    dnums.add_rhs_contracting_dimensions(rhs_c[i]);
+  for (size_t i = 0; i < nlhs_b; ++i)
+    dnums.add_lhs_batch_dimensions(lhs_b[i]);
+  for (size_t i = 0; i < nrhs_b; ++i)
+    dnums.add_rhs_batch_dimensions(rhs_b[i]);
+  return new XlaOp(DotGeneral(*lhs, *rhs, dnums, nullptr,
+                              (PrimitiveType)pr_type));
+  END_PROTECT_OP(lhs)
+}
+
 xla_op op_conv_general_dilated(
     const xla_op lhs, const xla_op rhs, const int64_t *window_strides,
     size_t n_strides, const int64_t *padding_low, const int64_t *padding_high,
