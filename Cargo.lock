@@ -4007,7 +4007,7 @@ dependencies = [
 
 [[package]]
 name = "xla"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "bindgen",
  "cc",
@@ -4020,7 +4020,7 @@ dependencies = [
 
 [[package]]
 name = "xla-nn"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "clap",
