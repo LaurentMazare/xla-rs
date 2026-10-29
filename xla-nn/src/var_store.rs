@@ -51,6 +51,11 @@ impl VarBuilder {
         Ok(op)
     }
 
+    /// The declared weights, name, dims and dtype, in declaration order.
+    pub fn vars(&self) -> Vec<(String, Vec<i64>, ElementType)> {
+        self.vars.borrow().clone()
+    }
+
     /// The number of declared weight parameters.
     pub fn num_vars(&self) -> usize {
         self.vars.borrow().len()
