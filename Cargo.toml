@@ -3,7 +3,7 @@ members = ["xla", "xla-nn"]
 resolver = "2"
 
 [workspace.package]
-version = "0.5.2"
+version = "0.5.3"
 authors = ["laurent <laurent.mazare@gmail.com>"]
 edition = "2021"
 description = "Bindings for the XLA C++ library."
@@ -13,7 +13,7 @@ categories = ["science"]
 license = "MIT/Apache-2.0"
 
 [workspace.dependencies]
-xla = { path = "xla", version = "0.5.2" }
+xla = { path = "xla", version = "0.5.3" }
 thiserror = "1"
 libc = "0.2"
 num-traits = "0.2"
