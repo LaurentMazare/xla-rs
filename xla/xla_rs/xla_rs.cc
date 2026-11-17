@@ -1,5 +1,6 @@
 #include "xla_rs.h"
 #include "xla/service/custom_call_target_registry.h"
+#include "xla/ffi/api/c_api.h"
 
 #define ASSIGN_OR_RETURN_STATUS(lhs, rexpr)                                    \
   ASSIGN_OR_RETURN_STATUS_IMPL(                                                \
@@ -893,6 +894,66 @@ void register_custom_call_target(const char *name, void *fn,
                                  const char *platform) {
   xla::CustomCallTargetRegistry::Global()->Register(std::string(name), fn,
                                                std::string(platform));
+}
+
+xla_op op_custom_call_ffi(const xla_builder b, const char *target_name,
+                          const xla_op *operands, size_t noperands,
+                          int pr_type, const int64_t *dims, size_t ndims,
+                          const char *attributes, size_t attributes_len,
+                          bool has_side_effect) {
+  BEGIN_PROTECT_OP
+  std::vector<XlaOp> operands_;
+  for (size_t i = 0; i < noperands; ++i) {
+    operands_.push_back(*operands[i]);
+  }
+  auto shape = ShapeUtil::MakeShape((PrimitiveType)pr_type,
+                                    absl::Span<const int64_t>(dims, ndims));
+  // With the typed FFI api, the backend config is the attribute dictionary.
+  return new XlaOp(CustomCall(
+      b, std::string(target_name), absl::Span<const XlaOp>(operands_), shape,
+      std::string(attributes, attributes_len), has_side_effect, {}, nullptr,
+      CustomCallSchedule::SCHEDULE_NONE,
+      CustomCallApiVersion::API_VERSION_TYPED_FFI));
+  END_PROTECT_OP_B(b)
+}
+
+status register_ffi_handler(const char *name, const char *platform,
+                            void *execute, uint32_t traits) {
+  const XLA_FFI_Api *api = XLA_FFI_GetApi();
+  XLA_FFI_Handler_Bundle bundle = {};
+  bundle.execute = reinterpret_cast<XLA_FFI_Handler *>(execute);
+  XLA_FFI_Handler_Register_Args args = {};
+  args.struct_size = XLA_FFI_Handler_Register_Args_STRUCT_SIZE;
+  args.name = XLA_FFI_ByteSpan{name, strlen(name)};
+  args.platform = XLA_FFI_ByteSpan{platform, strlen(platform)};
+  args.bundle = bundle;
+  args.traits = traits;
+  XLA_FFI_Error *error = api->XLA_FFI_Handler_Register(&args);
+  if (error == nullptr) {
+    return nullptr;
+  }
+  // XLA_FFI_Error_GetMessage (FFI api 0.2) became XLA_FFI_Error_GetDetails
+  // (0.4) with an extra `errc` out field: this layout fits both.
+  struct {
+    size_t struct_size;
+    void *extension_start;
+    XLA_FFI_Error *error;
+    const char *message;
+    int errc;
+  } details = {};
+  details.struct_size = offsetof(decltype(details), errc) + sizeof(int);
+  details.error = error;
+  using GetMessageFn = void(decltype(details) *);
+  reinterpret_cast<GetMessageFn *const *>(&api->XLA_FFI_Error_Create)[1](
+      &details);
+  std::string message =
+      std::string("failed to register the FFI handler ") + name + " for " +
+      platform + ": " + (details.message ? details.message : "unknown error");
+  XLA_FFI_Error_Destroy_Args destroy = {};
+  destroy.struct_size = XLA_FFI_Error_Destroy_Args_STRUCT_SIZE;
+  destroy.error = error;
+  api->XLA_FFI_Error_Destroy(&destroy);
+  return new Status(absl::InternalError(message));
 }
 
 xla_op op_tuple(const xla_builder b, const xla_op *args, size_t nargs) {
