@@ -217,6 +217,15 @@ xla_op op_custom_call(const xla_builder, const char *, const xla_op *,
                       size_t);
 // Register `fn` as custom call target `name` for `platform` (e.g. "CUDA").
 void register_custom_call_target(const char *, void *, const char *);
+// Custom call to `target_name` with the typed FFI api
+// (`API_VERSION_TYPED_FFI`): `attributes` is an MLIR attribute dictionary,
+// e.g. "{n = 3 : i32}", or empty.
+xla_op op_custom_call_ffi(const xla_builder, const char *, const xla_op *,
+                          size_t, int, const int64_t *, size_t, const char *,
+                          size_t, bool);
+// Register the XLA FFI handler `execute` (`XLA_FFI_Error *(XLA_FFI_CallFrame
+// *)`) as target `name` for `platform`, with XLA_FFI_Handler_Traits `traits`.
+status register_ffi_handler(const char *, const char *, void *, uint32_t);
 xla_op op_tuple(const xla_builder, const xla_op *, size_t);
 xla_op op_get_tuple_element(const xla_op, int64_t);
 xla_op op_gather(const xla_op, const xla_op, const int64_t *, size_t,

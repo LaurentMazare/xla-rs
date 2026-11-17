@@ -94,6 +94,40 @@ impl XlaBuilder {
         self.wrap(op)
     }
 
+    /// A custom call through the XLA FFI (`API_VERSION_TYPED_FFI`) to a
+    /// handler registered with [`ffi::register_handler`](crate::ffi::register_handler):
+    /// `operands` are the call's inputs, the result has element type `ty` and
+    /// shape `dims`, and `attributes` is an MLIR attribute dictionary the
+    /// handler reads by name, e.g. `"{n = 3 : i32, scale = 0.5 : f32}"`, or
+    /// empty. Calls are assumed free of side effects, so unused ones are
+    /// removed.
+    pub fn custom_call_ffi<B: std::borrow::Borrow<XlaOp>>(
+        &self,
+        target_name: &str,
+        operands: &[B],
+        ty: super::ElementType,
+        dims: &[i64],
+        attributes: &str,
+    ) -> Result<XlaOp> {
+        let target_name = std::ffi::CString::new(target_name)?;
+        let operands: Vec<_> = operands.iter().map(|a| a.borrow().op).collect();
+        let op = unsafe {
+            c_lib::op_custom_call_ffi(
+                self.ptr(),
+                target_name.as_ptr(),
+                operands.as_ptr(),
+                operands.len(),
+                ty.primitive_type() as i32,
+                dims.as_ptr(),
+                dims.len(),
+                attributes.as_ptr() as *const std::ffi::c_char,
+                attributes.len(),
+                false,
+            )
+        };
+        self.wrap(op)
+    }
+
     /// Create a node with a constant scalar value using the type of the element that is passed as
     /// argument.
     pub fn constant_r0<T: NativeType>(&self, f: T) -> Result<XlaOp> {

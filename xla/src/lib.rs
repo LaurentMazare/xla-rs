@@ -35,6 +35,7 @@
 
 mod c_lib;
 mod error;
+pub mod ffi;
 mod npy;
 mod wrappers;
 pub use error::{Error, Result};
